@@ -1579,10 +1579,10 @@ async fn config_file_and_state_save_during_scan_leave_refresh_pending_for_latest
                             json!({"probe": {"notifications": notifications}}),
                         )
                         .unwrap(),
-                        secret_writes: vec![crate::services::settings::SecretSettingWritePlan {
+                        secret_write: Some(crate::services::settings::SecretSettingWritePlan {
                             setting_key: "fixture-secret".into(),
                             secret_value: "fixture-only".into(),
-                        }],
+                        }),
                     },
                 )
                 .unwrap();

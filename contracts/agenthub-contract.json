@@ -427,7 +427,7 @@
       "ffiHandler": "dispatch::providers::grok_delete_execute",
       "dtoOwner": "grok",
       "requestDto": "GrokDeleteRequest",
-      "responseDto": "GrokMutationResponse"
+      "responseDto": "GrokDeleteResult"
     },
     {
       "id": "sessions.bulkPreview",
@@ -647,7 +647,7 @@
       "ffiHandler": "dispatch::providers::claude_delete_execute",
       "dtoOwner": "claude",
       "requestDto": "ClaudeDeleteRequest",
-      "responseDto": "ClaudeMutationResponse"
+      "responseDto": "ClaudeDeleteResult"
     },
     {
       "id": "claude.hooks",
@@ -829,6 +829,9 @@
     "GrokDeleteRequest": {
       "core": "GrokDeleteRequest"
     },
+    "GrokDeleteResult": {
+      "core": "GrokDeleteResult"
+    },
     "GrokDetailResponse": {
       "core": "GrokDetailResponse"
     },
@@ -963,6 +966,9 @@
     },
     "ClaudeDeleteRequest": {
       "core": "ClaudeDeleteRequest"
+    },
+    "ClaudeDeleteResult": {
+      "core": "ClaudeDeleteResult"
     },
     "ClaudeDetailResponse": {
       "core": "ClaudeDetailResponse"

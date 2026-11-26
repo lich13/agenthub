@@ -66,14 +66,14 @@ public final class GfmLayoutCache {
         }
 
         let palette = DesignPalette.resolve(scheme: scheme, workspace: workspace)
-        let rendered = Self.buildSegments(
+        let (rendered, cacheable) = Self.buildSegments(
             cleaned: cleaned,
             foldInstructions: foldInstructions,
             palette: palette,
             transport: transport
         )
         let estBytes = max(64, cleaned.utf8.count * 3 + rendered.count * 96)
-        if estBytes <= Self.maxBytes {
+        if cacheable && estBytes <= Self.maxBytes {
             while entries.count >= Self.maxEntries || totalBytes + estBytes > Self.maxBytes {
                 guard let oldestKey = entries.min(by: { $0.value.lastSeq < $1.value.lastSeq })?.key else { break }
                 if let removed = entries.removeValue(forKey: oldestKey) {
@@ -98,9 +98,9 @@ public final class GfmLayoutCache {
         foldInstructions: Bool,
         palette: DesignPalette,
         transport: any RuntimeTransport
-    ) -> [GfmRenderedSegment] {
+    ) -> (segments: [GfmRenderedSegment], cacheable: Bool) {
         if cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return []
+            return ([], true)
         }
 
         let topSlices: [InstructionSegment] = if foldInstructions {
@@ -110,6 +110,7 @@ public final class GfmLayoutCache {
         }
 
         var output: [GfmRenderedSegment] = []
+        var allDecoded = true
         for slice in topSlices {
             if slice.kind == "instructions" {
                 output.append(.instructionsFold(
@@ -121,10 +122,16 @@ public final class GfmLayoutCache {
                 continue
             }
             let astData = transport.parseGfmMarkdown(slice.text)
-            let doc = (try? gfmDecoder.decode(GfmDocument.self, from: astData)) ?? GfmDocument(blocks: [])
-            output.append(contentsOf: renderBlocks(doc.blocks, palette: palette))
+            if !astData.isEmpty, let doc = try? gfmDecoder.decode(GfmDocument.self, from: astData) {
+                output.append(contentsOf: renderBlocks(doc.blocks, palette: palette))
+            } else {
+                allDecoded = false
+                if !slice.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    output.append(contentsOf: renderBlocks([.paragraph(inlines: [.text(slice.text)])], palette: palette))
+                }
+            }
         }
-        return output
+        return (output, allDecoded)
     }
 
     private static func renderBlocks(
@@ -155,7 +162,7 @@ public final class GfmLayoutCache {
                     inlines,
                     baseSize: 15,
                     baseWeight: .regular,
-                    lineHeightMultiple: 1.72,
+                    lineHeightMultiple: 1.65,
                     paragraphSpacingBefore: 0,
                     paragraphSpacingAfter: isLast ? 0 : 12,
                     headIndent: 0,
@@ -203,7 +210,7 @@ public final class GfmLayoutCache {
                         prefixed,
                         baseSize: 15,
                         baseWeight: .regular,
-                        lineHeightMultiple: 1.72,
+                        lineHeightMultiple: 1.65,
                         paragraphSpacingBefore: 0,
                         paragraphSpacingAfter: isLastItem ? 0 : (itemIdx == items.count - 1 ? 12 : 4),
                         headIndent: 22,
@@ -223,7 +230,7 @@ public final class GfmLayoutCache {
                             qInlines,
                             baseSize: 15,
                             baseWeight: .regular,
-                            lineHeightMultiple: 1.68,
+                            lineHeightMultiple: 1.65,
                             paragraphSpacingBefore: (qIdx == 0 && !isFirst) ? 4 : 0,
                             paragraphSpacingAfter: isLastQuotePara ? 0 : (qIdx == quoteBlocks.count - 1 ? 12 : 8),
                             firstLineHeadIndent: 14,

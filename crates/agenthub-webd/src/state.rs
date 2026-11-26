@@ -53,6 +53,17 @@ impl AppState {
         self
     }
 
+    pub(crate) fn is_test_sandbox(&self) -> bool {
+        #[cfg(test)]
+        {
+            self.test_sandbox.is_some()
+        }
+        #[cfg(not(test))]
+        {
+            false
+        }
+    }
+
     pub(crate) fn platform(&self) -> &PlatformPaths {
         &self.platform
     }

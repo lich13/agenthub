@@ -113,7 +113,7 @@ impl RemoteConnections {
         !state.closed && !state.changing && state.prefs.revision == revision
     }
 
-    fn persist(&self, prefs: &Preferences) -> Result<(), String> {
+    fn stage_persist(&self, prefs: &Preferences) -> Result<tempfile::NamedTempFile, String> {
         let mut f = tempfile::Builder::new()
             .prefix("remote-connection.json.")
             .tempfile_in(self.path.parent().ok_or("保存连接配置失败")?)
@@ -121,10 +121,10 @@ impl RemoteConnections {
         let result = (|| -> anyhow::Result<()> {
             f.write_all(&serde_json::to_vec(prefs)?)?;
             f.as_file().sync_all()?;
-            f.persist(&self.path)?;
             Ok(())
         })();
-        result.map_err(|_| "保存连接配置失败".into())
+        result.map_err(|_| "保存连接配置失败".to_string())?;
+        Ok(f)
     }
 
     fn machine(request: &RemoteConnectionCredentials) -> Result<RemoteMachineSummary, String> {
@@ -158,23 +158,27 @@ impl RemoteConnections {
         client: Option<Arc<ssh::Client>>,
     ) -> Result<RemoteConnectionView, String> {
         prefs.revision = prefs.revision.wrapping_add(1);
-        {
+        let staged = self.stage_persist(&prefs)?;
+        let old_to_close = {
             let mut s = self.state.lock().expect("connection");
             if s.closed {
                 return Err("连接已关闭，操作已取消".into());
             }
-            self.persist(&prefs)?;
-            if let Some(previous) = s.client.take() {
-                if !client
+            staged
+                .persist(&self.path)
+                .map_err(|_| "保存连接配置失败".to_string())?;
+            let old = s.client.take().filter(|previous| {
+                !client
                     .as_ref()
-                    .is_some_and(|next| Arc::ptr_eq(&previous, next))
-                {
-                    previous.close();
-                }
-            }
+                    .is_some_and(|next| Arc::ptr_eq(previous, next))
+            });
             s.connecting = None;
             s.prefs = prefs;
             s.client = client;
+            old
+        };
+        if let Some(previous) = old_to_close {
+            previous.close();
         }
         Ok(self.view())
     }
@@ -336,7 +340,7 @@ pub async fn remoteGet(state: &RemoteConnections) -> Result<RemoteConnectionView
 }
 
 pub async fn remoteSshHosts() -> Result<SshHostList, String> {
-    tokio::task::spawn_blocking(ssh_config::list)
+    agenthub_core::read_tasks::spawn_blocking(ssh_config::list)
         .await
         .map_err(|_| "SSH 配置读取失败")?
 }
@@ -347,7 +351,7 @@ pub async fn remoteSshDelete(
 ) -> Result<RemoteConnectionView, String> {
     let _guard = state.begin_change(request.revision)?;
     let state = state.clone();
-    tokio::task::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         ssh_config::delete_with(&request.alias, || {
             let mut prefs = state.state.lock().expect("connection").prefs.clone();
             prefs

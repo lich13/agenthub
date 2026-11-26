@@ -417,6 +417,23 @@ fn aggregate_active_sessions(
         if let Ok(items) =
             crate::antigravity::sessions::list_sessions_without_storage(&ag_paths, &list_req)
         {
+            let snapshot_candidates: Vec<_> = items
+                .iter()
+                .filter(|item| {
+                    let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
+                    fresh
+                        && !matches!(
+                            item.status.as_str(),
+                            "running" | "waiting" | "reply_needed" | "failed"
+                        )
+                        && item.read_error.is_none()
+                })
+                .collect();
+            let batch_snapshots = crate::antigravity::sessions::probe_live_stream_snapshots_batch(
+                &ag_paths,
+                &snapshot_candidates,
+                now_ms,
+            );
             for item in items {
                 let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
                 let bucket = match item.status.as_str() {
@@ -425,14 +442,11 @@ fn aggregate_active_sessions(
                     "reply_needed" if fresh => Some("reply_needed"),
                     "failed" if fresh => Some("recoverable"),
                     _ if item.read_error.is_some() && fresh => Some("recoverable"),
-                    _ if fresh => crate::antigravity::sessions::probe_live_stream_snapshot(
-                        &ag_paths, &item.id, now_ms,
-                    )
-                    .and_then(|s| {
+                    _ if fresh => batch_snapshots.get(&item.id).and_then(|s| {
                         if s.settled_count < s.record_count {
                             Some("running")
                         } else {
-                            native_stream_live_bucket(&s, now_ms)
+                            native_stream_live_bucket(s, now_ms)
                         }
                     }),
                     _ => None,
@@ -516,7 +530,7 @@ fn probe_codex_buckets_with_paths(
     limit: usize,
 ) -> Result<(Vec<ThreadSummary>, Vec<ThreadSummary>, Vec<ThreadSummary>)> {
     let limit = limit.clamp(1, 200);
-    let threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
+    let threads = crate::codex::list_threads_without_storage(paths, false, None, usize::MAX)?;
     let mut running = Vec::new();
     let mut reply_needed = Vec::new();
     let mut recoverable = Vec::new();
@@ -574,7 +588,7 @@ pub fn probe_threads_for_status_with_paths(
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
     let limit = limit.clamp(1, 200);
-    let mut threads = crate::codex::list_threads(paths, false, None, usize::MAX)?;
+    let mut threads = crate::codex::list_threads_without_storage(paths, false, None, usize::MAX)?;
     if status == "reply-needed" {
         threads.retain(probe_reply_needed_thread_is_fresh);
     }
@@ -806,6 +820,24 @@ pub fn probe_passive_unresolved_action_marker_key(
     ))
 }
 
+pub fn enrich_probe_status_from_db(
+    status: &mut crate::probe::ProbeStatus,
+    db: &crate::db::PanelDb,
+) -> Result<()> {
+    if let Some(raw) = db.get_setting("probe_error_monitor_status")? {
+        if let Ok(runtime) =
+            serde_json::from_str::<crate::probe_error_monitor::ProbeErrorMonitorRuntimeStatus>(&raw)
+        {
+            status.error_monitor_status = runtime.status;
+            status.error_monitor_last_scan_at = Some(runtime.last_scan_at);
+            status.error_monitor_last_error = runtime.last_error;
+            status.error_monitor_incident_count = runtime.incident_count;
+        }
+    }
+    status.provider_notifications = db.native_notification_status()?;
+    Ok(())
+}
+
 impl ProbeAction {
     pub fn as_rpc_action(self) -> &'static str {
         match self {
@@ -813,10 +845,6 @@ impl ProbeAction {
             Self::InstallHooks => commands::PROBE_INSTALL_HOOKS,
             Self::RemoveHooks => commands::PROBE_REMOVE_HOOKS,
         }
-    }
-
-    pub fn as_desktop_command(self) -> &'static str {
-        self.as_rpc_action()
     }
 }
 

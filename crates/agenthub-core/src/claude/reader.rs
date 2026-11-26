@@ -156,6 +156,7 @@ impl ReaderState {
         let mut position = 0;
         self.parser = Parser {
             context: self.parser.context.clone(),
+            summary_only: self.parser.summary_only,
             ..Default::default()
         };
         while input.read_until(b'\n', &mut line)? != 0 {
@@ -253,6 +254,7 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
         |state, line, _, _| state.push(line, context),
         |state, info| {
             if info.changed {
+                let old_snapshot = std::mem::take(&mut state.snapshot);
                 let reset = state.rebuild;
                 if state.rebuild {
                     state.rebuild(path, info.offset)?;
@@ -262,8 +264,7 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                     issues.push("会话尾行尚未写完，请稍后刷新".into());
                 }
                 let mut parsed = state.parser.snapshot(path, issues, state.records as u64);
-                let previous: HashMap<_, _> = state
-                    .snapshot
+                let previous: HashMap<_, _> = old_snapshot
                     .events
                     .iter()
                     .map(|event| (&event.id, event))
@@ -274,7 +275,7 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                     .filter(|event| {
                         previous
                             .get(&event.id)
-                            .is_some_and(|old| !Arc::ptr_eq(old, event) && ***old != ***event)
+                            .is_some_and(|old| !Arc::ptr_eq(old, event) && **old != **event)
                     })
                     .map(|event| event.id.clone())
                     .collect();
@@ -282,11 +283,10 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                 parsed.history = state.journal.clone();
                 let previous_timeline = match context {
                     ReadContext::Main => {
-                        std::borrow::Cow::Borrowed(state.snapshot.timeline.as_slice())
+                        std::borrow::Cow::Borrowed(old_snapshot.timeline.as_slice())
                     }
                     ReadContext::Subagent { prefix, .. } => std::borrow::Cow::Owned(
-                        state
-                            .snapshot
+                        old_snapshot
                             .timeline
                             .iter()
                             .cloned()
@@ -337,20 +337,30 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                     .events
                     .iter()
                     .map(|event| {
-                        512 + event.text.as_ref().map_or(0, String::len) as u64
-                            + event.detail.as_ref().map_or(0, String::len) as u64
-                            + event.result.as_ref().map_or(0, String::len) as u64
+                        (512 + event.id.capacity()
+                            + event.kind.capacity()
+                            + event.timestamp.as_ref().map_or(0, String::capacity)
+                            + event.text.as_ref().map_or(0, String::capacity)
+                            + event.turn_id.as_ref().map_or(0, String::capacity)
+                            + event.role.as_ref().map_or(0, String::capacity)
+                            + event.call_id.as_ref().map_or(0, String::capacity)
+                            + event.status.as_ref().map_or(0, String::capacity)
+                            + event.detail.as_ref().map_or(0, String::capacity)
+                            + event.result.as_ref().map_or(0, String::capacity))
+                            as u64
                             + event
                                 .user_message
                                 .as_ref()
                                 .map_or(0, crate::user_message::UserMessage::weight)
                     })
                     .sum::<u64>()
-                    + state.retained_records as u64 * 256
+                    + (parsed.events.capacity() * std::mem::size_of::<Arc<ClaudeHistoryEvent>>())
+                        as u64
+                    + state.retained_records as u64 * 128
                     + parsed
                         .agent_names
                         .iter()
-                        .map(|(id, name)| (id.len() + name.len()) as u64)
+                        .map(|(id, name)| (id.capacity() + name.capacity() + 32) as u64)
                         .sum::<u64>()
                     + crate::history_navigation::weight(&parsed.timeline);
                 state.snapshot = Arc::new(parsed);
@@ -361,42 +371,77 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
     )
 }
 
+fn read_summary_uncached(path: &Path) -> Result<Arc<Parsed>> {
+    let mut state = ReaderState {
+        parser: Parser {
+            summary_only: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (offset, partial) = crate::jsonl_cache::scan_once(
+        path,
+        MAX_BYTES,
+        Some(crate::resource_limits::CLAUDE_LINE_BYTES),
+        false,
+        |line, _, _| state.push(line, &ReadContext::Main),
+    )?;
+    if state.rebuild {
+        state.rebuild(path, offset)?;
+    }
+    let mut issues = state.issues;
+    if partial {
+        issues.push("会话尾行尚未写完，请稍后刷新".into());
+    }
+    let mut parsed = state.parser.snapshot(path, issues, state.records as u64);
+    parsed.events = Arc::default();
+    parsed.native_events.clear();
+    parsed.prompts.clear();
+    parsed.agent_names.clear();
+    Ok(Arc::new(parsed))
+}
+
 pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
     // A list may contain many more sources than the body cache can retain.
-    // Keep only summary fields here, so revisiting an inactive list cannot
-    // repeatedly evict and reparse every large transcript.
+    // Keep only summary fields here, and never insert cold list items into DETAIL_CACHE.
     SUMMARY_CACHE.read(
         path,
         |parsed, _| {
-            512 + (parsed.id.len()
-                + parsed.title.len()
-                + parsed.cwd.len()
-                + parsed.version.len()
-                + parsed.last_message.as_ref().map_or(0, String::len)
-                + parsed.issues.iter().map(String::len).sum::<usize>()
-                + parsed.warnings.iter().map(String::len).sum::<usize>()) as u64
+            512 + (parsed.id.capacity()
+                + parsed.title.capacity()
+                + parsed.cwd.capacity()
+                + parsed.cwds.iter().map(String::capacity).sum::<usize>()
+                + parsed.version.capacity()
+                + parsed.updated_at.as_ref().map_or(0, String::capacity)
+                + parsed.last_message.as_ref().map_or(0, String::capacity)
+                + parsed.issues.iter().map(String::capacity).sum::<usize>()
+                + parsed.warnings.iter().map(String::capacity).sum::<usize>())
+                as u64
         },
         || {
-            let parsed = read(path)?;
-            Ok(Arc::new(Parsed {
-                id: parsed.id.clone(),
-                title: parsed.title.clone(),
-                cwd: parsed.cwd.clone(),
-                cwds: parsed.cwds.clone(),
-                version: parsed.version.clone(),
-                updated_at: parsed.updated_at.clone(),
-                message_count: parsed.message_count,
-                last_message: parsed.last_message.clone(),
-                issues: parsed.issues.clone(),
-                warnings: parsed.warnings.clone(),
-                last_turn_at: parsed.last_turn_at,
-                last_terminal_at: parsed.last_terminal_at,
-                turn_open: parsed.turn_open,
-                has_open_questions: parsed.has_open_questions,
-                saw_sidechain: parsed.saw_sidechain,
-                saw_primary: parsed.saw_primary,
-                ..Default::default()
-            }))
+            if DETAIL_CACHE.has_entry(path, "") {
+                let parsed = read(path)?;
+                return Ok(Arc::new(Parsed {
+                    id: parsed.id.clone(),
+                    title: parsed.title.clone(),
+                    cwd: parsed.cwd.clone(),
+                    cwds: parsed.cwds.clone(),
+                    version: parsed.version.clone(),
+                    updated_at: parsed.updated_at.clone(),
+                    message_count: parsed.message_count,
+                    last_message: parsed.last_message.clone(),
+                    issues: parsed.issues.clone(),
+                    warnings: parsed.warnings.clone(),
+                    last_turn_at: parsed.last_turn_at,
+                    last_terminal_at: parsed.last_terminal_at,
+                    turn_open: parsed.turn_open,
+                    has_open_questions: parsed.has_open_questions,
+                    saw_sidechain: parsed.saw_sidechain,
+                    saw_primary: parsed.saw_primary,
+                    ..Default::default()
+                }));
+            }
+            read_summary_uncached(path)
         },
     )
 }
@@ -632,6 +677,11 @@ fn compact_file_history_detail(record: &Value) -> String {
 #[derive(Default)]
 struct Parser {
     context: ReadContext,
+    summary_only: bool,
+    saw_any_event: bool,
+    summary_message_count: usize,
+    summary_updated_at: Option<String>,
+    summary_last_message: Option<String>,
     parsed: Parsed,
     custom_title: Option<String>,
     auto_title: Option<String>,
@@ -669,6 +719,24 @@ fn canonical_record_digest(record: &Value) -> [u8; 32] {
 }
 
 impl Parser {
+    fn push_event(&mut self, e: ClaudeHistoryEvent) {
+        self.saw_any_event = true;
+        if matches!(e.kind.as_str(), "user_message" | "assistant_message") {
+            self.summary_message_count += 1;
+            self.summary_last_message = e.text.as_ref().map(|t| t.chars().take(240).collect());
+            if e.text.as_ref().is_some_and(|t| !t.trim().is_empty())
+                || e.user_message
+                    .as_ref()
+                    .is_some_and(|m| !m.attachments.is_empty())
+            {
+                self.summary_updated_at = e.timestamp.clone();
+            }
+        }
+        if !self.summary_only {
+            Arc::make_mut(&mut self.parsed.events).push(Arc::new(e));
+        }
+    }
+
     fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
         let is_sidechain_record = record.get("isSidechain").and_then(Value::as_bool) == Some(true)
             || !field(record, "agentId").is_empty()
@@ -779,25 +847,33 @@ impl Parser {
                         self.questions.remove(&call);
                         self.settle_permission(&call);
                     }
-                    let mut e = event(
-                        key,
-                        record,
-                        "permission_response",
-                        Some("权限回复".into()),
-                        &self.turn,
-                    );
-                    e.detail = Some(printable(record));
-                    self.parsed.events.push(Arc::new(e));
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                    } else {
+                        let mut e = event(
+                            key,
+                            record,
+                            "permission_response",
+                            Some("权限回复".into()),
+                            &self.turn,
+                        );
+                        e.detail = Some(printable(record));
+                        self.push_event(e);
+                    }
                 }
                 "summary" => {
                     self.last_assistant_events.clear();
-                    self.parsed.events.push(Arc::new(event(
-                        key,
-                        record,
-                        "compaction",
-                        Some(bounded(field(record, "summary"))),
-                        &self.turn,
-                    )));
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                    } else {
+                        self.push_event(event(
+                            key,
+                            record,
+                            "compaction",
+                            Some(bounded(field(record, "summary"))),
+                            &self.turn,
+                        ));
+                    }
                 }
                 "tool_reference" | "tool_search_tool_result" => {
                     self.read_tool_reference(record, key, kind);
@@ -815,15 +891,19 @@ impl Parser {
                 | "api-request-blob" | "api-request" | "agent-setting" | "continued-in"
                 | "tools-used" => {}
                 _ => {
-                    let mut e = event(
-                        key,
-                        record,
-                        "unknown",
-                        Some(format!("未识别的活动：{kind}")),
-                        &self.turn,
-                    );
-                    e.detail = Some(printable(record));
-                    self.parsed.events.push(Arc::new(e));
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                    } else {
+                        let mut e = event(
+                            key,
+                            record,
+                            "unknown",
+                            Some(format!("未识别的活动：{kind}")),
+                            &self.turn,
+                        );
+                        e.detail = Some(printable(record));
+                        self.push_event(e);
+                    }
                     warning(&mut self.parsed, "存在新格式活动，仅显示兼容提示");
                 }
             }
@@ -919,36 +999,46 @@ impl Parser {
                 );
             } else if is_failure {
                 self.questions.clear();
-                for call in &self.pending {
-                    if let Some(index) = self.calls.get(call) {
-                        Arc::make_mut(&mut self.parsed.events[*index]).status =
-                            Some("cancelled".into());
+                if !self.summary_only {
+                    let events = Arc::make_mut(&mut self.parsed.events);
+                    for call in &self.pending {
+                        if let Some(&index) = self.calls.get(call) {
+                            Arc::make_mut(&mut events[index]).status = Some("cancelled".into());
+                        }
                     }
                 }
                 self.pending.clear();
-                let body = record
-                    .get("errors")
-                    .map(printable)
-                    .unwrap_or_else(|| subtype.into());
-                let mut failure = event(
-                    format!("record-{}:failure", position + 1),
-                    record,
-                    "failure",
-                    Some(bounded(&body)),
-                    &self.turn,
-                );
-                failure.status = Some("failed".into());
-                self.parsed.events.push(Arc::new(failure));
+                if self.summary_only {
+                    self.saw_any_event = true;
+                } else {
+                    let body = record
+                        .get("errors")
+                        .map(printable)
+                        .unwrap_or_else(|| subtype.into());
+                    let mut failure = event(
+                        format!("record-{}:failure", position + 1),
+                        record,
+                        "failure",
+                        Some(bounded(&body)),
+                        &self.turn,
+                    );
+                    failure.status = Some("failed".into());
+                    self.push_event(failure);
+                }
                 finish(
                     &mut self.parsed,
                     &self.turn,
                     position,
                     record,
                     "failure",
-                    record
-                        .get("errors")
-                        .map(printable)
-                        .unwrap_or_else(|| subtype.into()),
+                    if self.summary_only {
+                        String::new()
+                    } else {
+                        record
+                            .get("errors")
+                            .map(printable)
+                            .unwrap_or_else(|| subtype.into())
+                    },
                 );
             }
         }
@@ -998,10 +1088,12 @@ impl Parser {
                 self.last_assistant_events.clear();
                 self.last_assistant_text = None;
                 self.questions.clear();
-                for call in &self.pending {
-                    if let Some(index) = self.calls.get(call) {
-                        Arc::make_mut(&mut self.parsed.events[*index]).status =
-                            Some("cancelled".into());
+                if !self.summary_only {
+                    let events = Arc::make_mut(&mut self.parsed.events);
+                    for call in &self.pending {
+                        if let Some(&index) = self.calls.get(call) {
+                            Arc::make_mut(&mut events[index]).status = Some("cancelled".into());
+                        }
                     }
                 }
                 self.pending.clear();
@@ -1013,13 +1105,17 @@ impl Parser {
             }
             if subtype == "compact_boundary" {
                 self.last_assistant_events.clear();
-                self.parsed.events.push(Arc::new(event(
-                    key,
-                    record,
-                    "compaction",
-                    Some(content_text(record.get("content").unwrap_or(&Value::Null))),
-                    &self.turn,
-                )));
+                if self.summary_only {
+                    self.saw_any_event = true;
+                } else {
+                    self.push_event(event(
+                        key,
+                        record,
+                        "compaction",
+                        Some(content_text(record.get("content").unwrap_or(&Value::Null))),
+                        &self.turn,
+                    ));
+                }
             } else {
                 let known = matches!(
                     subtype,
@@ -1033,19 +1129,23 @@ impl Parser {
                         | "api_error"
                         | "local_command"
                 );
-                let mut e = event(
-                    key,
-                    record,
-                    if known { "system" } else { "unknown" },
-                    Some(format!("系统活动：{subtype}")),
-                    &self.turn,
-                );
-                e.detail = Some(printable(record));
-                e.role = Some(subtype.into());
-                if subtype == "api_error" {
-                    e.status = Some("failed".into());
+                if self.summary_only {
+                    self.saw_any_event = true;
+                } else {
+                    let mut e = event(
+                        key,
+                        record,
+                        if known { "system" } else { "unknown" },
+                        Some(format!("系统活动：{subtype}")),
+                        &self.turn,
+                    );
+                    e.detail = Some(printable(record));
+                    e.role = Some(subtype.into());
+                    if subtype == "api_error" {
+                        e.status = Some("failed".into());
+                    }
+                    self.push_event(e);
                 }
-                self.parsed.events.push(Arc::new(e));
                 if !known {
                     warning(&mut self.parsed, "存在新格式系统活动，仅显示兼容提示");
                 }
@@ -1056,21 +1156,25 @@ impl Parser {
         for key in std::iter::once(key) {
             let call = field(record, "tool_use_id");
             let request = field(record, "request_id");
-            let mut e = event(
-                key,
-                record,
-                "permission_request",
-                Some("权限请求".into()),
-                &self.turn,
-            );
-            e.detail = Some(printable(record));
-            e.call_id = (!call.is_empty()).then(|| call.into());
-            e.status = (!request.is_empty()
-                && self.pending.contains(call)
-                && field(record, "agent_id").is_empty()
-                && alias_field(record, &["sessionId", "session_id"]) == self.parsed.id)
-                .then(|| "in_progress".into());
-            self.parsed.events.push(Arc::new(e));
+            if self.summary_only {
+                self.saw_any_event = true;
+            } else {
+                let mut e = event(
+                    key,
+                    record,
+                    "permission_request",
+                    Some("权限请求".into()),
+                    &self.turn,
+                );
+                e.detail = Some(printable(record));
+                e.call_id = (!call.is_empty()).then(|| call.into());
+                e.status = (!request.is_empty()
+                    && self.pending.contains(call)
+                    && field(record, "agent_id").is_empty()
+                    && alias_field(record, &["sessionId", "session_id"]) == self.parsed.id)
+                    .then(|| "in_progress".into());
+                self.push_event(e);
+            }
             // Only a pending primary call with explicit transcript identity
             // proves this is our permission request, not a remote subagent's.
             if !request.is_empty()
@@ -1102,10 +1206,14 @@ impl Parser {
         }
     }
     fn mark_final_answer(&mut self) {
+        if self.summary_only || self.last_assistant_events.is_empty() {
+            return;
+        }
         // Presentation only: never infer the phase from text or change native
         // notification terminal events and their deduplication identities.
+        let events = Arc::make_mut(&mut self.parsed.events);
         for &index in &self.last_assistant_events {
-            let event = &mut self.parsed.events[index];
+            let event = &mut events[index];
             if event.turn_id == self.turn
                 && event.assistant_phase != Some(ClaudeAssistantPhase::Intermediate)
             {
@@ -1114,17 +1222,23 @@ impl Parser {
         }
     }
     fn clear_final_answer(&mut self) {
+        if self.summary_only || self.last_assistant_events.is_empty() {
+            return;
+        }
+        let events = Arc::make_mut(&mut self.parsed.events);
         for &index in &self.last_assistant_events {
-            let event = &mut self.parsed.events[index];
+            let event = &mut events[index];
             if event.assistant_phase == Some(ClaudeAssistantPhase::Final) {
                 Arc::make_mut(event).assistant_phase = None;
             }
         }
     }
     fn settle_permission(&mut self, call: &str) {
-        for event in self
-            .parsed
-            .events
+        if self.summary_only {
+            return;
+        }
+        let events = Arc::make_mut(&mut self.parsed.events);
+        for event in events
             .iter_mut()
             .rev()
             .take_while(|e| e.turn_id == self.turn)
@@ -1141,24 +1255,28 @@ impl Parser {
             } else {
                 field(record, "tool_name")
             };
-            let mut e = event(
-                key,
-                record,
-                "tool_reference",
-                Some(if name.is_empty() {
-                    if kind == "tool_search_tool_result" {
-                        "工具引用结果".into()
+            if self.summary_only {
+                self.saw_any_event = true;
+            } else {
+                let mut e = event(
+                    key,
+                    record,
+                    "tool_reference",
+                    Some(if name.is_empty() {
+                        if kind == "tool_search_tool_result" {
+                            "工具引用结果".into()
+                        } else {
+                            "工具引用".into()
+                        }
                     } else {
-                        "工具引用".into()
-                    }
-                } else {
-                    name.into()
-                }),
-                &self.turn,
-            );
-            e.role = (!name.is_empty()).then(|| name.into());
-            e.detail = Some(printable(record));
-            self.parsed.events.push(Arc::new(e));
+                        name.into()
+                    }),
+                    &self.turn,
+                );
+                e.role = (!name.is_empty()).then(|| name.into());
+                e.detail = Some(printable(record));
+                self.push_event(e);
+            }
             let nested_reference = ["content", "tool_references"].iter().any(|key| {
                 record
                     .get(*key)
@@ -1176,6 +1294,10 @@ impl Parser {
         }
     }
     fn read_auxiliary(&mut self, record: &Value, key: String, kind: &str) {
+        if self.summary_only {
+            self.saw_any_event = true;
+            return;
+        }
         for key in std::iter::once(key) {
             if kind == "attachment"
                 && record.pointer("/attachment/type").and_then(Value::as_str)
@@ -1186,13 +1308,7 @@ impl Parser {
                     .and_then(Value::as_str)
                     .filter(|s| !s.trim().is_empty())
                 {
-                    self.parsed.events.push(Arc::new(event(
-                        key,
-                        record,
-                        "plan",
-                        Some(bounded(plan)),
-                        &self.turn,
-                    )));
+                    self.push_event(event(key, record, "plan", Some(bounded(plan)), &self.turn));
                     continue;
                 }
             }
@@ -1265,69 +1381,92 @@ impl Parser {
             } else {
                 e.detail = Some(printable(record));
             }
-            self.parsed.events.push(Arc::new(e));
+            self.push_event(e);
         }
     }
-    fn snapshot(&self, path: &Path, issues: Vec<String>, record_count: u64) -> Parsed {
-        let mut parsed = self.parsed.clone();
-        parsed.current_turn = self.turn.clone();
-        for message in issues {
-            issue(&mut parsed, &message);
+    fn snapshot(&self, path: &Path, extra_issues: Vec<String>, record_count: u64) -> Parsed {
+        let mut issues = self.parsed.issues.clone();
+        for message in extra_issues {
+            if !issues.iter().any(|i| i == &message) {
+                issues.push(message);
+            }
         }
-        parsed.record_count = record_count;
-        parsed.settled_count = record_count;
-        if parsed.id.is_empty() {
-            parsed.id = path
+        let mut id = self.parsed.id.clone();
+        if id.is_empty() {
+            id = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into();
-            if !parsed.events.is_empty() {
-                issue(&mut parsed, "未确认原生会话 ID");
+            if self.saw_any_event && !issues.iter().any(|i| i == "未确认原生会话 ID") {
+                issues.push("未确认原生会话 ID".into());
             }
         }
-        parsed.title = self
+        let title = self
             .custom_title
             .clone()
             .or_else(|| self.auto_title.clone())
             .or_else(|| self.first_user.clone())
-            .unwrap_or_else(|| parsed.id.clone());
-        if parsed.version.is_empty() {
-            parsed.version = "unknown".into();
+            .unwrap_or_else(|| id.clone());
+        let version = if self.parsed.version.is_empty() {
+            "unknown".into()
+        } else {
+            self.parsed.version.clone()
+        };
+        if version != "unknown"
+            && !version.starts_with("2.")
+            && !issues
+                .iter()
+                .any(|i| i == "此 Claude 版本尚未验证，改名已禁用")
+        {
+            issues.push("此 Claude 版本尚未验证，改名已禁用".into());
         }
-        if parsed.version != "unknown" && !parsed.version.starts_with("2.") {
-            issue(&mut parsed, "此 Claude 版本尚未验证，改名已禁用");
+        let mut native_events = if self.summary_only {
+            Vec::new()
+        } else {
+            let mut evs = self.parsed.native_events.clone();
+            evs.extend(self.questions.values().cloned());
+            evs.sort_by_key(|e| e.position);
+            evs
+        };
+        if self.summary_only {
+            native_events.clear();
         }
-        parsed.has_open_questions = !self.questions.is_empty();
-        for q in self.questions.values() {
-            parsed.native_events.push(q.clone());
+        Parsed {
+            agent_names: if self.summary_only {
+                HashMap::new()
+            } else {
+                self.parsed.agent_names.clone()
+            },
+            timeline: Arc::default(),
+            id,
+            title,
+            cwd: self.parsed.cwd.clone(),
+            cwds: self.parsed.cwds.clone(),
+            version,
+            updated_at: self.summary_updated_at.clone(),
+            events: Arc::clone(&self.parsed.events),
+            message_count: self.summary_message_count,
+            last_message: self.summary_last_message.clone(),
+            history: Default::default(),
+            issues,
+            warnings: self.parsed.warnings.clone(),
+            last_turn_at: self.parsed.last_turn_at,
+            last_terminal_at: self.parsed.last_terminal_at,
+            turn_open: self.parsed.turn_open,
+            has_open_questions: !self.questions.is_empty(),
+            saw_sidechain: self.parsed.saw_sidechain,
+            saw_primary: self.parsed.saw_primary,
+            native_events,
+            prompts: if self.summary_only {
+                HashMap::new()
+            } else {
+                self.parsed.prompts.clone()
+            },
+            current_turn: self.turn.clone(),
+            record_count,
+            settled_count: record_count,
         }
-        parsed.native_events.sort_by_key(|e| e.position);
-        let messages: Vec<_> = parsed
-            .events
-            .iter()
-            .filter(|event| matches!(event.kind.as_str(), "user_message" | "assistant_message"))
-            .collect();
-        parsed.message_count = messages.len();
-        parsed.updated_at = messages
-            .iter()
-            .rev()
-            .find(|event| {
-                event
-                    .text
-                    .as_ref()
-                    .is_some_and(|text| !text.trim().is_empty())
-                    || event
-                        .user_message
-                        .as_ref()
-                        .is_some_and(|message| !message.attachments.is_empty())
-            })
-            .and_then(|event| event.timestamp.clone());
-        parsed.last_message = messages
-            .last()
-            .and_then(|event| event.text.as_ref())
-            .map(|text| text.chars().take(240).collect());
-        parsed
     }
 
     fn execution_activity(&mut self, record: &Value, position: usize, api_error: bool) {

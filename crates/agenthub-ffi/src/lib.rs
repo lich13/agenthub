@@ -68,6 +68,7 @@ impl AgentHubRuntime {
     ) -> Result<Self, String> {
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .max_blocking_threads(32)
             .enable_all()
             .build()
             .map_err(|err| format!("failed to initialize async runtime: {err}"))?;

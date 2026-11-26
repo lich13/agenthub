@@ -10,7 +10,7 @@ pub(super) async fn system_capabilities(
 }
 
 pub(super) async fn jobs_list(ctx: DispatchContext<'_>, args_json: &str) -> Result<String, String> {
-    let args: LimitU32Args = parse_args(args_json)?;
+    let args: LimitU32Request = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || job_service::jobs_with_state(&state, args.limit)).await,
@@ -21,7 +21,7 @@ pub(super) async fn jobs_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: JobDetailArgs = parse_args(args_json)?;
+    let args: JobDetailRequest = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
@@ -35,7 +35,7 @@ pub(super) async fn probe_status(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ProbeStatusArgs = parse_args(args_json)?;
+    let args: ProbeStatusRequest = parse_args(args_json)?;
     encode(
         probe_service::desktop_probe_status_with_options(ctx.state, args.refresh.unwrap_or(false))
             .await
@@ -47,17 +47,11 @@ pub(super) async fn github_ci_status(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: GithubCiArgs = parse_args(args_json)?;
+    let request: agenthub_core::github_ci::Request = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
-        tokio::task::spawn_blocking(move || {
-            probe_service::desktop_github_ci_status(
-                &state,
-                agenthub_core::github_ci::Request {
-                    refresh: args.refresh.unwrap_or(false),
-                    cached_only: args.cached_only.unwrap_or(false),
-                },
-            )
+        agenthub_core::read_tasks::spawn_blocking(move || {
+            probe_service::desktop_github_ci_status(&state, request)
         })
         .await
         .map_err(|e| e.to_string())?,
@@ -93,7 +87,7 @@ pub(super) async fn probe_events(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: LimitU32Args = parse_args(args_json)?;
+    let args: LimitU32Request = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {

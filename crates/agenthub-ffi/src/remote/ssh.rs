@@ -39,7 +39,7 @@ pub struct Client {
     input: AsyncMutex<ChildStdin>,
     pending: Pending,
     next: AtomicU64,
-    child: Mutex<Child>,
+    child: Arc<Mutex<Child>>,
     reader: tokio::task::JoinHandle<()>,
     connected: Arc<AtomicBool>,
 }
@@ -124,7 +124,7 @@ impl Client {
             input: AsyncMutex::new(input),
             pending,
             next: AtomicU64::new(1),
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
             reader,
             connected,
         }))
@@ -138,7 +138,65 @@ impl Client {
         for (_, reply) in self.pending.lock().expect("SSH replies").drain() {
             let _ = reply.send(Err(CallError::Disconnected));
         }
-        let _ = self.child.lock().expect("SSH child").start_kill();
+        let already_reaped = {
+            let mut child = self.child.lock().expect("SSH child");
+            let _ = child.start_kill();
+            child.try_wait().ok().flatten().is_some()
+        };
+        if !already_reaped {
+            let child = self.child.clone();
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    for _ in 0..50 {
+                        if child
+                            .lock()
+                            .expect("SSH child")
+                            .try_wait()
+                            .ok()
+                            .flatten()
+                            .is_some()
+                        {
+                            return;
+                        }
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                    let _ = tokio::task::spawn_blocking(move || {
+                        for _ in 0..50 {
+                            if child
+                                .lock()
+                                .expect("SSH child")
+                                .try_wait()
+                                .ok()
+                                .flatten()
+                                .is_some()
+                            {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    })
+                    .await;
+                });
+            } else {
+                let _ = std::thread::Builder::new()
+                    .name("agenthub-ssh-reap".into())
+                    .spawn(move || {
+                        for _ in 0..100 {
+                            if child
+                                .lock()
+                                .expect("SSH child")
+                                .try_wait()
+                                .ok()
+                                .flatten()
+                                .is_some()
+                            {
+                                return;
+                            }
+                            std::thread::sleep(Duration::from_millis(20));
+                        }
+                    });
+            }
+        }
     }
     pub async fn call(&self, command: &str, args: Value) -> Result<Value, CallError> {
         self.call_with_timeout(command, args, Duration::from_secs(60))

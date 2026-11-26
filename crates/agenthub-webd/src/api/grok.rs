@@ -1,13 +1,10 @@
 use super::{ok, ApiResponse};
 use crate::state::AppState;
-use agenthub_core::{grok::GrokDeleteRequest, services::use_cases::AgentHubUseCases};
+use agenthub_core::{
+    grok::GrokDeleteRequest,
+    services::use_cases::{AgentHubUseCases, QueryLimitRequest},
+};
 use serde::Deserialize;
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct GrokListQuery {
-    pub q: Option<String>,
-    pub limit: Option<usize>,
-}
 
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct GrokDetailQuery {
@@ -15,7 +12,7 @@ pub(crate) struct GrokDetailQuery {
     pub before: Option<String>,
 }
 
-pub(crate) async fn grok_list(state: AppState, query: GrokListQuery) -> ApiResponse {
+pub(crate) async fn grok_list(state: AppState, query: QueryLimitRequest) -> ApiResponse {
     let platform = state.platform().clone();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&platform)

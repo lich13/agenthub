@@ -95,8 +95,7 @@ public struct MaintenanceOpsView: View {
     private var updateBusy: Bool {
         if startingUpdate { return true }
         guard let id = activeUpdateJobId else { return false }
-        guard let job = store.trackedJobs[id] else { return true }
-        return !job.isTerminal
+        return store.isTrackedJobActive(id)
     }
 
     public var body: some View {
@@ -216,7 +215,7 @@ public struct MaintenanceOpsView: View {
                             .font(DesignFonts.body(12))
                             .foregroundStyle(palette.textMuted.color)
                         Text(versionLabel)
-                            .font(DesignFonts.tabularBody(14, weight: .semibold))
+                            .font(DesignFonts.body(14, weight: .semibold))
                             .foregroundStyle(palette.textPrimary.color)
                     }
                     .frame(minWidth: 120, alignment: .leading)
@@ -230,7 +229,7 @@ public struct MaintenanceOpsView: View {
                                 .font(DesignFonts.body(12))
                                 .foregroundStyle(palette.textMuted.color)
                             Text(UpdateVersionFormatter.displayVersion(latest))
-                                .font(DesignFonts.tabularBody(14, weight: .semibold))
+                                .font(DesignFonts.body(14, weight: .semibold))
                                 .foregroundStyle(palette.accent.color)
                         }
                         .frame(minWidth: 120, alignment: .leading)
@@ -243,22 +242,35 @@ public struct MaintenanceOpsView: View {
                             case .install: .download
                             case .prune: .trash2
                             }
-                            Button {
-                                Task { await triggerUpdateAction(item.action) }
-                            } label: {
-                                HStack(spacing: 8) {
-                                    LucideIcon(icon, size: 17)
-                                    Text(item.label)
-                                }
+                            let actionButtonLabel = HStack(spacing: 8) {
+                                LucideIcon(icon, size: 17)
+                                Text(item.label)
                             }
-                            .buttonStyle(
-                                item.tone == "primary"
-                                    ? AnyButtonStyle(PrimaryButtonStyle())
-                                    : item.tone == "danger"
-                                        ? AnyButtonStyle(DangerButtonStyle(soft: true))
-                                        : AnyButtonStyle(SecondaryButtonStyle())
-                            )
-                            .disabled(working || item.disabled)
+                            if item.tone == "primary" {
+                                Button {
+                                    Task { await triggerUpdateAction(item.action) }
+                                } label: {
+                                    actionButtonLabel
+                                }
+                                .buttonStyle(PrimaryButtonStyle())
+                                .disabled(working || item.disabled)
+                            } else if item.tone == "danger" {
+                                Button {
+                                    Task { await triggerUpdateAction(item.action) }
+                                } label: {
+                                    actionButtonLabel
+                                }
+                                .buttonStyle(DangerButtonStyle(soft: true))
+                                .disabled(working || item.disabled)
+                            } else {
+                                Button {
+                                    Task { await triggerUpdateAction(item.action) }
+                                } label: {
+                                    actionButtonLabel
+                                }
+                                .buttonStyle(SecondaryButtonStyle())
+                                .disabled(working || item.disabled)
+                            }
                         }
                     }
                 }
@@ -336,13 +348,13 @@ public struct UnifiedThreadCleanupSection: View {
     @ObservedObject public var store: RuntimeConnectionStore
     public var isNarrow: Bool
 
-    public static let scopesMeta: [(scope: String, legacyAlias: String?, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
-        ("codex_archived", nil, "Codex", "已归档线程", "Codex 已归档线程", .codex, .codex),
-        ("codex_hidden", nil, "Codex", "隐藏线程", "Codex 隐藏线程", .codex, .codex),
-        ("antigravity_archived", nil, "Antigravity", "已归档与孤立子会话", "Antigravity 已归档与孤立子会话", .antigravity, .antigravity),
-        ("dsh_archived", nil, "DeepSeek Harness", "已归档线程", "DeepSeek Harness 已归档线程", .dsh, .dsh),
-        ("claude_empty", "claude_inactive", "Claude Code", "空残余会话", "Claude Code 空残余会话", .claude, .claude),
-        ("grok_empty", "grok_inactive", "Grok Build", "空残余会话", "Grok Build 空残余会话", .grok, .grok),
+    public static let scopesMeta: [(scope: String, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)] = [
+        ("codex_archived", "Codex", "已归档线程", "Codex 已归档线程", .codex, .codex),
+        ("codex_hidden", "Codex", "隐藏线程", "Codex 隐藏线程", .codex, .codex),
+        ("antigravity_archived", "Antigravity", "已归档与孤立子会话", "Antigravity 已归档与孤立子会话", .antigravity, .antigravity),
+        ("dsh_archived", "DeepSeek Harness", "已归档线程", "DeepSeek Harness 已归档线程", .dsh, .dsh),
+        ("claude_empty", "Claude Code", "空残余会话", "Claude Code 空残余会话", .claude, .claude),
+        ("grok_empty", "Grok Build", "空残余会话", "Grok Build 空残余会话", .grok, .grok),
     ]
 
     @State private var plan: UnifiedCleanupPlan?
@@ -369,8 +381,8 @@ public struct UnifiedThreadCleanupSection: View {
 
     private var busy: Bool { scanning || executing }
 
-    private func lookupScopePlan(_ meta: (scope: String, legacyAlias: String?, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)) -> UnifiedCleanupScopePlan? {
-        plan?.scopes.first(where: { $0.scope == meta.scope || (meta.legacyAlias != nil && $0.scope == meta.legacyAlias) })
+    private func lookupScopePlan(_ meta: (scope: String, agentTitle: String, scopeBadge: String, label: String, brand: AgentBrandId, workspace: WorkspaceId)) -> UnifiedCleanupScopePlan? {
+        plan?.scopes.first(where: { $0.scope == meta.scope })
     }
 
     private var activeSelectedScopes: [String] {
@@ -518,16 +530,19 @@ public struct UnifiedThreadCleanupSection: View {
                                         .font(DesignFonts.body(11))
                                         .foregroundStyle(palette.textMuted.color)
                                     Spacer()
-                                    Button(expandedScope == resolvedKey ? "收起" : "详情") {
+                                    Button {
                                         candidatePage = 0
                                         expandedScope = (expandedScope == resolvedKey) ? nil : resolvedKey
+                                    } label: {
+                                        Text(expandedScope == resolvedKey ? "收起" : "详情")
+                                            .font(DesignFonts.body(11, weight: .medium))
+                                            .foregroundStyle(palette.textSecondary.color)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(Capsule().fill(palette.surface.color))
+                                            .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                                            .contentShape(Rectangle())
                                     }
-                                    .font(DesignFonts.body(11, weight: .medium))
-                                    .foregroundStyle(palette.textSecondary.color)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(Capsule().fill(palette.surface.color))
-                                    .overlay(Capsule().strokeBorder(palette.borderStrong.color, lineWidth: 1))
                                     .buttonStyle(PlainHitButtonStyle())
                                 }
                                 .padding(.top, 4)
@@ -660,8 +675,23 @@ public struct UnifiedThreadCleanupSection: View {
                 }
             }
         }
+        .onChange(of: store.machineScope) { _ in
+            previewTask?.cancel()
+            previewTask = nil
+            cancelHiddenScan()
+            plan = nil
+            result = nil
+            selectedScopes = []
+            confirmation = nil
+            expandedScope = nil
+            hiddenScan = nil
+            hiddenScanStopped = false
+            errorMessage = nil
+            hiddenError = nil
+        }
         .onDisappear {
             previewTask?.cancel()
+            previewTask = nil
             cancelHiddenScan()
         }
     }
@@ -711,6 +741,9 @@ public struct UnifiedThreadCleanupSection: View {
 
     private func runPreview(includeUnified: Bool) {
         let revision = store.revision
+        previewTask?.cancel()
+        previewTask = nil
+        cancelHiddenScan()
         confirmation = nil
         result = nil
         errorMessage = nil
@@ -724,26 +757,30 @@ public struct UnifiedThreadCleanupSection: View {
             plan = nil
             expandedScope = nil
             selectedScopes = []
-            previewTask = Task { @MainActor in
-                defer { if !Task.isCancelled { previewTask = nil } }
+            let task = Task { @MainActor in
+                var unified: UnifiedCleanupPlan?
                 do {
-                    var unified: UnifiedCleanupPlan = try await store.rpc("cleanup.unifiedDryRun")
-                    guard store.revision == revision, !Task.isCancelled else { return }
+                    unified = try await store.rpc("cleanup.unifiedDryRun", at: revision)
+                } catch {
+                    if store.revision == revision, !Task.isCancelled { errorMessage = error.localizedDescription }
+                }
+                guard store.revision == revision, !Task.isCancelled else { return }
+                previewTask = nil
+                if var unified {
                     if let hidden = plan?.scopes.first(where: { $0.scope == "codex_hidden" }) {
                         unified.replaceHidden(hidden)
                     }
                     plan = unified
                     selectedScopes = Set(unified.scopes.filter { $0.supported && $0.scanned && $0.deletableCount > 0 }.map(\.scope))
                     expandedScope = expandedScope ?? unified.scopes.first(where: { !$0.candidates.isEmpty })?.scope
-                } catch {
-                    if store.revision == revision, !Task.isCancelled { errorMessage = error.localizedDescription }
                 }
             }
+            previewTask = task
         } else {
             plan?.replaceHidden(UnifiedCleanupScopePlan(scope: "codex_hidden", supported: true, scanned: false, candidateCount: 0,
                                                        deletableCount: 0, estimatedBytes: 0, candidates: [], issues: []))
         }
-        guard store.capabilities.isReady else { return }
+        guard store.capabilities.isReady, store.capabilities.hiddenCleanupScan else { return }
         let runner = HiddenCleanupScan { request in
             try await store.rpc("cleanup.hiddenDryRun", args: CleanupRequestEnvelope(request: request), at: revision)
         }

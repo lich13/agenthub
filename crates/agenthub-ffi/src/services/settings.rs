@@ -82,7 +82,7 @@ pub(crate) fn probe_action_with_state(
     action: probe_service::ProbeAction,
 ) -> Result<ActionResponse> {
     let plan = probe_service::ProbeUseCases::new(state.platform()).action(action)?;
-    let command = action.as_desktop_command();
+    let command = action.as_rpc_action();
     let job = &plan.job;
     let binary = state.platform().daemon_binary();
     if !binary.is_file() {
@@ -238,10 +238,12 @@ mod tests {
                     poll_seconds: Some(1),
                     recent_limit: Some(999),
                     notifications: Some(ProbeNotificationsSavePatch {
-                        server_url: Some(" https://api.day.app ".to_string()),
-                        group: Some("  ".to_string()),
+                        config: agenthub_core::config::ProbeNotificationsConfigPatch {
+                            server_url: Some(" https://api.day.app ".to_string()),
+                            group: Some("  ".to_string()),
+                            ..Default::default()
+                        },
                         device_key: Some(" nested-key ".to_string()),
-                        ..Default::default()
                     }),
                     ..Default::default()
                 }),

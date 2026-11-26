@@ -387,7 +387,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
                 let bot = (i == 24) ? "true" : "false"
                 let sha = String(format: "%07xabcdef123456", i)
                 return """
-                {"id":\(100 + i),"repository_id":1,"repository_name":"lich13/agenthub","name":"CI Pipeline #\(i) Long Workflow Name Without Truncation","workflow_name":"Build & Verify","head_branch":"main","head_sha":"\(sha)","status":"completed","conclusion":"\(i == 24 ? "failure" : "success")","html_url":"https://github.com/lich13/agenthub/actions/runs/\(100 + i)","updated_at":"2026-11-19T10:\(String(format: "%02d", i)):00Z","is_bot":\(bot)}
+                {"id":\(100 + i),"repository_id":1,"repository_name":"lich13/agenthub","name":"CI Pipeline #\(i) Long Workflow Name Without Truncation","head_branch":"main","head_sha":"\(sha)","status":"completed","conclusion":"\(i == 24 ? "failure" : "success")","html_url":"https://github.com/lich13/agenthub/actions/runs/\(100 + i)","updated_at":"2026-11-19T10:\(String(format: "%02d", i)):00Z","is_bot":\(bot)}
                 """
             }.joined(separator: ",")
             let runs = try JSONDecoder().decode([GithubCiRun].self, from: Data("[\(runsJson)]".utf8))

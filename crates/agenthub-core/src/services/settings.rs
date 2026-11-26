@@ -188,103 +188,57 @@ pub fn normalize_bark_device_key(value: Option<String>) -> Option<String> {
     })
 }
 
+macro_rules! merge_some_fields {
+    ($target:expr, $source:expr, [$($field:ident),+ $(,)?]) => {
+        $(
+            if $source.$field.is_some() {
+                $target.$field = $source.$field;
+            }
+        )+
+    };
+}
+
 pub fn merge_probe_notification_patch(
     target: &mut ProbeNotificationsConfigPatch,
     source: ProbeNotificationsConfigPatch,
 ) {
-    if source.enabled.is_some() {
-        target.enabled = source.enabled;
-    }
-    if source.server_url.is_some() {
-        target.server_url = source.server_url;
-    }
-    if source.sound.is_some() {
-        target.sound = source.sound;
-    }
-    if source.group.is_some() {
-        target.group = source.group;
-    }
-    if source.url.is_some() {
-        target.url = source.url;
-    }
-    if source.notify_completion.is_some() {
-        target.notify_completion = source.notify_completion;
-    }
-    if source.notify_reply_needed.is_some() {
-        target.notify_reply_needed = source.notify_reply_needed;
-    }
-    if source.notify_codex.is_some() {
-        target.notify_codex = source.notify_codex;
-    }
-    if source.notify_github_ci.is_some() {
-        target.notify_github_ci = source.notify_github_ci;
-    }
-    if source.github_ci_repositories.is_some() {
-        target.github_ci_repositories = source.github_ci_repositories;
-    }
-    if source.github_ci_filter_bots.is_some() {
-        target.github_ci_filter_bots = source.github_ci_filter_bots;
-    }
-    if source.notify_grokbot.is_some() {
-        target.notify_grokbot = source.notify_grokbot;
-    }
-    if source.notify_grok.is_some() {
-        target.notify_grok = source.notify_grok;
-    }
-    if source.notify_grok_completion.is_some() {
-        target.notify_grok_completion = source.notify_grok_completion;
-    }
-    if source.notify_grok_failure.is_some() {
-        target.notify_grok_failure = source.notify_grok_failure;
-    }
-    if source.notify_grok_reply_needed.is_some() {
-        target.notify_grok_reply_needed = source.notify_grok_reply_needed;
-    }
-    if source.notify_claude.is_some() {
-        target.notify_claude = source.notify_claude;
-    }
-    if source.notify_claude_completion.is_some() {
-        target.notify_claude_completion = source.notify_claude_completion;
-    }
-    if source.notify_claude_failure.is_some() {
-        target.notify_claude_failure = source.notify_claude_failure;
-    }
-    if source.notify_claude_reply_needed.is_some() {
-        target.notify_claude_reply_needed = source.notify_claude_reply_needed;
-    }
-    if source.notify_antigravity.is_some() {
-        target.notify_antigravity = source.notify_antigravity;
-    }
-    if source.notify_antigravity_completion.is_some() {
-        target.notify_antigravity_completion = source.notify_antigravity_completion;
-    }
-    if source.notify_antigravity_failure.is_some() {
-        target.notify_antigravity_failure = source.notify_antigravity_failure;
-    }
-    if source.notify_antigravity_reply_needed.is_some() {
-        target.notify_antigravity_reply_needed = source.notify_antigravity_reply_needed;
-    }
-    if source.notify_antigravity_authorization.is_some() {
-        target.notify_antigravity_authorization = source.notify_antigravity_authorization;
-    }
-    if source.notify_dsh.is_some() {
-        target.notify_dsh = source.notify_dsh;
-    }
-    if source.notify_dsh_completion.is_some() {
-        target.notify_dsh_completion = source.notify_dsh_completion;
-    }
-    if source.notify_dsh_failure.is_some() {
-        target.notify_dsh_failure = source.notify_dsh_failure;
-    }
-    if source.notify_dsh_reply_needed.is_some() {
-        target.notify_dsh_reply_needed = source.notify_dsh_reply_needed;
-    }
-    if source.notify_dsh_authorization.is_some() {
-        target.notify_dsh_authorization = source.notify_dsh_authorization;
-    }
-    if source.notify_recoverable.is_some() {
-        target.notify_recoverable = source.notify_recoverable;
-    }
+    merge_some_fields!(
+        target,
+        source,
+        [
+            enabled,
+            server_url,
+            sound,
+            group,
+            url,
+            notify_completion,
+            notify_reply_needed,
+            notify_recoverable,
+            notify_codex,
+            notify_github_ci,
+            github_ci_repositories,
+            github_ci_filter_bots,
+            notify_grokbot,
+            notify_grok,
+            notify_grok_completion,
+            notify_grok_failure,
+            notify_grok_reply_needed,
+            notify_claude,
+            notify_claude_completion,
+            notify_claude_failure,
+            notify_claude_reply_needed,
+            notify_antigravity,
+            notify_antigravity_completion,
+            notify_antigravity_failure,
+            notify_antigravity_reply_needed,
+            notify_antigravity_authorization,
+            notify_dsh,
+            notify_dsh_completion,
+            notify_dsh_failure,
+            notify_dsh_reply_needed,
+            notify_dsh_authorization,
+        ]
+    );
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -313,48 +267,8 @@ pub struct ProbeSettingsSavePatch {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeNotificationsSavePatch {
-    pub enabled: Option<bool>,
-    pub server_url: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::config::deserialize_optional_string_field",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub sound: Option<Option<String>>,
-    pub group: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "crate::config::deserialize_optional_string_field",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub url: Option<Option<String>>,
-    pub notify_completion: Option<bool>,
-    pub notify_reply_needed: Option<bool>,
-    pub notify_recoverable: Option<bool>,
-    pub notify_codex: Option<bool>,
-    pub notify_grok: Option<bool>,
-    pub notify_grokbot: Option<bool>,
-    pub notify_github_ci: Option<bool>,
-    pub github_ci_repositories: Option<Vec<String>>,
-    pub github_ci_filter_bots: Option<bool>,
-    pub notify_grok_completion: Option<bool>,
-    pub notify_grok_failure: Option<bool>,
-    pub notify_grok_reply_needed: Option<bool>,
-    pub notify_claude_reply_needed: Option<bool>,
-    pub notify_claude_failure: Option<bool>,
-    pub notify_claude_completion: Option<bool>,
-    pub notify_claude: Option<bool>,
-    pub notify_antigravity: Option<bool>,
-    pub notify_antigravity_completion: Option<bool>,
-    pub notify_antigravity_failure: Option<bool>,
-    pub notify_antigravity_reply_needed: Option<bool>,
-    pub notify_antigravity_authorization: Option<bool>,
-    pub notify_dsh: Option<bool>,
-    pub notify_dsh_completion: Option<bool>,
-    pub notify_dsh_failure: Option<bool>,
-    pub notify_dsh_reply_needed: Option<bool>,
-    pub notify_dsh_authorization: Option<bool>,
-
+    #[serde(flatten)]
+    pub config: ProbeNotificationsConfigPatch,
     pub device_key: Option<String>,
 }
 
@@ -375,7 +289,7 @@ pub struct SecretSettingWritePlan {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProbeSettingsSavePlan {
     pub config_patch: ProbeConfigFilePatch,
-    pub secret_writes: Vec<SecretSettingWritePlan>,
+    pub secret_write: Option<SecretSettingWritePlan>,
 }
 
 pub fn plan_probe_settings_save(
@@ -383,15 +297,13 @@ pub fn plan_probe_settings_save(
     request: ProbeSettingsSaveRequest,
 ) -> Result<ProbeSettingsSavePlan> {
     let normalized = normalize_probe_settings_save_request(request)?;
-    let secret_writes: Vec<SecretSettingWritePlan> = normalized
+    let secret_write = normalized
         .bark_device_key
         .as_deref()
-        .map(bark_device_key_write_plan)
-        .into_iter()
-        .collect();
+        .map(bark_device_key_write_plan);
     Ok(ProbeSettingsSavePlan {
         config_patch: normalized.config_patch,
-        secret_writes,
+        secret_write,
     })
 }
 
@@ -407,7 +319,7 @@ pub fn apply_probe_settings_save_plan(
             let config = Config::load(config_path)?;
             (config.clone(), config)
         };
-        for write in plan.secret_writes {
+        if let Some(write) = plan.secret_write {
             db.set_secret_setting_bytes_in_transaction(
                 tx,
                 &write.setting_key,
@@ -434,14 +346,13 @@ pub fn normalize_probe_settings_save_request(
     };
 
     if let Some(notifications) = request.notifications {
-        let (notifications_patch, top_level_bark_device_key) =
-            notifications.into_config_patch_and_bark_key();
-        if !is_probe_notifications_patch_empty(&notifications_patch) {
+        let top_level_bark_device_key = normalize_bark_device_key(notifications.device_key);
+        if notifications.config != ProbeNotificationsConfigPatch::default() {
             let probe = probe_patch.get_or_insert_with(ProbeSettingsPatch::default);
             let target = probe
                 .notifications
                 .get_or_insert_with(ProbeNotificationsConfigPatch::default);
-            merge_probe_notification_patch(target, notifications_patch);
+            merge_probe_notification_patch(target, notifications.config);
         }
         if top_level_bark_device_key.is_some() {
             bark_device_key = top_level_bark_device_key;
@@ -450,7 +361,7 @@ pub fn normalize_probe_settings_save_request(
 
     if probe_patch
         .as_ref()
-        .is_some_and(is_probe_settings_patch_empty)
+        .is_some_and(|p| *p == ProbeSettingsPatch::default())
     {
         probe_patch = None;
     }
@@ -470,9 +381,10 @@ impl ProbeSettingsSavePatch {
     fn into_config_patch_and_bark_key(self) -> (Option<ProbeSettingsPatch>, Option<String>) {
         let (notifications, bark_device_key) = match self.notifications {
             Some(notifications) => {
-                let (patch, bark_device_key) = notifications.into_config_patch_and_bark_key();
-                let patch = (!is_probe_notifications_patch_empty(&patch)).then_some(patch);
-                (patch, bark_device_key)
+                let key = normalize_bark_device_key(notifications.device_key);
+                let patch = (notifications.config != ProbeNotificationsConfigPatch::default())
+                    .then_some(notifications.config);
+                (patch, key)
             }
             None => (None, None),
         };
@@ -488,49 +400,8 @@ impl ProbeSettingsSavePatch {
         };
 
         (
-            (!is_probe_settings_patch_empty(&patch)).then_some(patch),
+            (patch != ProbeSettingsPatch::default()).then_some(patch),
             bark_device_key,
-        )
-    }
-}
-
-impl ProbeNotificationsSavePatch {
-    fn into_config_patch_and_bark_key(self) -> (ProbeNotificationsConfigPatch, Option<String>) {
-        (
-            ProbeNotificationsConfigPatch {
-                enabled: self.enabled,
-                server_url: self.server_url,
-                sound: self.sound,
-                group: self.group,
-                url: self.url,
-                notify_completion: self.notify_completion,
-                notify_reply_needed: self.notify_reply_needed,
-                notify_recoverable: self.notify_recoverable,
-                notify_codex: self.notify_codex,
-                notify_grok: self.notify_grok,
-                notify_grokbot: self.notify_grokbot,
-                notify_github_ci: self.notify_github_ci,
-                github_ci_repositories: self.github_ci_repositories,
-                github_ci_filter_bots: self.github_ci_filter_bots,
-                notify_grok_completion: self.notify_grok_completion,
-                notify_grok_failure: self.notify_grok_failure,
-                notify_grok_reply_needed: self.notify_grok_reply_needed,
-                notify_claude_reply_needed: self.notify_claude_reply_needed,
-                notify_claude_failure: self.notify_claude_failure,
-                notify_claude_completion: self.notify_claude_completion,
-                notify_claude: self.notify_claude,
-                notify_antigravity: self.notify_antigravity,
-                notify_antigravity_completion: self.notify_antigravity_completion,
-                notify_antigravity_failure: self.notify_antigravity_failure,
-                notify_antigravity_reply_needed: self.notify_antigravity_reply_needed,
-                notify_antigravity_authorization: self.notify_antigravity_authorization,
-                notify_dsh: self.notify_dsh,
-                notify_dsh_completion: self.notify_dsh_completion,
-                notify_dsh_failure: self.notify_dsh_failure,
-                notify_dsh_reply_needed: self.notify_dsh_reply_needed,
-                notify_dsh_authorization: self.notify_dsh_authorization,
-            },
-            normalize_bark_device_key(self.device_key),
         )
     }
 }
@@ -544,50 +415,6 @@ fn bark_device_key_write_plan(secret_value: &str) -> SecretSettingWritePlan {
 
 fn probe_config_file_patch_has_changes(patch: &ProbeConfigFilePatch) -> bool {
     patch.codex.is_some() || patch.probe.is_some()
-}
-
-fn is_probe_settings_patch_empty(patch: &ProbeSettingsPatch) -> bool {
-    patch.enabled.is_none()
-        && patch.poll_seconds.is_none()
-        && patch.recent_limit.is_none()
-        && patch.hooks.is_none()
-        && patch.notifications.is_none()
-        && patch.observability.is_none()
-        && patch.error_monitor.is_none()
-}
-
-fn is_probe_notifications_patch_empty(patch: &ProbeNotificationsConfigPatch) -> bool {
-    patch.enabled.is_none()
-        && patch.server_url.is_none()
-        && patch.sound.is_none()
-        && patch.group.is_none()
-        && patch.url.is_none()
-        && patch.notify_completion.is_none()
-        && patch.notify_reply_needed.is_none()
-        && patch.notify_recoverable.is_none()
-        && patch.notify_codex.is_none()
-        && patch.notify_github_ci.is_none()
-        && patch.github_ci_repositories.is_none()
-        && patch.github_ci_filter_bots.is_none()
-        && patch.notify_grokbot.is_none()
-        && patch.notify_grok.is_none()
-        && patch.notify_grok_completion.is_none()
-        && patch.notify_grok_failure.is_none()
-        && patch.notify_grok_reply_needed.is_none()
-        && patch.notify_claude.is_none()
-        && patch.notify_claude_completion.is_none()
-        && patch.notify_claude_failure.is_none()
-        && patch.notify_claude_reply_needed.is_none()
-        && patch.notify_antigravity.is_none()
-        && patch.notify_antigravity_completion.is_none()
-        && patch.notify_antigravity_failure.is_none()
-        && patch.notify_antigravity_reply_needed.is_none()
-        && patch.notify_antigravity_authorization.is_none()
-        && patch.notify_dsh.is_none()
-        && patch.notify_dsh_completion.is_none()
-        && patch.notify_dsh_failure.is_none()
-        && patch.notify_dsh_reply_needed.is_none()
-        && patch.notify_dsh_authorization.is_none()
 }
 
 pub fn normalize_probe_config_file_patch(
@@ -713,9 +540,11 @@ mod tests {
                     recent_limit: Some(999),
                     notifications: Some(ProbeNotificationsSavePatch {
                         device_key: Some("  bark-key  ".to_string()),
-                        server_url: Some(" https://api.day.app ".to_string()),
-                        group: Some("  ".to_string()),
-                        ..Default::default()
+                        config: crate::config::ProbeNotificationsConfigPatch {
+                            server_url: Some(" https://api.day.app ".to_string()),
+                            group: Some("  ".to_string()),
+                            ..Default::default()
+                        },
                     }),
                     ..Default::default()
                 }),
@@ -725,7 +554,7 @@ mod tests {
         .expect("settings save should be allowed on Linux");
 
         assert_eq!(
-            Some(plan.secret_writes[0].secret_value.as_str()),
+            Some(plan.secret_write.as_ref().unwrap().secret_value.as_str()),
             Some("bark-key")
         );
         let probe = plan.config_patch.probe.as_ref().expect("probe patch");
@@ -761,8 +590,10 @@ mod tests {
         assert!(!super::probe_config_file_patch_has_changes(
             &plan.config_patch
         ));
-        assert_eq!(plan.secret_writes.len(), 1);
-        assert_eq!(plan.secret_writes[0].secret_value, "bark-secret");
+        assert_eq!(
+            plan.secret_write.as_ref().map(|w| w.secret_value.as_str()),
+            Some("bark-secret")
+        );
         let serialized = serde_json::to_string(&plan).unwrap();
         assert!(!serialized.contains("bark-secret"));
     }

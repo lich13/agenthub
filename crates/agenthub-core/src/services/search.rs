@@ -161,7 +161,7 @@ impl SearchUseCases {
                 .into_iter()
                 .collect()
         } else {
-            codex::list_threads(
+            codex::list_threads_without_storage(
                 &self.codex,
                 false,
                 request.session_key.as_deref(),
@@ -176,7 +176,7 @@ impl SearchUseCases {
                 "{} {} {}",
                 summary.title,
                 summary.id,
-                summary.cwd.clone().unwrap_or_default()
+                summary.cwd.as_deref().unwrap_or_default()
             ));
             if contains_folded(&metadata, needle) {
                 push_metadata(
@@ -193,26 +193,12 @@ impl SearchUseCases {
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let detail = match codex::thread_detail_page_from_summary(
-                summary.clone(),
-                false,
-                None,
-                None,
-                None,
-            ) {
-                Ok(detail) => detail,
-                Err(_) => {
-                    push_warning(warnings);
-                    continue;
-                }
-            };
-            for block in detail.blocks {
+            if codex::visit_search_blocks(&summary, |block| {
                 if output.len() >= MAX_RESULTS {
-                    break;
+                    return false;
                 }
-                let corpus = codex_block_corpus(&block);
+                let corpus = codex_block_corpus(block);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
-                    let position = block.id.clone();
                     push_result(
                         output,
                         &summary.id,
@@ -220,11 +206,16 @@ impl SearchUseCases {
                         &summary.title,
                         summary.cwd.clone(),
                         &block.kind,
-                        position,
+                        block.id.clone(),
                         snippet,
                         block.created_at.clone(),
                     );
                 }
+                output.len() < MAX_RESULTS
+            })
+            .is_err()
+            {
+                push_warning(warnings);
             }
         }
         Ok(())
@@ -266,18 +257,11 @@ impl SearchUseCases {
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let detail = match grok::grok_session_detail_without_storage(&self.grok, &summary.id) {
-                Ok(detail) => detail,
-                Err(_) => {
-                    push_warning(warnings);
-                    continue;
-                }
-            };
-            for (index, event) in detail.events.into_iter().enumerate() {
+            if grok::visit_search_events(&summary.path, |index, event| {
                 if output.len() >= MAX_RESULTS {
-                    break;
+                    return false;
                 }
-                let corpus = grok_event_corpus(&event);
+                let corpus = grok_event_corpus(event);
                 if let Some(snippet) = find_snippet(&corpus, needle) {
                     let position = event.call_id.clone().unwrap_or_else(|| {
                         if event.id.is_empty() {
@@ -298,6 +282,11 @@ impl SearchUseCases {
                         event.timestamp.clone(),
                     );
                 }
+                output.len() < MAX_RESULTS
+            })
+            .is_err()
+            {
+                push_warning(warnings);
             }
         }
         Ok(())
@@ -718,12 +707,12 @@ fn push_warning(warnings: &mut Vec<String>) {
     }
 }
 
-fn contains_ascii_case_insensitive_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+fn find_ascii_case_insensitive_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
-        return true;
+        return Some(0);
     }
     if haystack.len() < needle.len() {
-        return false;
+        return None;
     }
     let first_lower = needle[0].to_ascii_lowercase();
     let first_upper = needle[0].to_ascii_uppercase();
@@ -733,15 +722,47 @@ fn contains_ascii_case_insensitive_bytes(haystack: &[u8], needle: &[u8]) -> bool
         if (b == first_lower || b == first_upper)
             && haystack[i + 1..i + needle.len()].eq_ignore_ascii_case(&needle[1..])
         {
-            return true;
+            return Some(i);
         }
     }
-    false
+    None
+}
+
+fn contains_ascii_case_insensitive_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    find_ascii_case_insensitive_bytes(haystack, needle).is_some()
+}
+
+/// True when `c` has no Unicode uppercase equivalents that fold into it (e.g. CJK/Hangul/Kana/digits).
+fn is_caseless_non_combining_char(c: char) -> bool {
+    c.is_ascii_digit()
+        || ('\u{3000}'..='\u{9FFF}').contains(&c)
+        || ('\u{AC00}'..='\u{D7AF}').contains(&c)
+        || ('\u{FF01}'..='\u{FF20}').contains(&c)
+}
+
+fn has_ascii_folding_non_ascii(haystack: &str) -> bool {
+    haystack
+        .chars()
+        .any(|c| matches!(c, '\u{0130}' | '\u{017F}' | '\u{212A}'))
+}
+
+pub(crate) fn contains_folded_str(haystack: &str, needle_lower: &str) -> bool {
+    contains_folded(haystack, needle_lower)
 }
 
 fn contains_folded(haystack: &str, needle_lower: &str) -> bool {
-    if haystack.is_ascii() && needle_lower.is_ascii() {
-        return contains_ascii_case_insensitive_bytes(haystack.as_bytes(), needle_lower.as_bytes());
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if needle_lower.is_ascii() {
+        if haystack.is_ascii() || !has_ascii_folding_non_ascii(haystack) {
+            return contains_ascii_case_insensitive_bytes(
+                haystack.as_bytes(),
+                needle_lower.as_bytes(),
+            );
+        }
+    } else if needle_lower.chars().all(is_caseless_non_combining_char) {
+        return haystack.contains(needle_lower);
     }
     haystack.to_lowercase().contains(needle_lower)
 }
@@ -947,37 +968,93 @@ fn match_metadata_tag(input: &str) -> Option<(bool, &'static str, usize)> {
     None
 }
 
+fn format_snippet_window(text: &str, start: usize, end: usize) -> String {
+    text.get(start..end)
+        .unwrap_or(text)
+        .replace('\n', " ")
+        .trim()
+        .to_string()
+}
+
 fn find_snippet(text: &str, needle: &str) -> Option<String> {
-    if text.is_ascii()
-        && needle.is_ascii()
-        && !contains_ascii_case_insensitive_bytes(text.as_bytes(), needle.as_bytes())
-    {
-        return None;
+    const PRE_CHARS: usize = 90;
+    const POST_CHARS: usize = 160;
+    if needle.is_empty() {
+        let end = text
+            .char_indices()
+            .nth(POST_CHARS)
+            .map_or(text.len(), |(idx, _)| idx);
+        return Some(format_snippet_window(text, 0, end));
     }
+
+    let ascii_fast = needle.is_ascii() && (text.is_ascii() || !has_ascii_folding_non_ascii(text));
+    if ascii_fast {
+        let match_start = find_ascii_case_insensitive_bytes(text.as_bytes(), needle.as_bytes())?;
+        let match_end = match_start + needle.len();
+        let start = text[..match_start]
+            .char_indices()
+            .rev()
+            .nth(PRE_CHARS - 1)
+            .map_or(0, |(idx, _)| idx);
+        let end = text[match_end..]
+            .char_indices()
+            .nth(POST_CHARS)
+            .map_or(text.len(), |(idx, _)| match_end + idx);
+        return Some(format_snippet_window(text, start, end));
+    }
+
+    if needle.chars().all(is_caseless_non_combining_char) {
+        let match_start = text.find(needle)?;
+        let match_end = match_start + needle.len();
+        let start = text[..match_start]
+            .char_indices()
+            .rev()
+            .nth(PRE_CHARS - 1)
+            .map_or(0, |(idx, _)| idx);
+        let end = text[match_end..]
+            .char_indices()
+            .nth(POST_CHARS)
+            .map_or(text.len(), |(idx, _)| match_end + idx);
+        return Some(format_snippet_window(text, start, end));
+    }
+
+    // General Unicode case-folding single-pass scan with fixed stack ring buffer (zero per-char heap allocs).
+    let folded_needle: Vec<char> = needle.chars().flat_map(char::to_lowercase).collect();
+    if folded_needle.is_empty() {
+        return Some(format_snippet_window(text, 0, text.len()));
+    }
+    let needle_len = folded_needle.len();
     let lower = text.to_lowercase();
-    let folded_needle = needle.to_lowercase();
-    let index = lower.find(&folded_needle)?;
-    let folded_start = lower[..index].chars().count();
-    let folded_end = folded_start + folded_needle.chars().count();
-    let mut folded_to_source = Vec::new();
-    for (source_index, character) in text.char_indices() {
-        let folded = character.to_lowercase().collect::<String>();
-        folded_to_source.extend(std::iter::repeat_n(source_index, folded.chars().count()));
+    let folded_needle_str: String = folded_needle.iter().collect();
+    let byte_hit = lower.find(&folded_needle_str)?;
+    let folded_start = lower[..byte_hit].chars().count();
+    let folded_end = folded_start + needle_len;
+    let target_start = folded_start.saturating_sub(PRE_CHARS);
+    let target_end = folded_end.saturating_add(POST_CHARS);
+
+    let mut folded_pos = 0usize;
+    let mut start_byte = None;
+    let mut end_byte = None;
+    for (source_index, ch) in text.char_indices() {
+        for _ in ch.to_lowercase() {
+            if start_byte.is_none() && folded_pos >= target_start {
+                start_byte = Some(source_index);
+            }
+            if end_byte.is_none() && folded_pos >= target_end {
+                end_byte = Some(source_index);
+                break;
+            }
+            folded_pos += 1;
+        }
+        if end_byte.is_some() {
+            break;
+        }
     }
-    let start_index = folded_start.saturating_sub(90);
-    let end_index = folded_end.saturating_add(160).min(folded_to_source.len());
-    let start = folded_to_source.get(start_index).copied().unwrap_or(0);
-    let end = folded_to_source
-        .get(end_index)
-        .copied()
-        .unwrap_or(text.len());
-    Some(
-        text.get(start..end)
-            .unwrap_or(text)
-            .replace('\n', " ")
-            .trim()
-            .to_string(),
-    )
+    Some(format_snippet_window(
+        text,
+        start_byte.unwrap_or(0),
+        end_byte.unwrap_or(text.len()),
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

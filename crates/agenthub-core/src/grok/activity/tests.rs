@@ -238,3 +238,34 @@ fn list_and_detail_share_exited_registration_result_without_changing_native_file
         before
     );
 }
+
+#[test]
+fn stale_large_pid_alongside_live_pid_stays_inactive_without_poisoning_process_snapshot() {
+    let f = Fixture::new();
+    f.events(&(f.start() + END));
+    fs::write(
+        f.0.home.join("active_sessions.json"),
+        serde_json::json!([
+            {
+                "session_id": f.1.id,
+                "pid": 999_999,
+                "opened_at": "2026-01-01T00:00:00Z",
+                "cwd": f.1.cwd
+            },
+            {
+                "session_id": "00000000-0000-4000-8000-000000000001",
+                "pid": std::process::id(),
+                "opened_at": "2000-01-01T00:00:00Z",
+                "cwd": "/work"
+            }
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let snap = Snapshot::capture(&f.0);
+    assert!(
+        snap.processes.is_some(),
+        "stale out-of-range PID must not poison ps -p snapshot into None"
+    );
+    assert_eq!(snap.ownership(&f.1), Ownership::Inactive);
+}

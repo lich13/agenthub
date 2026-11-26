@@ -9,14 +9,9 @@ public extension Notification.Name {
 public struct AppShellView: View {
     @ObservedObject public var store: RuntimeConnectionStore
     @Environment(\.colorScheme) private var systemColorScheme
-    public var providerContentBuilder: (@MainActor (WorkspaceId, RuntimeConnectionStore) -> AnyView)?
 
-    public init(
-        store: RuntimeConnectionStore,
-        providerContentBuilder: (@MainActor (WorkspaceId, RuntimeConnectionStore) -> AnyView)? = nil
-    ) {
+    public init(store: RuntimeConnectionStore) {
         self.store = store
-        self.providerContentBuilder = providerContentBuilder
     }
 
     public var effectiveScheme: ColorSchemeKind {
@@ -104,32 +99,22 @@ public struct AppShellView: View {
     private var workspaceContent: some View {
         switch store.activeWorkspace {
         case .workspaces:
-            if let builder = providerContentBuilder {
-                builder(.workspaces, store)
-                    .id(WorkspaceId.workspaces)
-            } else {
-                UnifiedWorkspaceHubView(
-                    store: store,
-                    scheme: effectiveScheme
-                )
-                .id(WorkspaceId.workspaces)
-            }
+            UnifiedWorkspaceHubView(
+                store: store,
+                scheme: effectiveScheme
+            )
+            .id(WorkspaceId.workspaces)
         case .probe:
             ProbeWorkspaceView(store: store)
         case .ops:
             SettingsWorkspaceView(store: store)
         case .codex, .claude, .grok, .grokbot, .antigravity, .dsh:
-            if let builder = providerContentBuilder {
-                builder(store.activeWorkspace, store)
-                    .id(store.activeWorkspace)
-            } else {
-                UnifiedProviderWorkspaceView(
-                    store: store,
-                    workspace: store.activeWorkspace,
-                    scheme: effectiveScheme
-                )
-                .id(store.activeWorkspace)
-            }
+            UnifiedProviderWorkspaceView(
+                store: store,
+                workspace: store.activeWorkspace,
+                scheme: effectiveScheme
+            )
+            .id(store.activeWorkspace)
         }
     }
 }

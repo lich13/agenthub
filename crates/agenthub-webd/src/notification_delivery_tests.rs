@@ -375,11 +375,12 @@ async fn bark_respects_enablement_secret_and_legacy_dedupe_before_sending() {
                 .set_setting(PROBE_BARK_DEVICE_KEY_SETTING, "")
                 .unwrap();
         }
-        let bark = codex(
+        let (_, _, bark) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &fixture.event(),
-            suppression != "legacy-dedupe",
+            None,
+            suppression == "legacy-dedupe",
             REQUEST_TIMEOUT,
         )
         .await
@@ -445,11 +446,12 @@ async fn codex_skips_known_before_staging_keep_their_outcomes_and_queue_nothing(
             "legacy-dedupe" => {}
             _ => unreachable!(),
         }
-        let outcome = codex(
+        let (_, _, outcome) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            case != "legacy-dedupe",
+            None,
+            case == "legacy-dedupe",
             REQUEST_TIMEOUT,
         )
         .await
@@ -467,13 +469,28 @@ async fn codex_skips_decided_while_staging_keep_the_dedupe_outcome() {
     let fixture = Fixture::new().await;
     let event = fixture.event();
     let load_config = || Ok(fixture.config.clone());
-    let first = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
-    assert!(first.sent);
-    let repeated = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-        .await
-        .unwrap();
+    let (fb_first, claimed_first, first) = codex_with_claims(
+        &load_config,
+        &fixture.db,
+        &event,
+        None,
+        false,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(fb_first && claimed_first && first.sent);
+    let (fb_rep, claimed_rep, repeated) = codex_with_claims(
+        &load_config,
+        &fixture.db,
+        &event,
+        None,
+        false,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert!(fb_rep && !claimed_rep);
     assert_same_outcome(&repeated, &dedupe, "existing delivery");
     assert_eq!(queued_deliveries(&fixture), 1);
     assert_eq!(fixture.bark.count(), 1);
@@ -488,11 +505,12 @@ async fn codex_skips_decided_while_staging_keep_the_dedupe_outcome() {
     }
     let mut event = fixture.event();
     event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);
-    let before_baseline = codex(
+    let (_, _, before_baseline) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -511,15 +529,17 @@ async fn a_staged_codex_delivery_keeps_its_rollout_proof_for_the_retry_source_ch
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let first = codex(
+    let (_, claimed, first) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
     .unwrap();
+    assert!(claimed);
     assert_eq!(first.status.as_deref(), Some("waiting_retry"));
     fixture.due_now(&key);
     let mut queued = fixture.db.due_notification_deliveries(10).unwrap();
@@ -556,33 +576,52 @@ async fn concurrent_codex_entrances_send_bark_once_and_reopening_does_not_replay
         tokio::time::timeout(REQUEST_TIMEOUT, gate.entered.notified())
             .await
             .expect("first delivery reached the endpoint");
-        let result = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT).await;
+        let result = codex_with_claims(
+            &load_config,
+            &fixture.db,
+            &event,
+            None,
+            false,
+            REQUEST_TIMEOUT,
+        )
+        .await;
         gate.release.notify_one();
         result
     };
     let (first, second) = tokio::join!(
-        codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT),
+        codex_with_claims(
+            &load_config,
+            &fixture.db,
+            &event,
+            None,
+            false,
+            REQUEST_TIMEOUT
+        ),
         overlap,
     );
-    assert!(first.unwrap().sent);
-    let concurrent = second.unwrap();
-    assert!(!concurrent.sent && !concurrent.skipped);
-    assert_eq!(concurrent.status.as_deref(), Some("retrying"));
+    let (_, first_claimed, first_bark) = first.unwrap();
+    assert!(first_claimed && first_bark.sent);
+    let (_, second_claimed, concurrent) = second.unwrap();
+    assert!(!second_claimed);
+    assert!(!concurrent.sent && concurrent.skipped);
+    assert_eq!(concurrent.reason.as_deref(), Some("dedupe"));
     assert_eq!(fixture.bark.count(), 1);
     let reopened = PanelDb::open_with_secret_box(
         fixture.db.path(),
         agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
     )
     .unwrap();
-    let duplicate = codex(
+    let (_, dup_claimed, duplicate) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &reopened,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
     .unwrap();
+    assert!(!dup_claimed);
     assert!(duplicate.sent || duplicate.skipped);
     retry_pending(&fixture.config, &reopened).await.unwrap();
     assert_eq!(fixture.bark.count(), 1);
@@ -642,15 +681,17 @@ async fn an_initial_lease_claimed_elsewhere_stays_retrying_at_repeated_entrances
         )
         .await
         .unwrap(),
-        codex(
+        codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
-        .unwrap(),
+        .unwrap()
+        .2,
     ];
     for outcome in outcomes {
         assert_eq!(outcome.status.as_deref(), Some("retrying"));
@@ -683,11 +724,12 @@ async fn bark_reenable_baseline_skips_old_codex_and_native_events() {
         .unwrap();
     let mut event = fixture.event();
     event.payload["feedback_completed_at_ms"] = json!(fixture.event_ms() - 60_000);
-    let bark = codex(
+    let (_, _, bark) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -861,11 +903,12 @@ async fn invalid_bark_acknowledgement_is_retried_and_recovers_after_restart() {
     fixture.bark.reply(invalid);
     let event = fixture.event();
     let key = codex_key(&event);
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -900,11 +943,12 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         let event = fixture.event();
         assert!(codex_fingerprint(&fixture.config, &event).is_some());
         let key = codex_key(&event);
-        let first = codex(
+        let (_, _, first) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
@@ -928,17 +972,19 @@ async fn explicit_transient_failures_are_retried_at_most_three_times_across_rest
         fixture.assert_payload_cleared(NotificationChannel::Bark, &key);
         fixture.due_now(&key);
         retry_pending(&fixture.config, &fixture.db).await.unwrap();
-        let duplicate = codex(
+        let (_, dup_claimed, duplicate) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
         .unwrap();
-        assert!(!duplicate.sent);
-        assert_eq!(duplicate.status.as_deref(), Some("failed"));
+        assert!(!dup_claimed && !duplicate.sent && duplicate.skipped);
+        assert_eq!(duplicate.reason.as_deref(), Some("dedupe"));
+        assert_eq!(fixture.status(NotificationChannel::Bark, &key), "failed");
         assert_eq!(fixture.bark.count(), 3);
         let requests = fixture.bark.requests();
         let id = requests[0].body["id"].as_str().unwrap();
@@ -959,11 +1005,12 @@ async fn a_successful_bark_retry_updates_the_existing_business_event() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let bark = codex(
+    let (_, _, bark) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1027,11 +1074,12 @@ async fn retry_rechecks_source_identity_fingerprint_provider_event_and_channel_s
         ));
         let event = fixture.event();
         let key = codex_key(&event);
-        let outcome = codex(
+        let (_, _, outcome) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
@@ -1082,11 +1130,12 @@ async fn retry_batch_reloads_configuration_after_an_earlier_request_has_started(
             let mut event = fixture.event();
             event.dedupe_key = dedupe_key.into();
             let key = codex_key(&event);
-            let outcome = codex(
+            let (_, _, outcome) = codex_with_claims(
                 &|| Ok(fixture.config.clone()),
                 &fixture.db,
                 &event,
-                true,
+                None,
+                false,
                 REQUEST_TIMEOUT,
             )
             .await
@@ -1160,9 +1209,16 @@ async fn first_delivery_reads_live_configuration_after_claiming_before_http() {
             }
             Ok(config)
         };
-        let outcome = codex(&load_config, &fixture.db, &event, true, REQUEST_TIMEOUT)
-            .await
-            .unwrap();
+        let (_, _, outcome) = codex_with_claims(
+            &load_config,
+            &fixture.db,
+            &event,
+            None,
+            false,
+            REQUEST_TIMEOUT,
+        )
+        .await
+        .unwrap();
         assert!(outcome.skipped && !outcome.sent, "{change}");
         assert_eq!(fixture.bark.count(), 0, "{change}");
         assert_eq!(replacement.count(), 0, "{change}");
@@ -1244,11 +1300,12 @@ async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     fixture.bark.reply(delayed);
     let event = fixture.event();
     let key = codex_key(&event);
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         Duration::from_millis(100),
     )
     .await
@@ -1273,11 +1330,12 @@ async fn timeout_retries_only_the_unconfirmed_request_after_restart() {
     let requests = fixture.bark.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0].body["id"], requests[1].body["id"]);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &reopened,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1302,11 +1360,12 @@ async fn permanent_http_and_apns_rejections_never_enter_retry_queue() {
         fixture.bark.reply(reply);
         let event = fixture.event();
         let key = codex_key(&event);
-        let outcome = codex(
+        let (_, _, outcome) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
@@ -1408,11 +1467,12 @@ async fn retry_after_headers_reach_the_persistent_schedule() {
             .header("Retry-After", "120"),
     );
     let before = jiff::Timestamp::now().as_millisecond();
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &fixture.event(),
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1524,11 +1584,12 @@ async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
     fixture.bark.reply(invalid);
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1548,11 +1609,12 @@ async fn invalid_acknowledgements_exhaust_to_unknown_and_do_not_replay() {
     )
     .unwrap();
     retry_pending(&fixture.config, &reopened).await.unwrap();
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &reopened,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1674,11 +1736,12 @@ async fn unrelated_append_only_records_do_not_cancel_a_valid_retry() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1708,11 +1771,12 @@ async fn repeated_entrance_keeps_the_original_encrypted_message_and_identifier()
     ));
     let mut event = fixture.event();
     let key = codex_key(&event);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1721,11 +1785,12 @@ async fn repeated_entrance_keeps_the_original_encrypted_message_and_identifier()
     event.bark_title = "fixture replacement title".into();
     fixture.bark.reply(Reply::bark());
     fixture.due_now(&key);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1752,11 +1817,12 @@ async fn concurrent_retry_workers_claim_one_http_attempt() {
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -1787,11 +1853,12 @@ async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_data
     ));
     let event = fixture.event();
     let key = codex_key(&event);
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -2040,11 +2107,12 @@ async fn synchronous_question_retry_survives_parallel_tools_but_stops_when_resol
             json!({"code":503}),
         ));
         let key = codex_key(&event);
-        let first = codex(
+        let (_, _, first) = codex_with_claims(
             &|| Ok(fixture.config.clone()),
             &fixture.db,
             &event,
-            true,
+            None,
+            false,
             REQUEST_TIMEOUT,
         )
         .await
@@ -2108,11 +2176,12 @@ async fn large_source_proof_keeps_retry_and_detects_rewrites() {
         json!({"code":503}),
     ));
     let key = codex_key(&event);
-    codex(
+    codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &event,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
@@ -2152,26 +2221,80 @@ async fn error_monitor_switch_stops_its_retry_without_disabling_other_codex_even
     fixture.config.probe.error_monitor.enabled = false;
     let ordinary = fixture.event();
     let mut error = ordinary.clone();
+    error.dedupe_key = "fixture-error-event".into();
     error.payload["scan_source"] = json!("logs_2-turn-error");
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &error,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
     .unwrap();
     assert!(outcome.skipped && !outcome.sent);
-    let outcome = codex(
+    let (_, _, outcome) = codex_with_claims(
         &|| Ok(fixture.config.clone()),
         &fixture.db,
         &ordinary,
-        true,
+        None,
+        false,
         REQUEST_TIMEOUT,
     )
     .await
     .unwrap();
     assert!(outcome.sent);
     assert_eq!(fixture.bark.count(), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn transient_rollout_permission_error_keeps_codex_source_pending_until_restored() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new().await;
+    fixture.bark.reply(Reply::json(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"code":503}),
+    ));
+    let event = fixture.event();
+    let key = codex_key(&event);
+    let (_, _, first) = codex_with_claims(
+        &|| Ok(fixture.config.clone()),
+        &fixture.db,
+        &event,
+        None,
+        false,
+        REQUEST_TIMEOUT,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.status.as_deref(), Some("waiting_retry"));
+
+    let rollout_dir = fixture.rollout.parent().unwrap().to_path_buf();
+    fs::set_permissions(&rollout_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    fixture.due_now(&key);
+    fixture.bark.reply(Reply::bark());
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    fs::set_permissions(&rollout_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // EACCES must keep the retry pending as codex_source_pending rather than permanently skipping!
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "pending");
+    let pending_outcome = fixture
+        .db
+        .notification_delivery_outcome(NotificationChannel::Bark, &key)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        pending_outcome["reason"].as_str(),
+        Some("codex_source_pending")
+    );
+    assert_eq!(fixture.bark.count(), 1);
+
+    // Once directory permissions recover, the retry succeeds and sends Bark!
+    fixture.due_now(&key);
+    retry_pending(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.status(NotificationChannel::Bark, &key), "sent");
+    assert_eq!(fixture.bark.count(), 2);
 }

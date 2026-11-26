@@ -8,6 +8,10 @@
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
       "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeleteRequest"
     },
+    "ClaudeDeleteResult": {
+      "rust": "crates/agenthub-core/src/claude.rs#ClaudeDeleteResult",
+      "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#ClaudeDeleteResult"
+    },
     "ClaudeDetailRequest": {
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
       "rust": "crates/agenthub-core/src/claude.rs#ClaudeDetailRequest"
@@ -78,7 +82,7 @@
     },
     "DesktopJobDetailRequest": {
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
-      "rust": "crates/agenthub-ffi/src/commands/dispatch.rs#JobDetailArgs"
+      "rust": "crates/agenthub-core/src/services/use_cases.rs#JobDetailRequest"
     },
     "GithubCiAccount": {
       "rust": "crates/agenthub-core/src/github_ci.rs#Account",
@@ -107,6 +111,10 @@
     "GrokDeleteRequest": {
       "inlineSwift": "Inline Swift Codable or dictionary envelope; verified in FFI dispatch.rs and Swift parity tests.",
       "rust": "crates/agenthub-core/src/grok.rs#GrokDeleteRequest"
+    },
+    "GrokDeleteResult": {
+      "rust": "crates/agenthub-core/src/grok.rs#GrokDeleteResult",
+      "swift": "macos/Sources/AgentHubCore/Models/ProviderSearchAndGfmModels.swift#GrokDeleteResult"
     },
     "GrokDetailResponse": {
       "rust": "crates/agenthub-core/src/grok.rs#GrokSessionDetail",
@@ -3277,7 +3285,9 @@
           }
         ],
         "kind": "struct",
-        "serde": []
+        "serde": [
+          "serde (deny_unknown_fields)"
+        ]
       },
       "Run": {
         "fields": [
@@ -6609,163 +6619,11 @@
       "ProbeNotificationsSavePatch": {
         "fields": [
           {
-            "name": "enabled",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "server_url",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "sound",
+            "name": "config",
             "serde": [
-              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
+              "serde (flatten)"
             ],
-            "type": "Option < Option < String > >"
-          },
-          {
-            "name": "group",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "url",
-            "serde": [
-              "serde (default , deserialize_with = \"crate::config::deserialize_optional_string_field\" , skip_serializing_if = \"Option::is_none\")"
-            ],
-            "type": "Option < Option < String > >"
-          },
-          {
-            "name": "notify_completion",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_reply_needed",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_recoverable",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_codex",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_grok",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_grokbot",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_github_ci",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "github_ci_repositories",
-            "serde": [],
-            "type": "Option < Vec < String > >"
-          },
-          {
-            "name": "github_ci_filter_bots",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_grok_completion",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_grok_failure",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_grok_reply_needed",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_claude_reply_needed",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_claude_failure",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_claude_completion",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_claude",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_antigravity",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_antigravity_completion",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_antigravity_failure",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_antigravity_reply_needed",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_antigravity_authorization",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_dsh",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_dsh_completion",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_dsh_failure",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_dsh_reply_needed",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "notify_dsh_authorization",
-            "serde": [],
-            "type": "Option < bool >"
+            "type": "ProbeNotificationsConfigPatch"
           },
           {
             "name": "device_key",
@@ -7004,9 +6862,9 @@
             "type": "ProbeConfigFilePatch"
           },
           {
-            "name": "secret_writes",
+            "name": "secret_write",
             "serde": [],
-            "type": "Vec < SecretSettingWritePlan >"
+            "type": "Option < SecretSettingWritePlan >"
           }
         ],
         "kind": "struct",
@@ -7768,6 +7626,24 @@
       }
     },
     "crates/agenthub-core/src/services/use_cases.rs": {
+      "JobDetailRequest": {
+        "fields": [
+          {
+            "name": "id",
+            "serde": [],
+            "type": "String"
+          },
+          {
+            "name": "include_output",
+            "serde": [],
+            "type": "Option < bool >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
       "JobResponse": {
         "fields": [
           {
@@ -7791,6 +7667,37 @@
             "name": "explanation",
             "serde": [],
             "type": "Option < String >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "LimitU32Request": {
+        "fields": [
+          {
+            "name": "limit",
+            "serde": [],
+            "type": "Option < u32 >"
+          }
+        ],
+        "kind": "struct",
+        "serde": [
+          "serde (rename_all = \"camelCase\")"
+        ]
+      },
+      "QueryLimitRequest": {
+        "fields": [
+          {
+            "name": "q",
+            "serde": [],
+            "type": "Option < String >"
+          },
+          {
+            "name": "limit",
+            "serde": [],
+            "type": "Option < usize >"
           }
         ],
         "kind": "struct",
@@ -8153,34 +8060,6 @@
       }
     },
     "crates/agenthub-ffi/src/commands/dispatch.rs": {
-      "ClaudeDetailArgs": {
-        "fields": [
-          {
-            "name": "session_key",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "agent_id",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < usize >"
-          },
-          {
-            "name": "before",
-            "serde": [],
-            "type": "Option < String >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "ClaudeHooksArgs": {
         "fields": [
           {
@@ -8215,28 +8094,6 @@
         "kind": "struct",
         "serde": [
           "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "GithubCiArgs": {
-        "fields": [
-          {
-            "name": "refresh",
-            "serde": [
-              "serde (default)"
-            ],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "cached_only",
-            "serde": [
-              "serde (default)"
-            ],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (deny_unknown_fields)"
         ]
       },
       "GrokDetailArgs": {
@@ -8293,37 +8150,6 @@
           "serde (rename_all = \"camelCase\")"
         ]
       },
-      "JobDetailArgs": {
-        "fields": [
-          {
-            "name": "id",
-            "serde": [],
-            "type": "String"
-          },
-          {
-            "name": "include_output",
-            "serde": [],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "LimitU32Args": {
-        "fields": [
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < u32 >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
       "OptionalWrappedRequest": {
         "fields": [
           {
@@ -8345,37 +8171,6 @@
         ],
         "kind": "struct",
         "serde": []
-      },
-      "ProbeStatusArgs": {
-        "fields": [
-          {
-            "name": "refresh",
-            "serde": [],
-            "type": "Option < bool >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "QueryLimitArgs": {
-        "fields": [
-          {
-            "name": "q",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < usize >"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
       },
       "SessionKeyOnlyArgs": {
         "fields": [
@@ -8455,29 +8250,6 @@
             "name": "name",
             "serde": [],
             "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": [
-          "serde (rename_all = \"camelCase\")"
-        ]
-      },
-      "ThreadsListArgs": {
-        "fields": [
-          {
-            "name": "archived",
-            "serde": [],
-            "type": "Option < bool >"
-          },
-          {
-            "name": "q",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < usize >"
           }
         ],
         "kind": "struct",
@@ -8905,22 +8677,6 @@
       }
     },
     "crates/agenthub-webd/src/api/claude.rs": {
-      "ClaudeListQuery": {
-        "fields": [
-          {
-            "name": "q",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < usize >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "ClaudeRenameRequest": {
         "fields": [
           {
@@ -8957,22 +8713,6 @@
         "kind": "struct",
         "serde": []
       },
-      "GrokListQuery": {
-        "fields": [
-          {
-            "name": "q",
-            "serde": [],
-            "type": "Option < String >"
-          },
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < usize >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      },
       "GrokRenameRequest": {
         "fields": [
           {
@@ -8984,32 +8724,6 @@
             "name": "title",
             "serde": [],
             "type": "String"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      }
-    },
-    "crates/agenthub-webd/src/api/jobs.rs": {
-      "JobsListQuery": {
-        "fields": [
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < u32 >"
-          }
-        ],
-        "kind": "struct",
-        "serde": []
-      }
-    },
-    "crates/agenthub-webd/src/api/probe.rs": {
-      "ProbeEventsQuery": {
-        "fields": [
-          {
-            "name": "limit",
-            "serde": [],
-            "type": "Option < u32 >"
           }
         ],
         "kind": "struct",
@@ -9071,7 +8785,7 @@
     "macos/Sources/AgentHubCore/Bridge/FFIRuntimeBridge.swift": {
       "types": {
         "AgentHubFFIError": "structAgentHubFFIError:LocalizedError,Equatable,Sendable{publicletmessage:Stringpublicinit(_message:String){self.message=message}publicvarerrorDescription:String?{message}}",
-        "NativeMarkdown": "enumNativeMarkdown{staticfuncparse(_markdown:String)->Data{funcinvoke(_ptr:UnsafePointer<CChar>?,_count:Int)->Data{guardletjson=agenthub_ffi_parse_gfm_markdown(ptr,count)else{returnData(#\"{\"blocks\":[]}\"#.utf8)}defer{agenthub_ffi_string_free(json)}returnData(bytes:json,count:strlen(json))}ifletresult=markdown.utf8.withContiguousStorageIfAvailable({bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}){returnresult}varcopy=markdownreturncopy.withUTF8{bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}}}",
+        "NativeMarkdown": "enumNativeMarkdown{staticfuncparse(_markdown:String)->Data{funcinvoke(_ptr:UnsafePointer<CChar>?,_count:Int)->Data{guardletjson=agenthub_ffi_parse_gfm_markdown(ptr,count)else{returnData()}defer{agenthub_ffi_string_free(json)}returnData(bytes:json,count:strlen(json))}ifletresult=markdown.utf8.withContiguousStorageIfAvailable({bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}){returnresult}varcopy=markdownreturncopy.withUTF8{bufinletptr=buf.baseAddress.map{UnsafeRawPointer($0).assumingMemoryBound(to:CChar.self)}returninvoke(ptr,buf.count)}}}",
         "FileOpenerService": "enumFileOpenerService{publicstaticfuncvalidateRevealPath(_raw:String)throws->URL{lettrimmed=raw.trimmingCharacters(in:.whitespacesAndNewlines)guard!trimmed.isEmpty,trimmed.hasPrefix(\"/\"),!trimmed.unicodeScalars.contains(where:{CharacterSet.controlCharacters.contains($0)})else{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}returnURL(fileURLWithPath:trimmed)}publicstaticfuncrevealPaths(_paths:[String])asyncthrows{leturls=trypaths.map(validateRevealPath)guard!urls.isEmptyelse{throwAgentHubFFIError(\"文件路径无效，无法在 Finder 中显示\")}awaitMainActor.run{NSWorkspace.shared.activateFileViewerSelecting(urls)}}}"
       },
       "calls": [
@@ -9093,7 +8807,7 @@
         "rpcRaw(command,argsObject:args,localOnly:localOnly,at:expectedRevision)",
         "invokeLocal(command,args:RemoteRequestEnvelope(request:request))",
         "invokeLocal(\"remote.sshHosts\")",
-        "rpc(\"jobs.detail\",args:[\"id\":.string(id),\"includeOutput\":.bool(false)])"
+        "rpc(\"jobs.detail\",args:[\"id\":.string(id),\"includeOutput\":.bool(false)],at:sourceRevision)"
       ]
     },
     "macos/Sources/AgentHubCore/Models/ProbeAndCiModels.swift": {
@@ -9102,14 +8816,15 @@
         "ProviderNotificationRuntimeStats": "structProviderNotificationRuntimeStats:Codable,Equatable,Sendable{publicvarprovider:Stringpublicvarstreams:Int}",
         "ProbeStatus": "structProbeStatus:Codable,Equatable,Sendable{publicvaravailable:Bool?publicvarerror:String?publicvarhostLabel:String?publicvarhookStatus:String?publicvarerrorMonitorStatus:String?publicvarerrorMonitorIncidentCount:Int?publicvarcodexHome:String?publicvarcodexHooksPath:String?publicvardshSessionsPath:String?publicvaractualCommands:[String]?publicvarstaleCommandCount:Int?publicvaremptyGroupCount:Int?publicvardiscoveryWarnings:[String]?publicvarrunningCount:Int?publicvarreplyNeededCount:Int?publicvarrecoverableCount:Int?publicvarrunningThreads:[ProbeLiveSession]?publicvarreplyNeededThreads:[ProbeLiveSession]?publicvarrecoverableThreads:[ProbeLiveSession]?publicvaractiveSessions:[ProbeLiveSession]?publicvarproviderNotifications:[ProviderNotificationRuntimeStats]?enumCodingKeys:String,CodingKey{caseavailablecaseerrorcasehostLabel=\"host_label\"casehookStatus=\"hook_status\"caseerrorMonitorStatus=\"error_monitor_status\"caseerrorMonitorIncidentCount=\"error_monitor_incident_count\"casecodexHome=\"codex_home\"casecodexHooksPath=\"codex_hooks_path\"casedshSessionsPath=\"dsh_sessions_path\"caseactualCommands=\"actual_commands\"casestaleCommandCount=\"stale_command_count\"caseemptyGroupCount=\"empty_group_count\"casediscoveryWarnings=\"discovery_warnings\"caserunningCount=\"running_count\"casereplyNeededCount=\"reply_needed_count\"caserecoverableCount=\"recoverable_count\"caserunningThreads=\"running_threads\"casereplyNeededThreads=\"reply_needed_threads\"caserecoverableThreads=\"recoverable_threads\"caseactiveSessions=\"active_sessions\"caseproviderNotifications=\"provider_notifications\"}}",
         "ProbeSettingsView": "structProbeSettingsView:Codable,Equatable,Sendable{publicstructCodex:Codable,Equatable,Sendable{publicvarconfiguredCodexHome:String?publicvarworkspace:StringpublicvarhostLabel:StringenumCodingKeys:String,CodingKey{caseconfiguredCodexHome=\"configured_codex_home\"caseworkspacecasehostLabel=\"host_label\"}}publicstructProbe:Codable,Equatable,Sendable{publicvarenabled:BoolpublicvarpollSeconds:IntpublicvarrecentLimit:Intpublicvarhooks:Hookspublicvarobservability:ObservabilitypublicvarerrorMonitor:ErrorMonitorenumCodingKeys:String,CodingKey{caseenabledcasepollSeconds=\"poll_seconds\"caserecentLimit=\"recent_limit\"casehookscaseobservabilitycaseerrorMonitor=\"error_monitor\"}}publicstructHooks:Codable,Equatable,Sendable{publicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolenumCodingKeys:String,CodingKey{casemanageStopHook=\"manage_stop_hook\"caseclearAccountScope=\"clear_account_scope\"}}publicstructObservability:Codable,Equatable,Sendable{publicvareventRetentionDays:IntpublicvarhookEventMaxLines:IntpublicvarhookCooldownMaxLines:IntpublicvarlogMaxBytes:IntenumCodingKeys:String,CodingKey{caseeventRetentionDays=\"event_retention_days\"casehookEventMaxLines=\"hook_event_max_lines\"casehookCooldownMaxLines=\"hook_cooldown_max_lines\"caselogMaxBytes=\"log_max_bytes\"}}publicstructErrorMonitor:Codable,Equatable,Sendable{publicvarenabled:Bool}publicstructNotifications:Codable,Equatable,Sendable{publicvardeviceKeyConfigured:BoolpublicvarserverUrl:Stringpublicvarenabled:Boolpublicvarsound:String?publicvargroup:Stringpublicvarurl:String?publicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaude:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolenumCodingKeys:String,CodingKey{casedeviceKeyConfigured=\"device_key_configured\"caseserverUrl=\"server_url\"caseenabledcasesoundcasegroupcaseurlcasenotifyCompletion=\"notify_completion\"casenotifyReplyNeeded=\"notify_reply_needed\"casenotifyRecoverable=\"notify_recoverable\"casenotifyCodex=\"notify_codex\"casenotifyGrok=\"notify_grok\"casenotifyGrokbot=\"notify_grokbot\"casenotifyGithubCi=\"notify_github_ci\"casegithubCiRepositories=\"github_ci_repositories\"casegithubCiFilterBots=\"github_ci_filter_bots\"casenotifyGrokCompletion=\"notify_grok_completion\"casenotifyGrokFailure=\"notify_grok_failure\"casenotifyGrokReplyNeeded=\"notify_grok_reply_needed\"casenotifyClaudeReplyNeeded=\"notify_claude_reply_needed\"casenotifyClaudeFailure=\"notify_claude_failure\"casenotifyClaudeCompletion=\"notify_claude_completion\"casenotifyClaude=\"notify_claude\"casenotifyAntigravity=\"notify_antigravity\"casenotifyAntigravityCompletion=\"notify_antigravity_completion\"casenotifyAntigravityFailure=\"notify_antigravity_failure\"casenotifyAntigravityReplyNeeded=\"notify_antigravity_reply_needed\"casenotifyAntigravityAuthorization=\"notify_antigravity_authorization\"casenotifyDsh=\"notify_dsh\"casenotifyDshCompletion=\"notify_dsh_completion\"casenotifyDshFailure=\"notify_dsh_failure\"casenotifyDshReplyNeeded=\"notify_dsh_reply_needed\"casenotifyDshAuthorization=\"notify_dsh_authorization\"}}publicvarcodex:Codexpublicvarprobe:Probepublicvarnotifications:Notifications}",
-        "ProbeSettingsDraft": "structProbeSettingsDraft:Equatable,Sendable{publicvarcodexHome:StringpublicvarcodexWorkspace:StringpublicvarhostLabel:StringpublicvarprobeEnabled:BoolpublicvarerrorMonitorEnabled:BoolpublicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolpublicvarpollSecondsText:StringpublicvarrecentLimitText:StringpublicvareventRetentionDaysText:StringpublicvarhookEventMaxLinesText:StringpublicvarhookCooldownMaxLinesText:StringpublicvarlogMaxMiBText:StringpublicvarbarkEnabled:BoolpublicvarbarkServerUrl:StringpublicvarbarkDeviceKey:StringpublicvarbarkDeviceKeyConfigured:BoolpublicvarbarkSound:StringpublicvarbarkGroup:StringpublicvarbarkUrl:StringpublicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyClaude:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:Boolpublicstaticfuncfrom(_view:ProbeSettingsView)->ProbeSettingsDraft{letcodex=view.codexletprobe=view.probelethooks=probe.hooksletobs=probe.observabilityletnotif=view.notificationsletlogBytes=obs.logMaxBytesletlogMiB=Double(logBytes)/(1024.0*1024.0)letformattedMiB=logMiB.truncatingRemainder(dividingBy:1)==0?String(Int(logMiB)):String(format:\"%.6g\",logMiB)returnProbeSettingsDraft(codexHome:codex.configuredCodexHome??\"\",codexWorkspace:codex.workspace,hostLabel:codex.hostLabel,probeEnabled:probe.enabled,errorMonitorEnabled:probe.errorMonitor.enabled,manageStopHook:hooks.manageStopHook,clearAccountScope:hooks.clearAccountScope,pollSecondsText:String(probe.pollSeconds),recentLimitText:String(probe.recentLimit),eventRetentionDaysText:String(obs.eventRetentionDays),hookEventMaxLinesText:String(obs.hookEventMaxLines),hookCooldownMaxLinesText:String(obs.hookCooldownMaxLines),logMaxMiBText:formattedMiB,barkEnabled:notif.enabled,barkServerUrl:notif.serverUrl,barkDeviceKey:\"\",barkDeviceKeyConfigured:notif.deviceKeyConfigured,barkSound:notif.sound??\"\",barkGroup:notif.group,barkUrl:notif.url??\"\",notifyCompletion:notif.notifyCompletion,notifyReplyNeeded:notif.notifyReplyNeeded,notifyRecoverable:notif.notifyRecoverable,notifyCodex:notif.notifyCodex,notifyGrok:notif.notifyGrok,notifyGrokCompletion:notif.notifyGrokCompletion,notifyGrokFailure:notif.notifyGrokFailure,notifyGrokReplyNeeded:notif.notifyGrokReplyNeeded,notifyGrokbot:notif.notifyGrokbot,notifyClaude:notif.notifyClaude,notifyClaudeCompletion:notif.notifyClaudeCompletion,notifyClaudeFailure:notif.notifyClaudeFailure,notifyClaudeReplyNeeded:notif.notifyClaudeReplyNeeded,notifyAntigravity:notif.notifyAntigravity,notifyAntigravityCompletion:notif.notifyAntigravityCompletion,notifyAntigravityFailure:notif.notifyAntigravityFailure,notifyAntigravityReplyNeeded:notif.notifyAntigravityReplyNeeded,notifyAntigravityAuthorization:notif.notifyAntigravityAuthorization,notifyDsh:notif.notifyDsh,notifyDshCompletion:notif.notifyDshCompletion,notifyDshFailure:notif.notifyDshFailure,notifyDshReplyNeeded:notif.notifyDshReplyNeeded,notifyDshAuthorization:notif.notifyDshAuthorization,notifyGithubCi:notif.notifyGithubCi,githubCiRepositories:notif.githubCiRepositories,githubCiFilterBots:notif.githubCiFilterBots)}publicfuncisPlatformEnabled(_platform:SessionProvider)->Bool{switchplatform{case.codex:notifyCodex&&(notifyCompletion||notifyReplyNeeded||notifyRecoverable)case.claudeCode:notifyClaude&&(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded)case.grok:notifyGrok&&(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded)case.grokbot:notifyGrokbotcase.antigravity:notifyAntigravity&&(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization)case.dsh:notifyDsh&&(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization)}}publicmutatingfuncsetPlatformEnabled(_platform:SessionProvider,enabled:Bool){switchplatform{case.codex:notifyCodex=enabledifenabled&&!(notifyCompletion||notifyReplyNeeded||notifyRecoverable){notifyCompletion=truenotifyReplyNeeded=truenotifyRecoverable=true}case.claudeCode:notifyClaude=enabledifenabled&&!(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded){notifyClaudeCompletion=truenotifyClaudeFailure=truenotifyClaudeReplyNeeded=true}case.grok:notifyGrok=enabledifenabled&&!(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded){notifyGrokCompletion=truenotifyGrokFailure=truenotifyGrokReplyNeeded=true}case.grokbot:notifyGrokbot=enabledcase.antigravity:notifyAntigravity=enabledifenabled&&!(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization){notifyAntigravityCompletion=truenotifyAntigravityFailure=truenotifyAntigravityReplyNeeded=truenotifyAntigravityAuthorization=true}case.dsh:notifyDsh=enabledifenabled&&!(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization){notifyDshCompletion=truenotifyDshFailure=truenotifyDshReplyNeeded=truenotifyDshAuthorization=true}}}publicfuncvalidationErrors()->[String]{varerrors:[String]=[]funccheckInt(_raw:String,label:String,min:Int,max:Int){guardletv=Int(raw.trimmingCharacters(in:.whitespaces)),v>=min,v<=maxelse{errors.append(\"\\(label)须为 \\(min) 到 \\(max) 之间的整数\")return}}checkInt(pollSecondsText,label:\"轮询秒数\",min:5,max:3600)checkInt(recentLimitText,label:\"最近事件数\",min:1,max:500)checkInt(eventRetentionDaysText,label:\"通知事件保留天数\",min:1,max:3650)checkInt(hookEventMaxLinesText,label:\"Hook 事件行数\",min:10,max:10000)checkInt(hookCooldownMaxLinesText,label:\"冷却行数\",min:10,max:10000)ifletmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces)),mib.isFinite{letbytes=Int((mib*1024.0*1024.0).rounded())ifbytes<4096||bytes>8*1024*1024{errors.append(\"日志上限 MiB 须在 0.00390625 到 8 之间\")}}else{errors.append(\"日志上限 MiB 格式无效\")}ifhostLabel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{errors.append(\"主机标签不能为空\")}returnerrors}publicfuncbuildSavePayload(submittedDeviceKey:String?=nil)throws->[String:JSONValue]{leterrs=validationErrors()ifletfirst=errs.first{throwNSError(domain:\"AgentHubProbe\",code:1,userInfo:[NSLocalizedDescriptionKey:first])}letpollSeconds=Int(pollSecondsText.trimmingCharacters(in:.whitespaces))??15letrecentLimit=Int(recentLimitText.trimmingCharacters(in:.whitespaces))??50letretentionDays=Int(eventRetentionDaysText.trimmingCharacters(in:.whitespaces))??2lethookMaxLines=Int(hookEventMaxLinesText.trimmingCharacters(in:.whitespaces))??500letcooldownLines=Int(hookCooldownMaxLinesText.trimmingCharacters(in:.whitespaces))??1000letmib=Double(logMaxMiBText.trimmingCharacters(in:.whitespaces))??5.0letlogBytes=Int((mib*1024.0*1024.0).rounded())letkey=(submittedDeviceKey??barkDeviceKey).trimmingCharacters(in:.whitespacesAndNewlines)lettrimmedHome=codexHome.trimmingCharacters(in:.whitespacesAndNewlines)lethomePatch:JSONValue=(trimmedHome.isEmpty||trimmedHome.lowercased()==\"auto\")?.null:.string(trimmedHome)lettrimmedWs=codexWorkspace.trimmingCharacters(in:.whitespacesAndNewlines)varnotifObj:[String:JSONValue]=[\"enabled\":.bool(barkEnabled||!key.isEmpty),\"server_url\":.string(barkServerUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"sound\":barkSound.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkSound.trimmingCharacters(in:.whitespacesAndNewlines)),\"group\":.string(barkGroup.trimmingCharacters(in:.whitespacesAndNewlines)),\"url\":barkUrl.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty?.null:.string(barkUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"notify_completion\":.bool(notifyCompletion),\"notify_reply_needed\":.bool(notifyReplyNeeded),\"notify_recoverable\":.bool(notifyRecoverable),\"notify_codex\":.bool(notifyCodex),\"notify_grok\":.bool(notifyGrok),\"notify_grokbot\":.bool(notifyGrokbot),\"notify_github_ci\":.bool(notifyGithubCi),\"github_ci_repositories\":.array(githubCiRepositories.map{.string($0.trimmingCharacters(in:.whitespacesAndNewlines))}),\"github_ci_filter_bots\":.bool(githubCiFilterBots),\"notify_grok_completion\":.bool(notifyGrokCompletion),\"notify_grok_failure\":.bool(notifyGrokFailure),\"notify_grok_reply_needed\":.bool(notifyGrokReplyNeeded),\"notify_claude\":.bool(notifyClaude),\"notify_claude_completion\":.bool(notifyClaudeCompletion),\"notify_claude_failure\":.bool(notifyClaudeFailure),\"notify_claude_reply_needed\":.bool(notifyClaudeReplyNeeded),\"notify_antigravity\":.bool(notifyAntigravity),\"notify_antigravity_completion\":.bool(notifyAntigravityCompletion),\"notify_antigravity_failure\":.bool(notifyAntigravityFailure),\"notify_antigravity_reply_needed\":.bool(notifyAntigravityReplyNeeded),\"notify_antigravity_authorization\":.bool(notifyAntigravityAuthorization),\"notify_dsh\":.bool(notifyDsh),\"notify_dsh_completion\":.bool(notifyDshCompletion),\"notify_dsh_failure\":.bool(notifyDshFailure),\"notify_dsh_reply_needed\":.bool(notifyDshReplyNeeded),\"notify_dsh_authorization\":.bool(notifyDshAuthorization),]if!key.isEmpty{notifObj[\"device_key\"]=.string(key)}varpayload:[String:JSONValue]=[\"codex\":.object([\"home\":homePatch,\"workspace\":trimmedWs.isEmpty?.null:.string(trimmedWs),\"host_label\":.string(hostLabel.trimmingCharacters(in:.whitespacesAndNewlines)),]),\"probe\":.object([\"enabled\":.bool(probeEnabled),\"poll_seconds\":.number(Double(pollSeconds)),\"recent_limit\":.number(Double(recentLimit)),\"error_monitor\":.object([\"enabled\":.bool(errorMonitorEnabled)]),\"hooks\":.object([\"manage_stop_hook\":.bool(manageStopHook),\"clear_account_scope\":.bool(clearAccountScope),]),\"notifications\":.object(notifObj),\"observability\":.object([\"event_retention_days\":.number(Double(retentionDays)),\"hook_event_max_lines\":.number(Double(hookMaxLines)),\"hook_cooldown_max_lines\":.number(Double(cooldownLines)),\"log_max_bytes\":.number(Double(logBytes)),]),]),]if!key.isEmpty{payload[\"notifications\"]=.object([\"device_key\":.string(key)])}returnpayload}}",
+        "ProbeSettingsSaveScope": "enumProbeSettingsSaveScope:String,CaseIterable,Sendable{casecicasesettingscasebark}",
+        "ProbeSettingsDraft": "structProbeSettingsDraft:Equatable,Sendable{publicvarcodexHome:StringpublicvarcodexWorkspace:StringpublicvarhostLabel:StringpublicvarprobeEnabled:BoolpublicvarerrorMonitorEnabled:BoolpublicvarmanageStopHook:BoolpublicvarclearAccountScope:BoolpublicvarpollSecondsText:StringpublicvarrecentLimitText:StringpublicvareventRetentionDaysText:StringpublicvarhookEventMaxLinesText:StringpublicvarhookCooldownMaxLinesText:StringpublicvarlogMaxMiBText:StringpublicvarbarkEnabled:BoolpublicvarbarkServerUrl:StringpublicvarbarkDeviceKey:StringpublicvarbarkDeviceKeyConfigured:BoolpublicvarbarkSound:StringpublicvarbarkGroup:StringpublicvarbarkUrl:StringpublicvarnotifyCompletion:BoolpublicvarnotifyReplyNeeded:BoolpublicvarnotifyRecoverable:BoolpublicvarnotifyCodex:BoolpublicvarnotifyGrok:BoolpublicvarnotifyGrokCompletion:BoolpublicvarnotifyGrokFailure:BoolpublicvarnotifyGrokReplyNeeded:BoolpublicvarnotifyGrokbot:BoolpublicvarnotifyClaude:BoolpublicvarnotifyClaudeCompletion:BoolpublicvarnotifyClaudeFailure:BoolpublicvarnotifyClaudeReplyNeeded:BoolpublicvarnotifyAntigravity:BoolpublicvarnotifyAntigravityCompletion:BoolpublicvarnotifyAntigravityFailure:BoolpublicvarnotifyAntigravityReplyNeeded:BoolpublicvarnotifyAntigravityAuthorization:BoolpublicvarnotifyDsh:BoolpublicvarnotifyDshCompletion:BoolpublicvarnotifyDshFailure:BoolpublicvarnotifyDshReplyNeeded:BoolpublicvarnotifyDshAuthorization:BoolpublicvarnotifyGithubCi:BoolpublicvargithubCiRepositories:[String]publicvargithubCiFilterBots:Boolpublicstaticfuncfrom(_view:ProbeSettingsView)->ProbeSettingsDraft{letcodex=view.codexletprobe=view.probelethooks=probe.hooksletobs=probe.observabilityletnotif=view.notificationsletlogBytes=obs.logMaxBytesletlogMiB=Double(logBytes)/(1024.0*1024.0)letformattedMiB=logMiB.truncatingRemainder(dividingBy:1)==0?String(Int(logMiB)):String(format:\"%.6g\",logMiB)returnProbeSettingsDraft(codexHome:codex.configuredCodexHome??\"\",codexWorkspace:codex.workspace,hostLabel:codex.hostLabel,probeEnabled:probe.enabled,errorMonitorEnabled:probe.errorMonitor.enabled,manageStopHook:hooks.manageStopHook,clearAccountScope:hooks.clearAccountScope,pollSecondsText:String(probe.pollSeconds),recentLimitText:String(probe.recentLimit),eventRetentionDaysText:String(obs.eventRetentionDays),hookEventMaxLinesText:String(obs.hookEventMaxLines),hookCooldownMaxLinesText:String(obs.hookCooldownMaxLines),logMaxMiBText:formattedMiB,barkEnabled:notif.enabled,barkServerUrl:notif.serverUrl,barkDeviceKey:\"\",barkDeviceKeyConfigured:notif.deviceKeyConfigured,barkSound:notif.sound??\"\",barkGroup:notif.group,barkUrl:notif.url??\"\",notifyCompletion:notif.notifyCompletion,notifyReplyNeeded:notif.notifyReplyNeeded,notifyRecoverable:notif.notifyRecoverable,notifyCodex:notif.notifyCodex,notifyGrok:notif.notifyGrok,notifyGrokCompletion:notif.notifyGrokCompletion,notifyGrokFailure:notif.notifyGrokFailure,notifyGrokReplyNeeded:notif.notifyGrokReplyNeeded,notifyGrokbot:notif.notifyGrokbot,notifyClaude:notif.notifyClaude,notifyClaudeCompletion:notif.notifyClaudeCompletion,notifyClaudeFailure:notif.notifyClaudeFailure,notifyClaudeReplyNeeded:notif.notifyClaudeReplyNeeded,notifyAntigravity:notif.notifyAntigravity,notifyAntigravityCompletion:notif.notifyAntigravityCompletion,notifyAntigravityFailure:notif.notifyAntigravityFailure,notifyAntigravityReplyNeeded:notif.notifyAntigravityReplyNeeded,notifyAntigravityAuthorization:notif.notifyAntigravityAuthorization,notifyDsh:notif.notifyDsh,notifyDshCompletion:notif.notifyDshCompletion,notifyDshFailure:notif.notifyDshFailure,notifyDshReplyNeeded:notif.notifyDshReplyNeeded,notifyDshAuthorization:notif.notifyDshAuthorization,notifyGithubCi:notif.notifyGithubCi,githubCiRepositories:notif.githubCiRepositories,githubCiFilterBots:notif.githubCiFilterBots)}publicfuncisPlatformEnabled(_platform:SessionProvider)->Bool{switchplatform{case.codex:notifyCodex&&(notifyCompletion||notifyReplyNeeded||notifyRecoverable)case.claudeCode:notifyClaude&&(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded)case.grok:notifyGrok&&(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded)case.grokbot:notifyGrokbotcase.antigravity:notifyAntigravity&&(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization)case.dsh:notifyDsh&&(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization)}}publicmutatingfuncsetPlatformEnabled(_platform:SessionProvider,enabled:Bool){switchplatform{case.codex:notifyCodex=enabledifenabled&&!(notifyCompletion||notifyReplyNeeded||notifyRecoverable){notifyCompletion=truenotifyReplyNeeded=truenotifyRecoverable=true}case.claudeCode:notifyClaude=enabledifenabled&&!(notifyClaudeCompletion||notifyClaudeFailure||notifyClaudeReplyNeeded){notifyClaudeCompletion=truenotifyClaudeFailure=truenotifyClaudeReplyNeeded=true}case.grok:notifyGrok=enabledifenabled&&!(notifyGrokCompletion||notifyGrokFailure||notifyGrokReplyNeeded){notifyGrokCompletion=truenotifyGrokFailure=truenotifyGrokReplyNeeded=true}case.grokbot:notifyGrokbot=enabledcase.antigravity:notifyAntigravity=enabledifenabled&&!(notifyAntigravityCompletion||notifyAntigravityFailure||notifyAntigravityReplyNeeded||notifyAntigravityAuthorization){notifyAntigravityCompletion=truenotifyAntigravityFailure=truenotifyAntigravityReplyNeeded=truenotifyAntigravityAuthorization=true}case.dsh:notifyDsh=enabledifenabled&&!(notifyDshCompletion||notifyDshFailure||notifyDshReplyNeeded||notifyDshAuthorization){notifyDshCompletion=truenotifyDshFailure=truenotifyDshReplyNeeded=truenotifyDshAuthorization=true}}}publicfuncvalidationErrors(forscope:ProbeSettingsSaveScope=.settings)->[String]{guardscope==.settingselse{return[]}varerrors:[String]=[]funccheckInt(_raw:String,label:String,min:Int,max:Int){guardletv=Int(raw.trimmingCharacters(in:.whitespaces)),v>=min,v<=maxelse{errors.append(\"\\(label)须为 \\(min) 到 \\(max) 之间的整数\")return}}checkInt(pollSecondsText,label:\"轮询秒数\",min:5,max:3600)checkInt(recentLimitText,label:\"最近事件数\",min:1,max:500)checkInt(eventRetentionDaysText,label:\"通知事件保留天数\",min:1,max:3650)checkInt(hookEventMaxLinesText,label:\"Hook 事件行数\",min:10,max:10000)checkInt(hookCooldownMaxLinesText,label:\"冷却行数\",min:10,max:10000)ifSelf.validatedLogMaxBytes(from:logMaxMiBText)==nil{lettrimmed=logMaxMiBText.trimmingCharacters(in:.whitespaces)ifletmib=Double(trimmed),mib.isFinite{errors.append(\"日志上限 MiB 须在 0.00390625 到 8 之间\")}else{errors.append(\"日志上限 MiB 格式无效\")}}ifhostLabel.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty{errors.append(\"主机标签不能为空\")}returnerrors}privatestaticfuncvalidatedLogMaxBytes(fromrawMiBText:String)->Int?{guardletmib=Double(rawMiBText.trimmingCharacters(in:.whitespaces)),mib.isFinite,mib>=0else{returnnil}letminBytes=4096.0letmaxBytes=Double(8*1024*1024)letroundedBytes=(mib*1024.0*1024.0).rounded()guardroundedBytes>=minBytes,roundedBytes<=maxByteselse{returnnil}returnInt(roundedBytes)}publicfuncbuildSavePayload(forscope:ProbeSettingsSaveScope=.settings,submittedDeviceKey:String?=nil)throws->[String:JSONValue]{leterrs=validationErrors(for:scope)ifletfirst=errs.first{throwNSError(domain:\"AgentHubProbe\",code:1,userInfo:[NSLocalizedDescriptionKey:first])}switchscope{case.ci:return[\"probe\":.object([\"notifications\":.object([\"notify_github_ci\":.bool(notifyGithubCi),\"github_ci_repositories\":.array(githubCiRepositories.map{.string($0.trimmingCharacters(in:.whitespacesAndNewlines))}),\"github_ci_filter_bots\":.bool(githubCiFilterBots),]),]),]case.bark:letkey=(submittedDeviceKey??barkDeviceKey).trimmingCharacters(in:.whitespacesAndNewlines)letsoundTrimmed=barkSound.trimmingCharacters(in:.whitespacesAndNewlines)leturlTrimmed=barkUrl.trimmingCharacters(in:.whitespacesAndNewlines)varnotifObj:[String:JSONValue]=[\"enabled\":.bool(barkEnabled||!key.isEmpty),\"server_url\":.string(barkServerUrl.trimmingCharacters(in:.whitespacesAndNewlines)),\"sound\":soundTrimmed.isEmpty?.null:.string(soundTrimmed),\"group\":.string(barkGroup.trimmingCharacters(in:.whitespacesAndNewlines)),\"url\":urlTrimmed.isEmpty?.null:.string(urlTrimmed),]if!key.isEmpty{notifObj[\"device_key\"]=.string(key)}return[\"probe\":.object([\"notifications\":.object(notifObj),]),]case.settings:letpollSeconds=Int(pollSecondsText.trimmingCharacters(in:.whitespaces))??15letrecentLimit=Int(recentLimitText.trimmingCharacters(in:.whitespaces))??50letretentionDays=Int(eventRetentionDaysText.trimmingCharacters(in:.whitespaces))??2lethookMaxLines=Int(hookEventMaxLinesText.trimmingCharacters(in:.whitespaces))??500letcooldownLines=Int(hookCooldownMaxLinesText.trimmingCharacters(in:.whitespaces))??1000letlogBytes=Self.validatedLogMaxBytes(from:logMaxMiBText)??(5*1024*1024)lettrimmedHome=codexHome.trimmingCharacters(in:.whitespacesAndNewlines)lethomePatch:JSONValue=(trimmedHome.isEmpty||trimmedHome.lowercased()==\"auto\")?.null:.string(trimmedHome)lettrimmedWs=codexWorkspace.trimmingCharacters(in:.whitespacesAndNewlines)letnotifObj:[String:JSONValue]=[\"notify_completion\":.bool(notifyCompletion),\"notify_reply_needed\":.bool(notifyReplyNeeded),\"notify_recoverable\":.bool(notifyRecoverable),\"notify_codex\":.bool(notifyCodex),\"notify_grok\":.bool(notifyGrok),\"notify_grokbot\":.bool(notifyGrokbot),\"notify_grok_completion\":.bool(notifyGrokCompletion),\"notify_grok_failure\":.bool(notifyGrokFailure),\"notify_grok_reply_needed\":.bool(notifyGrokReplyNeeded),\"notify_claude\":.bool(notifyClaude),\"notify_claude_completion\":.bool(notifyClaudeCompletion),\"notify_claude_failure\":.bool(notifyClaudeFailure),\"notify_claude_reply_needed\":.bool(notifyClaudeReplyNeeded),\"notify_antigravity\":.bool(notifyAntigravity),\"notify_antigravity_completion\":.bool(notifyAntigravityCompletion),\"notify_antigravity_failure\":.bool(notifyAntigravityFailure),\"notify_antigravity_reply_needed\":.bool(notifyAntigravityReplyNeeded),\"notify_antigravity_authorization\":.bool(notifyAntigravityAuthorization),\"notify_dsh\":.bool(notifyDsh),\"notify_dsh_completion\":.bool(notifyDshCompletion),\"notify_dsh_failure\":.bool(notifyDshFailure),\"notify_dsh_reply_needed\":.bool(notifyDshReplyNeeded),\"notify_dsh_authorization\":.bool(notifyDshAuthorization),]return[\"codex\":.object([\"home\":homePatch,\"workspace\":trimmedWs.isEmpty?.null:.string(trimmedWs),\"host_label\":.string(hostLabel.trimmingCharacters(in:.whitespacesAndNewlines)),]),\"probe\":.object([\"enabled\":.bool(probeEnabled),\"poll_seconds\":.number(Double(pollSeconds)),\"recent_limit\":.number(Double(recentLimit)),\"error_monitor\":.object([\"enabled\":.bool(errorMonitorEnabled)]),\"hooks\":.object([\"manage_stop_hook\":.bool(manageStopHook),\"clear_account_scope\":.bool(clearAccountScope),]),\"notifications\":.object(notifObj),\"observability\":.object([\"event_retention_days\":.number(Double(retentionDays)),\"hook_event_max_lines\":.number(Double(hookMaxLines)),\"hook_cooldown_max_lines\":.number(Double(cooldownLines)),\"log_max_bytes\":.number(Double(logBytes)),]),]),]}}publicfuncsubsetEquals(_other:ProbeSettingsDraft,scope:ProbeSettingsSaveScope)->Bool{switchscope{case.ci:notifyGithubCi==other.notifyGithubCi&&githubCiRepositories==other.githubCiRepositories&&githubCiFilterBots==other.githubCiFilterBotscase.bark:barkEnabled==other.barkEnabled&&barkServerUrl==other.barkServerUrl&&barkDeviceKey==other.barkDeviceKey&&barkDeviceKeyConfigured==other.barkDeviceKeyConfigured&&barkSound==other.barkSound&&barkGroup==other.barkGroup&&barkUrl==other.barkUrlcase.settings:codexHome==other.codexHome&&codexWorkspace==other.codexWorkspace&&hostLabel==other.hostLabel&&probeEnabled==other.probeEnabled&&errorMonitorEnabled==other.errorMonitorEnabled&&manageStopHook==other.manageStopHook&&clearAccountScope==other.clearAccountScope&&pollSecondsText==other.pollSecondsText&&recentLimitText==other.recentLimitText&&eventRetentionDaysText==other.eventRetentionDaysText&&hookEventMaxLinesText==other.hookEventMaxLinesText&&hookCooldownMaxLinesText==other.hookCooldownMaxLinesText&&logMaxMiBText==other.logMaxMiBText&&notifyCompletion==other.notifyCompletion&&notifyReplyNeeded==other.notifyReplyNeeded&&notifyRecoverable==other.notifyRecoverable&&notifyCodex==other.notifyCodex&&notifyGrok==other.notifyGrok&&notifyGrokCompletion==other.notifyGrokCompletion&&notifyGrokFailure==other.notifyGrokFailure&&notifyGrokReplyNeeded==other.notifyGrokReplyNeeded&&notifyGrokbot==other.notifyGrokbot&&notifyClaude==other.notifyClaude&&notifyClaudeCompletion==other.notifyClaudeCompletion&&notifyClaudeFailure==other.notifyClaudeFailure&&notifyClaudeReplyNeeded==other.notifyClaudeReplyNeeded&&notifyAntigravity==other.notifyAntigravity&&notifyAntigravityCompletion==other.notifyAntigravityCompletion&&notifyAntigravityFailure==other.notifyAntigravityFailure&&notifyAntigravityReplyNeeded==other.notifyAntigravityReplyNeeded&&notifyAntigravityAuthorization==other.notifyAntigravityAuthorization&&notifyDsh==other.notifyDsh&&notifyDshCompletion==other.notifyDshCompletion&&notifyDshFailure==other.notifyDshFailure&&notifyDshReplyNeeded==other.notifyDshReplyNeeded&&notifyDshAuthorization==other.notifyDshAuthorization}}publicmutatingfuncapplySubset(fromrefreshed:ProbeSettingsDraft,scope:ProbeSettingsSaveScope){switchscope{case.ci:notifyGithubCi=refreshed.notifyGithubCigithubCiRepositories=refreshed.githubCiRepositoriesgithubCiFilterBots=refreshed.githubCiFilterBotscase.bark:barkEnabled=refreshed.barkEnabledbarkServerUrl=refreshed.barkServerUrlbarkDeviceKey=refreshed.barkDeviceKeybarkDeviceKeyConfigured=refreshed.barkDeviceKeyConfiguredbarkSound=refreshed.barkSoundbarkGroup=refreshed.barkGroupbarkUrl=refreshed.barkUrlcase.settings:codexHome=refreshed.codexHomecodexWorkspace=refreshed.codexWorkspacehostLabel=refreshed.hostLabelprobeEnabled=refreshed.probeEnablederrorMonitorEnabled=refreshed.errorMonitorEnabledmanageStopHook=refreshed.manageStopHookclearAccountScope=refreshed.clearAccountScopepollSecondsText=refreshed.pollSecondsTextrecentLimitText=refreshed.recentLimitTexteventRetentionDaysText=refreshed.eventRetentionDaysTexthookEventMaxLinesText=refreshed.hookEventMaxLinesTexthookCooldownMaxLinesText=refreshed.hookCooldownMaxLinesTextlogMaxMiBText=refreshed.logMaxMiBTextnotifyCompletion=refreshed.notifyCompletionnotifyReplyNeeded=refreshed.notifyReplyNeedednotifyRecoverable=refreshed.notifyRecoverablenotifyCodex=refreshed.notifyCodexnotifyGrok=refreshed.notifyGroknotifyGrokCompletion=refreshed.notifyGrokCompletionnotifyGrokFailure=refreshed.notifyGrokFailurenotifyGrokReplyNeeded=refreshed.notifyGrokReplyNeedednotifyGrokbot=refreshed.notifyGrokbotnotifyClaude=refreshed.notifyClaudenotifyClaudeCompletion=refreshed.notifyClaudeCompletionnotifyClaudeFailure=refreshed.notifyClaudeFailurenotifyClaudeReplyNeeded=refreshed.notifyClaudeReplyNeedednotifyAntigravity=refreshed.notifyAntigravitynotifyAntigravityCompletion=refreshed.notifyAntigravityCompletionnotifyAntigravityFailure=refreshed.notifyAntigravityFailurenotifyAntigravityReplyNeeded=refreshed.notifyAntigravityReplyNeedednotifyAntigravityAuthorization=refreshed.notifyAntigravityAuthorizationnotifyDsh=refreshed.notifyDshnotifyDshCompletion=refreshed.notifyDshCompletionnotifyDshFailure=refreshed.notifyDshFailurenotifyDshReplyNeeded=refreshed.notifyDshReplyNeedednotifyDshAuthorization=refreshed.notifyDshAuthorization}}}",
         "ProbeEventItem": "structProbeEventItem:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvarkind:String?publicvarprovider:String?publicvartitle:String?publicvarmessage:String?publicvarsummary:String?publicvarreason:String?publicvarsource:String?publicvarthreadId:String?publicvarbarkStatus:String?publicvardedupeStatus:String?publicvardedupeKey:String?publicvarcreatedAt:Int64?publicvarpayload:[String:JSONValue]?enumCodingKeys:String,CodingKey{caseid,kind,provider,title,message,summary,reason,source,payloadcasethreadId=\"thread_id\"casebarkStatus=\"bark_status\"casededupeStatus=\"dedupe_status\"casededupeKey=\"dedupe_key\"casecreatedAt=\"created_at\"}publicinit(id:String,kind:String?=nil,provider:String?=nil,title:String?=nil,message:String?=nil,summary:String?=nil,reason:String?=nil,source:String?=nil,threadId:String?=nil,barkStatus:String?=nil,dedupeStatus:String?=nil,dedupeKey:String?=nil,createdAt:Int64?=nil,payload:[String:JSONValue]?=nil){self.id=idself.kind=kindself.provider=providerself.title=titleself.message=messageself.summary=summaryself.reason=reasonself.source=sourceself.threadId=threadIdself.barkStatus=barkStatusself.dedupeStatus=dedupeStatusself.dedupeKey=dedupeKeyself.createdAt=createdAtself.payload=payload}}",
         "ProbeEventsResponse": "structProbeEventsResponse:Codable,Equatable,Sendable{publicvarevents:[ProbeEventItem]publicvarlimit:Int?}",
         "ClaudeHooksStatus": "structClaudeHooksStatus:Codable,Equatable,Sendable{publicvarinstalled:BoolpublicvarmanagedCount:IntpublicvarconfigPath:String?}",
         "GithubCiAccount": "structGithubCiAccount:Codable,Equatable,Sendable{publicvarid:UInt64publicvarlogin:String}",
         "GithubCiRepository": "structGithubCiRepository:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarfullName:Stringpublicvararchived:BoolenumCodingKeys:String,CodingKey{caseidcasefullName=\"full_name\"casearchived}publicinit(id:UInt64,fullName:String,archived:Bool=false){self.id=idself.fullName=fullNameself.archived=archived}}",
-        "GithubCiRun": "structGithubCiRun:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarrepositoryId:UInt64publicvarrepositoryName:Stringpublicvarname:String?publicvarworkflowName:StringpublicvardisplayTitle:String?publicvarheadBranch:String?publicvarheadSha:Stringpublicvarstatus:Stringpublicvarconclusion:String?publicvarhtmlUrl:StringpublicvarupdatedAt:StringpublicvarrunAttempt:UInt64?publicvarisBot:BoolenumCodingKeys:String,CodingKey{caseid,namecaserepositoryId=\"repository_id\"caserepositoryName=\"repository_name\"caseworkflowName=\"workflow_name\"casedisplayTitle=\"display_title\"caseheadBranch=\"head_branch\"caseheadSha=\"head_sha\"casestatus,conclusioncasehtmlUrl=\"html_url\"caseupdatedAt=\"updated_at\"caserunAttempt=\"run_attempt\"caseisBot=\"is_bot\"}publicinit(id:UInt64,repositoryId:UInt64,repositoryName:String,name:String?=nil,workflowName:String,displayTitle:String?=nil,headBranch:String?=nil,headSha:String=\"\",status:String,conclusion:String?=nil,htmlUrl:String,updatedAt:String,runAttempt:UInt64?=1,isBot:Bool=false){self.id=idself.repositoryId=repositoryIdself.repositoryName=repositoryNameself.name=nameself.workflowName=workflowNameself.displayTitle=displayTitleself.headBranch=headBranchself.headSha=headShaself.status=statusself.conclusion=conclusionself.htmlUrl=htmlUrlself.updatedAt=updatedAtself.runAttempt=runAttemptself.isBot=isBot}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)id=tryc.decode(UInt64.self,forKey:.id)repositoryId=tryc.decode(UInt64.self,forKey:.repositoryId)repositoryName=tryc.decode(String.self,forKey:.repositoryName)name=tryc.decodeIfPresent(String.self,forKey:.name)workflowName=tryc.decodeIfPresent(String.self,forKey:.workflowName)??name??\"工作流\"displayTitle=tryc.decodeIfPresent(String.self,forKey:.displayTitle)headBranch=tryc.decodeIfPresent(String.self,forKey:.headBranch)headSha=tryc.decode(String.self,forKey:.headSha)status=tryc.decode(String.self,forKey:.status)conclusion=tryc.decodeIfPresent(String.self,forKey:.conclusion)htmlUrl=tryc.decode(String.self,forKey:.htmlUrl)updatedAt=tryc.decode(String.self,forKey:.updatedAt)runAttempt=tryc.decodeIfPresent(UInt64.self,forKey:.runAttempt)isBot=tryc.decode(Bool.self,forKey:.isBot)}}",
-        "GithubCiSnapshot": "structGithubCiSnapshot:Codable,Equatable,Sendable{publicvarenabled:Boolpublicvarrefreshing:BoolpublicvarfilterBots:BoolpublicvarmonitoredRepositories:[String]publicvaraccount:GithubCiAccount?publicvarrepositories:[GithubCiRepository]publicvarruns:[GithubCiRun]publicvarerror:String?enumCodingKeys:String,CodingKey{caseenabled,refreshingcasefilterBots=\"filter_bots\"casemonitoredRepositories=\"monitored_repositories\"caseselectedRepositories=\"selected_repositories\"caseaccount,repositories,runs,error}publicinit(enabled:Bool=false,refreshing:Bool=false,filterBots:Bool=true,monitoredRepositories:[String]=[],account:GithubCiAccount?=nil,repositories:[GithubCiRepository]=[],runs:[GithubCiRun]=[],error:String?=nil){self.enabled=enabledself.refreshing=refreshingself.filterBots=filterBotsself.monitoredRepositories=monitoredRepositoriesself.account=accountself.repositories=repositoriesself.runs=runsself.error=error}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)enabled=tryc.decodeIfPresent(Bool.self,forKey:.enabled)??falserefreshing=tryc.decodeIfPresent(Bool.self,forKey:.refreshing)??falsefilterBots=tryc.decodeIfPresent(Bool.self,forKey:.filterBots)??truemonitoredRepositories=tryc.decodeIfPresent([String].self,forKey:.monitoredRepositories)??(tryc.decodeIfPresent([String].self,forKey:.selectedRepositories))??[]account=tryc.decodeIfPresent(GithubCiAccount.self,forKey:.account)repositories=tryc.decodeIfPresent([GithubCiRepository].self,forKey:.repositories)??[]runs=tryc.decodeIfPresent([GithubCiRun].self,forKey:.runs)??[]error=tryc.decodeIfPresent(String.self,forKey:.error)}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encode(enabled,forKey:.enabled)tryc.encode(refreshing,forKey:.refreshing)tryc.encode(filterBots,forKey:.filterBots)tryc.encode(monitoredRepositories,forKey:.monitoredRepositories)tryc.encodeIfPresent(account,forKey:.account)tryc.encode(repositories,forKey:.repositories)tryc.encode(runs,forKey:.runs)tryc.encodeIfPresent(error,forKey:.error)}}"
+        "GithubCiRun": "structGithubCiRun:Codable,Equatable,Identifiable,Sendable{publicvarid:UInt64publicvarrepositoryId:UInt64publicvarrepositoryName:Stringpublicvarname:String?publicvarheadBranch:String?publicvarheadSha:Stringpublicvarstatus:Stringpublicvarconclusion:String?publicvarhtmlUrl:StringpublicvarupdatedAt:StringpublicvarrunAttempt:UInt64?publicvarisBot:BoolenumCodingKeys:String,CodingKey{caseid,namecaserepositoryId=\"repository_id\"caserepositoryName=\"repository_name\"caseheadBranch=\"head_branch\"caseheadSha=\"head_sha\"casestatus,conclusioncasehtmlUrl=\"html_url\"caseupdatedAt=\"updated_at\"caserunAttempt=\"run_attempt\"caseisBot=\"is_bot\"}publicinit(id:UInt64,repositoryId:UInt64,repositoryName:String,name:String?=nil,headBranch:String?=nil,headSha:String=\"\",status:String,conclusion:String?=nil,htmlUrl:String,updatedAt:String,runAttempt:UInt64?=1,isBot:Bool=false){self.id=idself.repositoryId=repositoryIdself.repositoryName=repositoryNameself.name=nameself.headBranch=headBranchself.headSha=headShaself.status=statusself.conclusion=conclusionself.htmlUrl=htmlUrlself.updatedAt=updatedAtself.runAttempt=runAttemptself.isBot=isBot}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)id=tryc.decode(UInt64.self,forKey:.id)repositoryId=tryc.decode(UInt64.self,forKey:.repositoryId)repositoryName=tryc.decode(String.self,forKey:.repositoryName)name=tryc.decodeIfPresent(String.self,forKey:.name)headBranch=tryc.decodeIfPresent(String.self,forKey:.headBranch)headSha=tryc.decode(String.self,forKey:.headSha)status=tryc.decode(String.self,forKey:.status)conclusion=tryc.decodeIfPresent(String.self,forKey:.conclusion)htmlUrl=tryc.decode(String.self,forKey:.htmlUrl)updatedAt=tryc.decode(String.self,forKey:.updatedAt)runAttempt=tryc.decodeIfPresent(UInt64.self,forKey:.runAttempt)isBot=tryc.decode(Bool.self,forKey:.isBot)}}",
+        "GithubCiSnapshot": "structGithubCiSnapshot:Codable,Equatable,Sendable{publicvarenabled:Boolpublicvarrefreshing:BoolpublicvarfilterBots:BoolpublicvarmonitoredRepositories:[String]publicvaraccount:GithubCiAccount?publicvarrepositories:[GithubCiRepository]publicvarruns:[GithubCiRun]publicvarerror:String?enumCodingKeys:String,CodingKey{caseenabled,refreshingcasefilterBots=\"filter_bots\"casemonitoredRepositories=\"monitored_repositories\"caseaccount,repositories,runs,error}publicinit(enabled:Bool=false,refreshing:Bool=false,filterBots:Bool=true,monitoredRepositories:[String]=[],account:GithubCiAccount?=nil,repositories:[GithubCiRepository]=[],runs:[GithubCiRun]=[],error:String?=nil){self.enabled=enabledself.refreshing=refreshingself.filterBots=filterBotsself.monitoredRepositories=monitoredRepositoriesself.account=accountself.repositories=repositoriesself.runs=runsself.error=error}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)enabled=tryc.decodeIfPresent(Bool.self,forKey:.enabled)??falserefreshing=tryc.decodeIfPresent(Bool.self,forKey:.refreshing)??falsefilterBots=tryc.decodeIfPresent(Bool.self,forKey:.filterBots)??truemonitoredRepositories=tryc.decodeIfPresent([String].self,forKey:.monitoredRepositories)??[]account=tryc.decodeIfPresent(GithubCiAccount.self,forKey:.account)repositories=tryc.decodeIfPresent([GithubCiRepository].self,forKey:.repositories)??[]runs=tryc.decodeIfPresent([GithubCiRun].self,forKey:.runs)??[]error=tryc.decodeIfPresent(String.self,forKey:.error)}publicfuncencode(toencoder:Encoder)throws{varc=encoder.container(keyedBy:CodingKeys.self)tryc.encode(enabled,forKey:.enabled)tryc.encode(refreshing,forKey:.refreshing)tryc.encode(filterBots,forKey:.filterBots)tryc.encode(monitoredRepositories,forKey:.monitoredRepositories)tryc.encodeIfPresent(account,forKey:.account)tryc.encode(repositories,forKey:.repositories)tryc.encode(runs,forKey:.runs)tryc.encodeIfPresent(error,forKey:.error)}}"
       },
       "calls": []
     },
@@ -9118,7 +8833,7 @@
         "ClaudeSessionSummary": "structClaudeSessionSummary:Codable,Equatable,Sendable,Identifiable{publicvarstorageSize:SessionStorageSize?publicvarid:StringpublicvarsessionKey:Stringpublicvartitle:Stringpublicvarcwd:StringpublicvarworkspaceRoot:String?publicvarpath:StringpublicvarupdatedAt:String?publicvarmessageCount:IntpublicvarlastMessage:String?publicvarstatus:StringpublicvarformatVersion:String?publicvarreadWarning:String?publicvarcanRename:BoolpublicvarrenameBlockReason:String?publicvarcanDelete:BoolpublicvardeleteBlockReason:String?publicvarreadError:String?enumCodingKeys:String,CodingKey{casestorageSize,id,sessionKey,title,cwd,workspaceRoot,pathcaseupdatedAt,messageCount,lastMessage,status,formatVersioncasereadWarning,canRename,renameBlockReason,canDelete,deleteBlockReason,readError}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)storageSize=tryc.decodeIfPresent(SessionStorageSize.self,forKey:.storageSize)id=tryc.decode(String.self,forKey:.id)sessionKey=tryc.decode(String.self,forKey:.sessionKey)title=tryc.decodeIfPresent(String.self,forKey:.title)??\"\"cwd=tryc.decodeIfPresent(String.self,forKey:.cwd)??\"\"workspaceRoot=tryc.decodeIfPresent(String.self,forKey:.workspaceRoot)path=tryc.decodeIfPresent(String.self,forKey:.path)??\"\"updatedAt=tryc.decodeIfPresent(String.self,forKey:.updatedAt)messageCount=tryc.decodeIfPresent(Int.self,forKey:.messageCount)??0lastMessage=tryc.decodeIfPresent(String.self,forKey:.lastMessage)status=tryc.decodeIfPresent(String.self,forKey:.status)??\"recent\"formatVersion=tryc.decodeIfPresent(String.self,forKey:.formatVersion)readWarning=tryc.decodeIfPresent(String.self,forKey:.readWarning)canRename=tryc.decodeIfPresent(Bool.self,forKey:.canRename)??falserenameBlockReason=tryc.decodeIfPresent(String.self,forKey:.renameBlockReason)canDelete=tryc.decodeIfPresent(Bool.self,forKey:.canDelete)??truedeleteBlockReason=tryc.decodeIfPresent(String.self,forKey:.deleteBlockReason)readError=tryc.decodeIfPresent(String.self,forKey:.readError)}}",
         "ClaudeHistoryEvent": "structClaudeHistoryEvent:Codable,Equatable,Sendable,Identifiable{publicvarid:StringpublicvarturnId:String?publicvarresult:String?publicvaruserMessage:UserMessageContent?publicvartimestamp:String?publicvarkind:Stringpublicvarrole:String?publicvartext:String?publicvarcallId:String?publicvarstatus:String?publicvardetail:String?publicvarassistantPhase:String?publicinit(id:String,kind:String,role:String?=nil,text:String?=nil,turnId:String?=nil,callId:String?=nil,status:String?=nil,detail:String?=nil,result:String?=nil,assistantPhase:String?=nil,userMessage:UserMessageContent?=nil){self.id=idself.kind=kindself.role=roleself.text=textself.turnId=turnIdself.callId=callIdself.status=statusself.detail=detailself.result=resultself.assistantPhase=assistantPhaseself.userMessage=userMessage}}",
         "ClaudeSessionDetail": "structClaudeSessionDetail:Codable,Equatable,Sendable{publicvaragent:SubagentActivity?publicvarsubagents:SubagentCollection?publicvartimeline:[TimelineEntry]?publicvarafterCursor:String?publicvarhistory:HistoryMetadata?publicvarsummary:ClaudeSessionSummarypublicvarevents:[ClaudeHistoryEvent]publicvartotalEvents:IntpublicvarhasMore:BoolpublicvarbeforeCursor:String?enumCodingKeys:String,CodingKey{caseagent,subagents,timeline,afterCursor,historycasesummary,events,totalEvents,hasMore,beforeCursor}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)agent=tryc.decodeIfPresent(SubagentActivity.self,forKey:.agent)subagents=tryc.decodeIfPresent(SubagentCollection.self,forKey:.subagents)timeline=tryc.decodeIfPresent([TimelineEntry].self,forKey:.timeline)afterCursor=tryc.decodeIfPresent(String.self,forKey:.afterCursor)history=tryc.decodeIfPresent(HistoryMetadata.self,forKey:.history)summary=tryc.decode(ClaudeSessionSummary.self,forKey:.summary)letdecodedEvents=tryc.decodeIfPresent([ClaudeHistoryEvent].self,forKey:.events)??[]events=decodedEventstotalEvents=tryc.decodeIfPresent(Int.self,forKey:.totalEvents)??decodedEvents.counthasMore=tryc.decodeIfPresent(Bool.self,forKey:.hasMore)??falsebeforeCursor=tryc.decodeIfPresent(String.self,forKey:.beforeCursor)}}",
-        "ClaudeDeletePreview": "structClaudeDeletePreview:Codable,Equatable,Sendable{publicvarsessionKey:Stringpublicvarid:Stringpublicvartitle:Stringpublicvarpath:Stringpublicvarpaths:[String]?publicvarfingerprint:StringpublicvarfileCount:Intpublicvarbytes:Int64publicvarwarnings:[String]?publicinit(sessionKey:String,id:String,title:String,path:String,paths:[String]?=nil,fingerprint:String,fileCount:Int,bytes:Int64,warnings:[String]?=nil){self.sessionKey=sessionKeyself.id=idself.title=titleself.path=pathself.paths=pathsself.fingerprint=fingerprintself.fileCount=fileCountself.bytes=bytesself.warnings=warnings}publicvarresolvedPaths:[String]{ifletpaths,!paths.isEmpty{returnpaths}returnpath.isEmpty?[]:[path]}}",
+        "ClaudeDeletePreview": "structClaudeDeletePreview:Codable,Equatable,Sendable{publicvarsessionKey:Stringpublicvarid:Stringpublicvartitle:Stringpublicvarpath:Stringpublicvarpaths:[String]?publicvarfingerprint:StringpublicvarfileCount:Intpublicvarbytes:Int64publicvarwarnings:[String]?publicinit(sessionKey:String,id:String,title:String,path:String,paths:[String]?=nil,fingerprint:String,fileCount:Int,bytes:Int64,warnings:[String]?=nil){self.sessionKey=sessionKeyself.id=idself.title=titleself.path=pathself.paths=pathsself.fingerprint=fingerprintself.fileCount=fileCountself.bytes=bytesself.warnings=warnings}}",
         "ClaudeDeleteResult": "structClaudeDeleteResult:Codable,Equatable,Sendable{publicvarsessionKey:Stringpublicvardeleted:Boolpublicvarbytes:Int64publicvarresiduals:[String]?}",
         "ClaudeOwnershipProcess": "structClaudeOwnershipProcess:Codable,Equatable,Sendable{publicvarpid:Intpublicvarrole:StringpublicvarregistrationVerified:BoolpublicvarmismatchedFields:[String]}",
         "ClaudeOwnershipDiagnostics": "structClaudeOwnershipDiagnostics:Codable,Equatable,Sendable{publicvarownership:StringpublicvarreasonCodes:[String]publicvarprocesses:[ClaudeOwnershipProcess]}",
@@ -9163,7 +8878,7 @@
         "HistoryChangeEntry": "structHistoryChangeEntry:Codable,Equatable,Sendable{publicvarrevision:StringpublicvarchangedIds:[String]publicvarreset:Bool?enumCodingKeys:String,CodingKey{caserevisioncasechangedIdscasereset}publicinit(revision:String,changedIds:[String]=[],reset:Bool?=nil){self.revision=revisionself.changedIds=changedIdsself.reset=reset}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)revision=tryc.decode(String.self,forKey:.revision)changedIds=tryc.decodeIfPresent([String].self,forKey:.changedIds)??[]reset=tryc.decodeIfPresent(Bool.self,forKey:.reset)}}",
         "HistoryMetadata": "structHistoryMetadata:Codable,Equatable,Sendable{publicvarepoch:Stringpublicvarrevision:StringpublicvarchangedIds:[String]?publicvarreset:Bool?publicvarchanges:[HistoryChangeEntry]?publicinit(epoch:String,revision:String,changedIds:[String]?=nil,reset:Bool?=nil,changes:[HistoryChangeEntry]?=nil){self.epoch=epochself.revision=revisionself.changedIds=changedIdsself.reset=resetself.changes=changes}}",
         "UserAttachment": "structUserAttachment:Codable,Equatable,Sendable,Identifiable{publicvarid:Stringpublicvarname:Stringpublicvarkind:Stringpublicvarpath:String?publicvarreason:String?publicinit(id:String,name:String,kind:String,path:String?=nil,reason:String?=nil){self.id=idself.name=nameself.kind=kindself.path=pathself.reason=reason}}",
-        "UserContextBlock": "structUserContextBlock:Codable,Equatable,Sendable{publicvarkind:Stringpublicvartext:Stringpublicinit(kind:String,text:String){self.kind=kindself.text=text}}",
+        "UserContextBlock": "structUserContextBlock:Codable,Hashable,Sendable{publicvarkind:Stringpublicvartext:Stringpublicinit(kind:String,text:String){self.kind=kindself.text=text}}",
         "UserMessageContent": "structUserMessageContent:Codable,Equatable,Sendable{publicvarid:Stringpublicvartext:Stringpublicvarattachments:[UserAttachment]publicvarcontextBlocks:[UserContextBlock]?enumCodingKeys:String,CodingKey{caseidcasetextcaseattachmentscasecontextBlocks}publicinit(id:String,text:String,attachments:[UserAttachment]=[],contextBlocks:[UserContextBlock]?=nil){self.id=idself.text=textself.attachments=attachmentsself.contextBlocks=contextBlocks}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)id=tryc.decode(String.self,forKey:.id)text=tryc.decodeIfPresent(String.self,forKey:.text)??\"\"attachments=tryc.decodeIfPresent([UserAttachment].self,forKey:.attachments)??[]contextBlocks=tryc.decodeIfPresent([UserContextBlock].self,forKey:.contextBlocks)}}",
         "SessionStorageSize": "structSessionStorageSize:Codable,Equatable,Sendable{publicvarbytes:Int64?publicvarscope:Stringpublicvarstatus:Stringpublicinit(bytes:Int64?,scope:String,status:String){self.bytes=bytesself.scope=scopeself.status=status}}",
         "SubagentActivity": "structSubagentActivity:Codable,Equatable,Sendable,Identifiable{publicvareventKind:String?publicvareventId:String?publicvaragentId:String?publicvarname:Stringpublicvarrole:String?publicvarstatus:Stringpublicvaravailable:BoolpublicvarunavailableReason:String?publicvardelegation:String?publicvarid:String{agentId??eventId??name}publicinit(eventKind:String?=nil,eventId:String?=nil,agentId:String?=nil,name:String,role:String?=nil,status:String=\"unknown\",available:Bool=true,unavailableReason:String?=nil,delegation:String?=nil){self.eventKind=eventKindself.eventId=eventIdself.agentId=agentIdself.name=nameself.role=roleself.status=statusself.available=availableself.unavailableReason=unavailableReasonself.delegation=delegation}enumCodingKeys:String,CodingKey{caseeventKindcaseeventIdcaseagentIdcasenamecaserolecasestatuscaseavailablecaseunavailableReasoncasedelegation}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)eventKind=tryc.decodeIfPresent(String.self,forKey:.eventKind)eventId=tryc.decodeIfPresent(String.self,forKey:.eventId)agentId=tryc.decodeIfPresent(String.self,forKey:.agentId)name=tryc.decode(String.self,forKey:.name)role=tryc.decodeIfPresent(String.self,forKey:.role)status=tryc.decodeIfPresent(String.self,forKey:.status)??\"unknown\"available=tryc.decodeIfPresent(Bool.self,forKey:.available)??trueunavailableReason=tryc.decodeIfPresent(String.self,forKey:.unavailableReason)delegation=tryc.decodeIfPresent(String.self,forKey:.delegation)}}",
@@ -9194,7 +8909,7 @@
         "SshHostItem": "structSshHostItem:Codable,Equatable,Sendable{publicvaralias:String}",
         "StartedJobResponse": "structStartedJobResponse:Decodable,Equatable,Sendable{publicletjobId:String?publicletthreadId:String?enumCodingKeys:String,CodingKey{casejobIdcasejobIdSnake=\"job_id\"casethreadIdcasethreadIdSnake=\"thread_id\"}publicinit(jobId:String?,threadId:String?=nil){self.jobId=jobIdself.threadId=threadId}publicinit(fromdecoder:Decoder)throws{letc=trydecoder.container(keyedBy:CodingKeys.self)self.jobId=tryc.decodeIfPresent(String.self,forKey:.jobId)??c.decodeIfPresent(String.self,forKey:.jobIdSnake)self.threadId=tryc.decodeIfPresent(String.self,forKey:.threadId)??c.decodeIfPresent(String.self,forKey:.threadIdSnake)}}",
         "JobFailureAnalysis": "structJobFailureAnalysis:Codable,Equatable,Sendable{publicvarexplanation:Stringpublicvarsuggestions:[String]}",
-        "JobRecord": "structJobRecord:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvarkind:Stringpublicvarstatus:Stringpublicvartitle:StringpublicvarstartedAt:Int64publicvarfinishedAt:Int64?publicvarexitCode:Int32?publicvaroutput:String?publicvarerror:String?publicvarfailureAnalysis:JobFailureAnalysis?enumCodingKeys:String,CodingKey{caseid,kind,status,title,output,errorcasestartedAt=\"started_at\"casefinishedAt=\"finished_at\"caseexitCode=\"exit_code\"casefailureAnalysis}publicvarisTerminal:Bool{status==\"succeeded\"||status==\"failed\"||status==\"cancelled\"}}",
+        "JobRecord": "structJobRecord:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvarkind:Stringpublicvarstatus:Stringpublicvartitle:StringpublicvarstartedAt:Int64publicvarfinishedAt:Int64?publicvarexitCode:Int32?publicvaroutput:String?publicvarerror:String?publicvarfailureAnalysis:JobFailureAnalysis?enumCodingKeys:String,CodingKey{caseid,kind,status,title,output,errorcasestartedAt=\"started_at\"casefinishedAt=\"finished_at\"caseexitCode=\"exit_code\"casefailureAnalysis}publicinit(id:String,kind:String,status:String,title:String,startedAt:Int64,finishedAt:Int64?=nil,exitCode:Int32?=nil,output:String?=nil,error:String?=nil,failureAnalysis:JobFailureAnalysis?=nil){self.id=idself.kind=kindself.status=statusself.title=titleself.startedAt=startedAtself.finishedAt=finishedAtself.exitCode=exitCodeself.output=outputself.error=errorself.failureAnalysis=failureAnalysis}publicvarisTerminal:Bool{status==\"succeeded\"||status==\"failed\"||status==\"cancelled\"}}",
         "UpdateStatus": "structUpdateStatus:Codable,Equatable,Sendable{publicvarcurrentVersion:StringpublicvarlatestVersion:String?publicvarupdateAvailable:Bool?publicvarstate:Stringpublicvarmethod:String?publicvarrecommendedAction:String?enumCodingKeys:String,CodingKey{casecurrentVersion=\"current_version\"caselatestVersion=\"latest_version\"caseupdateAvailable=\"update_available\"casestate,methodcaserecommendedAction=\"recommended_action\"}}",
         "UnifiedCleanupCandidate": "structUnifiedCleanupCandidate:Codable,Equatable,Identifiable,Sendable{publicvarid:Stringpublicvartitle:StringpublicvarestimatedBytes:Int64publicvarblockedReason:String?publicvarfingerprint:String?}",
         "UnifiedCleanupScopePlan": "structUnifiedCleanupScopePlan:Codable,Equatable,Identifiable,Sendable{publicvarid:String{scope}publicvarscope:Stringpublicvarsupported:Boolpublicvarscanned:BoolpublicvarunavailableReason:String?publicvarcandidateCount:IntpublicvardeletableCount:IntpublicvarestimatedBytes:Int64publicvarcandidates:[UnifiedCleanupCandidate]publicvarissues:[String]}",

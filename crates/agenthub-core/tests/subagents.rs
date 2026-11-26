@@ -1,5 +1,5 @@
 use agenthub_core::codex::{
-    hidden_and_archived_thread_ids, list_threads,
+    list_threads,
     subagents::{
         enrich_subagent_blocks, read_subagent_detail, SubagentActivity, SubagentDetailRequest,
         SubagentDetailResponse, SubagentEventKind, SubagentStatus,
@@ -999,9 +999,53 @@ fn children_stay_hidden_from_the_main_list_but_are_readable_from_the_parent() {
     assert!(list_threads(&fixture.paths, true, None, 100)
         .unwrap()
         .is_empty());
-    let hidden = hidden_and_archived_thread_ids(&fixture.paths).unwrap().0;
-    assert!(hidden.contains(CHILD));
-    assert!(hidden.contains("grandchild"));
+    let hidden = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            use agenthub_core::archive::hidden_scan::{
+                HiddenScanMode, HiddenScanPhase, HiddenScanRequest,
+            };
+            let platform = PlatformPaths::linux_server();
+            let cleanup = AgentHubUseCases::new(&platform).cleanup();
+            let mut plan = cleanup
+                .scan_hidden(
+                    fixture.paths.clone(),
+                    "subagent-test".into(),
+                    HiddenScanRequest::default(),
+                )
+                .await
+                .unwrap();
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+            while matches!(
+                plan.scan.as_ref().map(|s| s.phase),
+                Some(HiddenScanPhase::Preparing | HiddenScanPhase::Scanning)
+            ) {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "hidden scan timed out"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                let scan_id = plan.scan.as_ref().map(|s| s.id.clone());
+                plan = cleanup
+                    .scan_hidden(
+                        fixture.paths.clone(),
+                        "subagent-test".into(),
+                        HiddenScanRequest {
+                            mode: HiddenScanMode::Poll,
+                            scan_id,
+                            cursor: Some(0),
+                            limit: Some(100),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            plan.hidden_ids
+        });
+    assert!(hidden.iter().any(|id| id == CHILD));
+    assert!(hidden.iter().any(|id| id == "grandchild"));
     assert!(thread_detail_page(&fixture.paths, CHILD, None, None, None)
         .unwrap()
         .is_none());

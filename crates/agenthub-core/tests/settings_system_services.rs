@@ -318,12 +318,7 @@ fn probe_settings_save_plan_exposes_redacted_bark_secret_write_contract() {
     )
     .expect("Linux should allow shared Probe settings save");
 
-    assert_eq!(
-        Some(plan.secret_writes[0].secret_value.as_str()),
-        Some("secret-bark-key")
-    );
-    assert_eq!(plan.secret_writes.len(), 1);
-    let write = &plan.secret_writes[0];
+    let write = plan.secret_write.as_ref().expect("bark secret write");
     assert_eq!(write.setting_key, PROBE_BARK_DEVICE_KEY_SETTING);
     assert_eq!(write.secret_value, "secret-bark-key");
 

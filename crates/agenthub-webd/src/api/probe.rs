@@ -9,10 +9,9 @@ use agenthub_core::{
     services::{
         probe::{self as probe_service},
         settings as settings_service,
-        use_cases::AgentHubUseCases,
+        use_cases::{AgentHubUseCases, LimitU32Request},
     },
 };
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 pub(crate) use probe_service::ProbeStatusRequest as ProbeStatusQuery;
@@ -46,12 +45,7 @@ pub(crate) async fn patch_probe_settings(
     ok(probe_settings_value_for_config(&state, &response_config)?)
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct ProbeEventsQuery {
-    pub(crate) limit: Option<u32>,
-}
-
-pub(crate) async fn get_probe_events(state: AppState, query: ProbeEventsQuery) -> ApiResponse {
+pub(crate) async fn get_probe_events(state: AppState, query: LimitU32Request) -> ApiResponse {
     let limit = query
         .limit
         .unwrap_or(state.config().probe.recent_limit as u32)
@@ -127,13 +121,15 @@ async fn probe_status_cached_value(state: AppState, force_refresh: bool) -> Valu
 
 async fn probe_status_fresh_value(state: AppState, force_refresh: bool) -> Value {
     match async {
-        probe_runtime(&state)?
+        let mut status = probe_runtime(&state)?
             .status_with_options(force_refresh)
-            .await
+            .await?;
+        let _ = probe_service::enrich_probe_status_from_db(&mut status, &state.db);
+        Ok::<_, anyhow::Error>(json!(status))
     }
     .await
     {
-        Ok(status) => enrich_probe_error_monitor_status(&state, json!(status)),
+        Ok(status) => status,
         Err(err) => json!({
             "label": "Probe",
             "enabled": state.config().probe.enabled,
@@ -142,43 +138,6 @@ async fn probe_status_fresh_value(state: AppState, force_refresh: bool) -> Value
             "error": err.to_string(),
         }),
     }
-}
-
-fn enrich_probe_error_monitor_status(state: &AppState, mut value: Value) -> Value {
-    let Some(object) = value.as_object_mut() else {
-        return value;
-    };
-    if let Ok(status) = state.db.native_notification_status() {
-        object.insert("provider_notifications".into(), status);
-    }
-    let runtime = state
-        .db
-        .get_setting("probe_error_monitor_status")
-        .ok()
-        .flatten()
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
-    if let Some(runtime) = runtime.as_ref().and_then(Value::as_object) {
-        object.insert(
-            "error_monitor_status".to_string(),
-            runtime.get("status").cloned().unwrap_or(Value::Null),
-        );
-        object.insert(
-            "error_monitor_last_scan_at".to_string(),
-            runtime.get("last_scan_at").cloned().unwrap_or(Value::Null),
-        );
-        object.insert(
-            "error_monitor_last_error".to_string(),
-            runtime.get("last_error").cloned().unwrap_or(Value::Null),
-        );
-        object.insert(
-            "error_monitor_incident_count".to_string(),
-            runtime
-                .get("incident_count")
-                .cloned()
-                .unwrap_or(Value::Null),
-        );
-    }
-    value
 }
 
 fn current_probe_status_snapshot(state: &AppState) -> Option<CachedProbeStatus> {

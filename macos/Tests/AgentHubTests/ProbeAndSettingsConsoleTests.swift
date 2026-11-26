@@ -35,7 +35,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
                 id: UInt64(idx),
                 repositoryId: 1,
                 repositoryName: "org/active",
-                workflowName: "CI",
+                name: "CI",
                 status: "completed",
                 conclusion: idx == 2 ? "failure" : "success",
                 htmlUrl: "https://github.com/org/active/actions/runs/\(idx)",
@@ -67,6 +67,11 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(draft.validationErrors().isEmpty)
         draft.pollSecondsText = "15"
 
+        draft.logMaxMiBText = "1e30"
+        XCTAssertFalse(draft.validationErrors().isEmpty, "Huge float must fail range validation without trapping")
+        draft.logMaxMiBText = "-1e30"
+        XCTAssertFalse(draft.validationErrors().isEmpty)
+
         draft.logMaxMiBText = "0.001"
         XCTAssertFalse(draft.validationErrors().isEmpty)
         draft.logMaxMiBText = "0.00390625" // 4 KiB lower bound
@@ -74,16 +79,39 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
 
         draft.codexHome = "auto"
         draft.barkDeviceKey = "fixture-bark-key"
-        let payload = try draft.buildSavePayload()
-        if case let .object(codex)? = payload["codex"] {
+        draft.notifyGithubCi = true
+        draft.githubCiRepositories = [" lich13/agenthub "]
+
+        let settingsPayload = try draft.buildSavePayload(for: .settings)
+        if case let .object(codex)? = settingsPayload["codex"] {
             XCTAssertEqual(codex["home"], .null)
         } else {
             XCTFail("Missing codex object")
         }
-        if case let .object(notif)? = payload["notifications"] {
+        XCTAssertNil(settingsPayload["notifications"], "Settings scope must not send duplicate top-level notifications")
+
+        let barkPayload = try draft.buildSavePayload(for: .bark)
+        XCTAssertNil(barkPayload["codex"], "Bark scoped save must not submit codex settings")
+        XCTAssertNil(barkPayload["notifications"], "Bark scoped save must send device_key once inside probe.notifications")
+        if case let .object(probe)? = barkPayload["probe"],
+           case let .object(notif)? = probe["notifications"]
+        {
             XCTAssertEqual(notif["device_key"], .string("fixture-bark-key"))
+            XCTAssertNil(notif["notify_github_ci"])
         } else {
-            XCTFail("Expected top-level notifications.device_key when non-empty")
+            XCTFail("Expected probe.notifications.device_key in bark scoped payload")
+        }
+
+        let ciPayload = try draft.buildSavePayload(for: .ci)
+        XCTAssertNil(ciPayload["codex"])
+        if case let .object(probe)? = ciPayload["probe"],
+           case let .object(notif)? = probe["notifications"]
+        {
+            XCTAssertEqual(notif["notify_github_ci"], .bool(true))
+            XCTAssertEqual(notif["github_ci_repositories"], .array([.string("lich13/agenthub")]))
+            XCTAssertNil(notif["device_key"])
+        } else {
+            XCTFail("Expected probe.notifications CI fields in CI scoped payload")
         }
     }
 
@@ -92,13 +120,6 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
             return
         }
-
-        // Verify window initial clamp without exceeding visibleFrame
-        let clamped = AgentHubWindowManager.clampedInitialFrame(
-            visibleFrame: NSRect(x: 0, y: 25, width: 1440, height: 875)
-        )
-        XCTAssertEqual(clamped.width, 1280, accuracy: 0.0)
-        XCTAssertEqual(clamped.height, 820, accuracy: 0.0)
 
         // Verify reading column horizontal insets exact math
         let desktopRailInsets = LayoutMetrics.readingHorizontalInsets(availableWidth: 1000, hasTimelineRail: true)
@@ -222,6 +243,438 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(rec.ownershipBusy, "claude.ownershipDiagnostics is a read command and must not increment writes")
         XCTAssertFalse(rec.hooksStatusBusy, "claude.hooks(action: status) is a read check and must not increment writes")
         XCTAssertTrue(rec.hooksInstallBusy, "claude.hooks(action: install) is a mutating write and must increment writes")
+    }
+
+    func testProbeDisclosureRulesSingleShotAutoOpenAndManualCollapseAcrossPolls() {
+        var rules = ProbeDisclosureRules(machineScope: "local")
+        for sec in ProbeDisclosureSection.allCases {
+            XCTAssertFalse(rules.isExpanded(sec), "\(sec.rawValue) must default to collapsed")
+        }
+
+        // First observation of a CI failure auto-opens once
+        let run102 = GithubCiRun(
+            id: 102,
+            repositoryId: 1,
+            repositoryName: "org/repo",
+            name: "CI",
+            status: "completed",
+            conclusion: "failure",
+            htmlUrl: "https://example.invalid/runs/102",
+            updatedAt: "2026-11-25T10:00:00Z"
+        )
+        let sig102 = ProbeDisclosureRules.ciIssueSignature(errorMessage: nil, snapshotError: nil, visibleRuns: [run102])
+        XCTAssertTrue(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sig102))
+        XCTAssertTrue(rules.isExpanded(.ci))
+
+        // User manually collapses CI -> subsequent 15s polls with same signature MUST NOT reopen
+        rules.setExpanded(.ci, false)
+        XCTAssertFalse(rules.isExpanded(.ci))
+        XCTAssertFalse(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sig102))
+        XCTAssertFalse(rules.isExpanded(.ci))
+
+        // New issue signature (#103 alongside #102) auto-opens once
+        let run103 = GithubCiRun(
+            id: 103,
+            repositoryId: 1,
+            repositoryName: "org/repo",
+            name: "CI",
+            status: "completed",
+            conclusion: "timed_out",
+            htmlUrl: "https://example.invalid/runs/103",
+            updatedAt: "2026-11-25T10:05:00Z"
+        )
+        let sigBoth = ProbeDisclosureRules.ciIssueSignature(errorMessage: nil, snapshotError: nil, visibleRuns: [run102, run103])
+        XCTAssertTrue(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sigBoth))
+        XCTAssertTrue(rules.isExpanded(.ci))
+
+        // User collapses CI; when #102 resolves or scrolls off the 20-run window leaving [#103], it MUST stay collapsed
+        rules.setExpanded(.ci, false)
+        let sig103Only = ProbeDisclosureRules.ciIssueSignature(errorMessage: nil, snapshotError: nil, visibleRuns: [run103])
+        XCTAssertFalse(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sig103Only))
+        XCTAssertFalse(rules.isExpanded(.ci))
+
+        // Clearing all issues resets active tokens without opening; a future recurrence of #102 re-opens once
+        XCTAssertFalse(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: nil))
+        XCTAssertFalse(rules.isExpanded(.ci))
+        XCTAssertTrue(rules.observeIssue(machineScope: "local", section: .ci, issueSignature: sig102))
+        XCTAssertTrue(rules.isExpanded(.ci))
+
+        // Switching machineScope resets all open sections & seen issue signatures
+        rules.resetIfMachineChanged("remote:prod")
+        XCTAssertFalse(rules.isExpanded(.ci))
+        XCTAssertTrue(rules.observeIssue(machineScope: "remote:prod", section: .ci, issueSignature: sig103Only))
+        XCTAssertTrue(rules.isExpanded(.ci))
+    }
+
+    @MainActor
+    func testAttachmentViewportManagerCancelsStaleScopeReadsWithoutLeakingImages() async throws {
+        let oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let suite = "com.lich13.agenthub.attscope.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let mock = MockRuntimeTransport { command, _ in
+            if command == "sessions.attachmentRead" {
+                try? await Task.sleep(nanoseconds: 80_000_000)
+                return Data(#"{"mime_type":"image/png","base64":"\#(oneByOnePngBase64)"}"#.utf8)
+            }
+            return Data("{}".utf8)
+        }
+        let store = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        let manager = AttachmentViewportManager()
+        manager.resetScope("local::codex::s1")
+
+        let req = SessionAttachmentRequest(
+            provider: .codex,
+            sessionKey: "s1",
+            messageId: "u-1",
+            attachmentId: "att-1"
+        )
+        manager.ensureLoaded(key: "local::codex::s1:u-1:att-1", request: req, store: store)
+        XCTAssertEqual(manager.inFlightCount, 1)
+
+        // Rapidly switch to Session 2 before Session 1's RPC finishes
+        manager.resetScope("local::codex::s2")
+        XCTAssertEqual(manager.inFlightCount, 0)
+        XCTAssertEqual(manager.loadedCount, 0)
+
+        try await Task.sleep(nanoseconds: 130_000_000)
+        XCTAssertEqual(manager.loadedCount, 0, "Stale session attachment completion must not populate loadedImages")
+    }
+
+    func testScopedSavePreservesOtherPanelsUncommittedEdits() throws {
+        let base = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
+        var loaded = base
+        var draft = base
+
+        // Simultaneously edit CI, Settings, and Bark panels
+        draft.notifyGithubCi = true
+        draft.githubCiRepositories = ["org/repo"]
+        draft.pollSecondsText = "30"
+        draft.barkGroup = "CustomGroup"
+
+        XCTAssertFalse(draft.subsetEquals(loaded, scope: .ci))
+        XCTAssertFalse(draft.subsetEquals(loaded, scope: .settings))
+        XCTAssertFalse(draft.subsetEquals(loaded, scope: .bark))
+
+        // Simulate server returning refreshed settings after saving ONLY `.ci`
+        var serverSavedCi = base
+        serverSavedCi.notifyGithubCi = true
+        serverSavedCi.githubCiRepositories = ["org/repo"]
+        loaded.applySubset(from: serverSavedCi, scope: .ci)
+        draft.applySubset(from: serverSavedCi, scope: .ci)
+
+        XCTAssertTrue(draft.subsetEquals(loaded, scope: .ci), "Saved CI panel must now be clean")
+        XCTAssertFalse(draft.subsetEquals(loaded, scope: .settings), "Uncommitted Settings edits must remain dirty")
+        XCTAssertFalse(draft.subsetEquals(loaded, scope: .bark), "Uncommitted Bark edits must remain dirty")
+        XCTAssertEqual(draft.pollSecondsText, "30")
+        XCTAssertEqual(draft.barkGroup, "CustomGroup")
+    }
+
+    @MainActor
+    func testProbeWorkspaceCollapsedHeightDangerContrastAndNarrowSearchModalFit() async throws {
+        // 1. Contrast check for DangerButtonStyle(soft: false) & CapsuleSwitch off-border across Light and Dark
+        for scheme in [ColorSchemeKind.light, ColorSchemeKind.dark] {
+            let pal = DesignPalette.resolve(scheme: scheme, workspace: .probe)
+            XCTAssertGreaterThan(
+                RGBAColor.contrastRatio(pal.errFg, pal.buttonFg),
+                7.0,
+                "DangerButtonStyle(soft: false) contrast must exceed 7:1 in \(scheme)"
+            )
+            XCTAssertGreaterThan(
+                RGBAColor.contrastRatio(pal.textMuted, pal.surface),
+                3.0,
+                "CapsuleSwitch off-state border contrast must exceed 3:1 in \(scheme)"
+            )
+        }
+
+        guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
+            return
+        }
+
+        // 2. Default healthy collapsed ProbeWorkspaceView content height fits inside < 680pt single screen!
+        let suite = "com.lich13.agenthub.probelayout.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let transport = MockRuntimeTransport { cmd, _ in
+            switch cmd {
+            case "remote.get":
+                return Data(#"{"target":"local","revision":0,"sshHost":null,"configured":false,"machines":[]}"#.utf8)
+            case "system.capabilities":
+                return protocol2CapabilitiesFixture(remote: false)
+            case "probe.status":
+                return Data(#"{"available":true,"hook_status":"managed","error_monitor_status":"ok","error_monitor_incident_count":0,"running_count":1,"reply_needed_count":0,"recoverable_count":0}"#.utf8)
+            case "probe.settings.get":
+                return ProbeSettingsFixture.data
+            case "probe.events":
+                return Data(#"{"limit":10,"events":[]}"#.utf8)
+            case "github.ci.status":
+                return Data(#"{"enabled":true,"refreshing":false,"monitored_repositories":["octocat/AgentHub"],"repositories":[],"runs":[]}"#.utf8)
+            case "claude.hooks", "grok.hooks", "antigravity.hooks":
+                return Data(#"{"installed":true,"managedCount":1,"changed":false,"configPath":"~/.config/settings.json"}"#.utf8)
+            case "jobs.list":
+                return Data("[]".utf8)
+            default:
+                return Data("{}".utf8)
+            }
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        await store.bootstrap()
+
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1084, height: 820),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        let host = NSHostingView(
+            rootView: ProbeWorkspaceView(store: store)
+                .environment(\.agentHubPalette, DesignPalette.resolve(scheme: .light, workspace: .probe))
+                .frame(width: 1084, height: 820)
+        )
+        win.contentView = host
+        win.orderBack(nil)
+        try await Task.sleep(nanoseconds: 250_000_000)
+        host.layoutSubtreeIfNeeded()
+
+        func probeScrollDocumentHeight(in view: NSView) -> CGFloat? {
+            if let sv = view as? NSScrollView, let doc = sv.documentView {
+                doc.layoutSubtreeIfNeeded()
+                return doc.fittingSize.height > 0 ? doc.fittingSize.height : doc.bounds.height
+            }
+            for sub in view.subviews {
+                if let h = probeScrollDocumentHeight(in: sub) { return h }
+            }
+            return nil
+        }
+        let collapsedDocHeight = try XCTUnwrap(probeScrollDocumentHeight(in: host))
+        XCTAssertLessThan(collapsedDocHeight, 680.0, "Default healthy ProbeWorkspaceView content must fit under 680pt (got \(collapsedDocHeight)pt)")
+
+        // 3. Narrow 1000x680 SessionSearchModalView fits within 680pt height without vertical overflow
+        let modalHost = NSHostingView(
+            rootView: SessionSearchModalView(
+                store: store,
+                provider: .codex,
+                currentSessionKey: "th-1",
+                onSelectResult: { _ in },
+                onClose: {}
+            )
+            .environment(\.agentHubPalette, DesignPalette.resolve(scheme: .light, workspace: .codex))
+            .frame(width: 1000, height: 680)
+        )
+        modalHost.frame = NSRect(x: 0, y: 0, width: 1000, height: 680)
+        modalHost.layoutSubtreeIfNeeded()
+        XCTAssertEqual(modalHost.bounds.height, 680.0, accuracy: 0.0)
+    }
+
+    func testOutOfOrderSettingsReadIsFencedAfterScopedSaveSucceeds() throws {
+        let initialView = try ProbeSettingsFixture.settings()
+        var sync = ProbeSettingsSyncState(revision: 3)
+
+        // 1. Initial load populates draft & baseline
+        let f0 = sync.beginSettingsRead()
+        XCTAssertTrue(sync.applyLoadedSettings(initialView, readFence: f0, revision: 3))
+        XCTAssertEqual(sync.draft?.barkServerUrl, initialView.notifications.serverUrl)
+
+        // 2. User edits Bark server URL AND leaves an uncommitted edit in CI panel
+        sync.draft?.barkServerUrl = "https://bark.example.invalid"
+        sync.draft?.githubCiRepositories = ["org/uncommitted"]
+        let submitted = try XCTUnwrap(sync.draft)
+
+        // 3. Concurrent refreshAll starts `probe.settings.get` BEFORE `saveSettings` finishes
+        let staleReadFence = sync.beginSettingsRead()
+
+        // 4. `saveSettings(scope: .bark)` finishes FIRST with updated server URL
+        var savedView = initialView
+        savedView.notifications.serverUrl = "https://bark.example.invalid"
+        sync.applySavedSettings(savedView, submittedDraft: submitted, scope: .bark, revision: 3)
+        XCTAssertEqual(sync.draft?.barkServerUrl, "https://bark.example.invalid")
+        XCTAssertEqual(sync.loadedDraft?.barkServerUrl, "https://bark.example.invalid")
+        XCTAssertEqual(sync.draft?.githubCiRepositories, ["org/uncommitted"])
+
+        // 5. In-flight stale `probe.settings.get` returns AFTER save (carrying old serverUrl!)
+        //    Must be fenced/rejected so the newly saved `.bark` subset is NOT overwritten!
+        XCTAssertFalse(sync.applyLoadedSettings(initialView, readFence: staleReadFence, revision: 3))
+        XCTAssertFalse(sync.applySettingsReadError("transient read error", readFence: staleReadFence))
+        XCTAssertNil(sync.settingsError)
+        XCTAssertEqual(sync.draft?.barkServerUrl, "https://bark.example.invalid")
+        XCTAssertEqual(sync.loadedDraft?.barkServerUrl, "https://bark.example.invalid")
+        XCTAssertEqual(sync.draft?.githubCiRepositories, ["org/uncommitted"])
+
+        // 6. A fresh read started AFTER the save succeeds and preserves dirty `.ci` while keeping `.bark`
+        let freshFence = sync.beginSettingsRead()
+        XCTAssertTrue(sync.applyLoadedSettings(savedView, readFence: freshFence, revision: 3))
+        XCTAssertEqual(sync.draft?.barkServerUrl, "https://bark.example.invalid")
+        XCTAssertEqual(sync.draft?.githubCiRepositories, ["org/uncommitted"])
+
+        // 7. Hook install/remove flag updates also advance `settingsFence` so stale reads cannot revert `manageStopHook`
+        let staleHookFence = sync.beginSettingsRead()
+        sync.applyHookManageFlag(true)
+        XCTAssertEqual(sync.draft?.manageStopHook, true)
+        var oldHookView = savedView
+        oldHookView.probe.hooks.manageStopHook = false
+        XCTAssertFalse(sync.applyLoadedSettings(oldHookView, readFence: staleHookFence, revision: 3))
+        XCTAssertEqual(sync.draft?.manageStopHook, true)
+    }
+
+    @MainActor
+    func testMissingTrackedJobPublishesTerminalEntryAndClearsActiveBusyState() async throws {
+        let suite = "com.lich13.agenthub.missingjob.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let transport = MockRuntimeTransport { cmd, payload in
+            if cmd == "remote.get" {
+                return Data(#"{"target":"local","revision":0,"sshHost":null,"configured":false,"machines":[]}"#.utf8)
+            }
+            if cmd == "jobs.detail" {
+                if payload.contains("job-null") {
+                    return Data("null".utf8)
+                }
+                if payload.contains("job-404") {
+                    throw AgentHubFFIError("job not found: job-404")
+                }
+            }
+            return Data("{}".utf8)
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        store.trackStartedJob("job-null")
+        store.trackStartedJob("job-404")
+        XCTAssertTrue(store.isTrackedJobActive("job-null"))
+        XCTAssertTrue(store.isTrackedJobActive("job-404"))
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        XCTAssertFalse(store.isTrackedJobActive("job-null"), "nil jobs.detail must clear active job busy state")
+        XCTAssertFalse(store.isTrackedJobActive("job-404"), "job not found must clear active job busy state")
+        XCTAssertEqual(store.trackedJobs["job-null"]?.isTerminal, true)
+        XCTAssertEqual(store.trackedJobs["job-404"]?.isTerminal, true)
+    }
+
+    func testParsedUserMessageCacheCountsContextBlocksAndEnforcesTotalByteBudget() {
+        UserContextEngine._resetParsedCacheForTesting()
+        defer { UserContextEngine._resetParsedCacheForTesting() }
+
+        // 1. Short `text` with > 256 KiB `contextBlocks` must NOT be cached
+        let oversizedContext = [
+            UserContextBlock(kind: "files", text: String(repeating: "x", count: 300_000)),
+        ]
+        let (projBig, _) = UserContextEngine.projectAndSegmentUserMessage(
+            "fix this",
+            contextBlocks: oversizedContext
+        )
+        XCTAssertEqual(projBig.text, "fix this")
+        XCTAssertEqual(projBig.contextBlocks.count, 1)
+        let afterOversized = UserContextEngine._parsedCacheStatsForTesting()
+        XCTAssertEqual(afterOversized.count, 0, "oversized contextBlocks entry must bypass parsedCache")
+        XCTAssertEqual(afterOversized.totalBytes, 0)
+
+        // 2. Inserting 100 x ~120 KiB entries (~12 MiB > 8 MiB budget) evicts oldest LRU entries within 8 MiB
+        let mediumChunk = String(repeating: "a", count: 120_000)
+        for idx in 0..<100 {
+            _ = UserContextEngine.projectAndSegmentUserMessage(
+                "msg-\(idx)",
+                contextBlocks: [UserContextBlock(kind: "instructions", text: "\(idx)-\(mediumChunk)")]
+            )
+        }
+        let stats = UserContextEngine._parsedCacheStatsForTesting()
+        XCTAssertGreaterThan(stats.count, 0)
+        XCTAssertLessThan(stats.count, 100, "LRU eviction must trim entries before 256 count cap when 8 MiB budget is reached")
+        XCTAssertLessThanOrEqual(stats.totalBytes, 8 * 1_048_576, "parsedCache total bytes must never exceed 8 MiB")
+    }
+
+    @MainActor
+    func testCellConfigSignatureReconfiguresWhenImageAttachmentBeyondIndex64FinishesLoading() async throws {
+        let suite = "com.lich13.agenthub.att64.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let transport = MockRuntimeTransport { cmd, _ in
+            if cmd == "sessions.attachmentRead" {
+                throw AgentHubFFIError("deferred")
+            }
+            return Data("{}".utf8)
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        let coordinator = ConversationTableCoordinator(store: store)
+        coordinator.sessionScopeKey = "local::codex::s64"
+        coordinator.attachmentViewport.resetScope("local::codex::s64")
+
+        let attachments = (0..<70).map { idx in
+            UserAttachment(
+                id: "att-\(idx)",
+                name: "img-\(idx).png",
+                kind: "image"
+            )
+        }
+        let item = ConversationRowItem(
+            id: "u-70",
+            timelineId: "u-70",
+            kind: .user(
+                message: UserMessageContent(id: "u-70", text: "70 attachments", attachments: attachments),
+                rawText: "70 attachments",
+                attachmentsAsNamesOnly: false
+            )
+        )
+
+        let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("test-att-65"))
+        cell.configure(
+            item: item,
+            leadingInset: 24,
+            trailingInset: 24,
+            contentWidth: 680,
+            highlighted: false,
+            coordinator: coordinator
+        )
+        try await Task.sleep(nanoseconds: 40_000_000)
+
+        let stateBefore = coordinator.loadedAttachmentState(for: item)
+        XCTAssertEqual(stateBefore.lowMask, 0)
+        XCTAssertTrue(stateBefore.overflowIndices.isEmpty)
+
+        // Now allow ONLY attachment at index 65 (>= 64) to succeed!
+        transport.setHandler { cmd, payload in
+            if cmd == "sessions.attachmentRead", payload.contains("att-65") {
+                return Data(#"{"mimeType":"image/png","base64":"\#(oneByOnePngBase64)"}"#.utf8)
+            }
+            if cmd == "sessions.attachmentRead" {
+                throw AgentHubFFIError("deferred")
+            }
+            return Data("{}".utf8)
+        }
+        let req65 = SessionAttachmentRequest(
+            provider: .codex,
+            sessionKey: "s64",
+            messageId: "u-70",
+            attachmentId: "att-65"
+        )
+        coordinator.attachmentViewport.ensureLoaded(
+            key: "local::codex::s64:u-70:att-65",
+            request: req65,
+            store: store
+        )
+        try await Task.sleep(nanoseconds: 60_000_000)
+
+        let stateAfter = coordinator.loadedAttachmentState(for: item)
+        XCTAssertNotEqual(stateBefore, stateAfter, "Loaded attachment at index >= 64 must change LoadedAttachmentState")
+        XCTAssertEqual(stateAfter.lowMask, 0)
+        XCTAssertEqual(stateAfter.overflowIndices, [65])
+
+        let previousFirstArranged = cell.containerStack.arrangedSubviews.first
+        cell.configure(
+            item: item,
+            leadingInset: 24,
+            trailingInset: 24,
+            contentWidth: 680,
+            highlighted: false,
+            coordinator: coordinator
+        )
+        XCTAssertFalse(
+            cell.containerStack.arrangedSubviews.first === previousFirstArranged,
+            "CellConfigSignature change at attachment index 65 must rebuild cell subviews"
+        )
     }
 
     @MainActor

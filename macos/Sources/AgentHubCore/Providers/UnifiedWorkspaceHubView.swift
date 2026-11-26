@@ -49,27 +49,55 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     public let store: RuntimeConnectionStore
     public let sourceRevision: UInt64
     public let codexThreadStore = ThreadMessageStore()
-    private var observations = Set<AnyCancellable>()
+    private var listFetchSeq: UInt64 = 0
+    private var sidebarCacheRevision: UInt64 = 0
+
+    private struct HubSidebarCache {
+        var revision: UInt64 = .max
+        var filteredActiveItems: [CrossProviderSessionItem] = []
+        var filteredArchivedItems: [CrossProviderSessionItem] = []
+        var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
+        var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
+        var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
+        var visualOrderedActiveKeys: [String] = []
+        var visualOrderedArchivedKeys: [String] = []
+    }
+    private var sidebarCache = HubSidebarCache()
 
     @Published public var query: String = ""
     @Published public var workspaceFilter: ProjectWorkspaceFilter = .all {
         didSet {
-            if oldValue != workspaceFilter { syncPartitionedSelection() }
+            if oldValue != workspaceFilter {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
     @Published public var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
-            if oldValue != collapsedWorkspaceKeys { syncPartitionedSelection() }
+            if oldValue != collapsedWorkspaceKeys {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
     @Published public var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
-            if oldValue != collapsedArchivedWorkspaceKeys { syncPartitionedSelection() }
+            if oldValue != collapsedArchivedWorkspaceKeys {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
-    @Published public var activeItems: [CrossProviderSessionItem] = []
-    @Published public var archivedItems: [CrossProviderSessionItem] = []
-    @Published public var archivedOpen: Bool = false
+    @Published public var activeItems: [CrossProviderSessionItem] = [] {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
+    @Published public var archivedItems: [CrossProviderSessionItem] = [] {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
+    @Published public var archivedOpen: Bool = false {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
     @Published public var selectedCompositeKey: String?
     @Published public var renameRequestSeqByKey: [String: Int] = [:]
     @Published public var providerErrors: [String] = []
@@ -86,58 +114,83 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     public init(store: RuntimeConnectionStore) {
         self.store = store
         self.sourceRevision = store.revision
-        codexThreadStore.objectWillChange
-            .sink { [weak self] in self?.objectWillChange.send() }
-            .store(in: &observations)
+    }
+
+    private func refreshedSidebarCache() -> HubSidebarCache {
+        if sidebarCache.revision == sidebarCacheRevision {
+            return sidebarCache
+        }
+        let filtActive = ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter)
+        let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
+        let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
+        let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
+        let availGrps = ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        let orderedActive = ProjectWorkspaceEngine.visualOrderedKeys(
+            groups: activeGrps,
+            collapsedKeys: collapsedWorkspaceKeys
+        )
+        let orderedArch = ProjectWorkspaceEngine.visualOrderedKeys(
+            groups: archGrps,
+            collapsedKeys: collapsedArchivedWorkspaceKeys
+        )
+        let built = HubSidebarCache(
+            revision: sidebarCacheRevision,
+            filteredActiveItems: filtActive,
+            filteredArchivedItems: filtArch,
+            activeWorkspaceGroups: activeGrps,
+            archivedWorkspaceGroups: archGrps,
+            availableWorkspaceGroups: availGrps,
+            visualOrderedActiveKeys: orderedActive,
+            visualOrderedArchivedKeys: orderedArch
+        )
+        sidebarCache = built
+        return built
     }
 
     public var filteredActiveItems: [CrossProviderSessionItem] {
-        ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter)
+        refreshedSidebarCache().filteredActiveItems
     }
 
     public var filteredArchivedItems: [CrossProviderSessionItem] {
-        ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
+        refreshedSidebarCache().filteredArchivedItems
     }
 
     public var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: filteredActiveItems)
+        refreshedSidebarCache().activeWorkspaceGroups
     }
 
     public var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: filteredArchivedItems)
+        refreshedSidebarCache().archivedWorkspaceGroups
     }
 
     public var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        refreshedSidebarCache().availableWorkspaceGroups
     }
 
     public var visualOrderedActiveKeys: [String] {
-        ProjectWorkspaceEngine.visualOrderedKeys(
-            groups: activeWorkspaceGroups,
-            collapsedKeys: collapsedWorkspaceKeys
-        )
+        refreshedSidebarCache().visualOrderedActiveKeys
     }
 
     public var visualOrderedArchivedKeys: [String] {
-        ProjectWorkspaceEngine.visualOrderedKeys(
-            groups: archivedWorkspaceGroups,
-            collapsedKeys: collapsedArchivedWorkspaceKeys
-        )
+        refreshedSidebarCache().visualOrderedArchivedKeys
     }
 
     public var selectedEntry: CrossProviderSessionItem? {
         if let key = selectedCompositeKey {
-            if let found = (activeItems + archivedItems).first(where: { $0.compositeKey == key }) {
+            if let found = activeItems.first(where: { $0.compositeKey == key })
+                ?? archivedItems.first(where: { $0.compositeKey == key })
+            {
                 return found
             }
             if let searchFallbackEntry, searchFallbackEntry.compositeKey == key {
                 return searchFallbackEntry
             }
         }
+        let cached = refreshedSidebarCache()
         if workspaceFilter != .all || !query.isEmpty {
-            return activeWorkspaceGroups.first?.items.first ?? filteredActiveItems.first
+            return cached.activeWorkspaceGroups.first?.items.first ?? cached.filteredActiveItems.first
         }
-        return activeWorkspaceGroups.first?.items.first ?? filteredActiveItems.first ?? activeItems.first
+        return cached.activeWorkspaceGroups.first?.items.first ?? cached.filteredActiveItems.first ?? activeItems.first
     }
 
     @Published public var searchFallbackEntry: CrossProviderSessionItem?
@@ -216,13 +269,18 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
 
     public func syncPartitionedSelection() {
         let baseScope = "\(store.revision):workspaces:\(query):\(workspaceFilter.scopeToken)"
-        partitionedSelection.sync(
+        let cached = refreshedSidebarCache()
+        var next = partitionedSelection
+        next.sync(
             activeScope: "\(baseScope)#active",
-            activeVisible: visualOrderedActiveKeys,
+            activeVisible: cached.visualOrderedActiveKeys,
             archivedScope: "\(baseScope)#archived",
-            archivedVisible: visualOrderedArchivedKeys,
+            archivedVisible: cached.visualOrderedArchivedKeys,
             archivedOpen: archivedOpen
         )
+        if next != partitionedSelection {
+            partitionedSelection = next
+        }
     }
 
     public func selectAllVisible() {
@@ -261,10 +319,16 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     public func fetchAllSessions() async {
+        listFetchSeq &+= 1
+        let fetchSeq = listFetchSeq
         let requestedQuery = query
         let requestedArchived = archivedOpen
         func isCurrent() -> Bool {
-            !Task.isCancelled && store.revision == sourceRevision && query == requestedQuery && archivedOpen == requestedArchived
+            !Task.isCancelled
+                && listFetchSeq == fetchSeq
+                && store.revision == sourceRevision
+                && query == requestedQuery
+                && archivedOpen == requestedArchived
         }
         guard isCurrent() else { return }
 
@@ -282,7 +346,8 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
             threadStore: tStore
         )
         guard isCurrent() else { return }
-        activeItems = Self.sortMergedItems(mergedActive)
+        let sortedActive = Self.sortMergedItems(mergedActive)
+        if activeItems != sortedActive { activeItems = sortedActive }
 
         var allErrs = activeErrs
         if requestedArchived {
@@ -297,10 +362,11 @@ public final class UnifiedWorkspaceHubStore: ObservableObject {
                 threadStore: tStore
             )
             guard isCurrent() else { return }
-            archivedItems = Self.sortMergedItems(mergedArch)
+            let sortedArch = Self.sortMergedItems(mergedArch)
+            if archivedItems != sortedArch { archivedItems = sortedArch }
             allErrs.append(contentsOf: archErrs)
         }
-        providerErrors = allErrs
+        if providerErrors != allErrs { providerErrors = allErrs }
         syncPartitionedSelection()
     }
 
@@ -678,6 +744,14 @@ public struct UnifiedWorkspaceHubView: View {
     private var sidebarColumn: some View {
         let activePart = hubModel.activeSelectionPartition
         let activeSel = hubModel.partitionedSelection.state(for: activePart)
+        let resolvedSelectedCompositeKey = hubModel.selectedEntry?.compositeKey
+        let activePartState = hubModel.partitionedSelection.active
+        let activeSelectedSet = Set(activePartState.keys)
+        let archivedPartState = hubModel.partitionedSelection.archived
+        let archivedSelectedSet = Set(archivedPartState.keys)
+        let filtActiveCount = hubModel.filteredActiveItems.count
+        let filtArchivedCount = hubModel.filteredArchivedItems.count
+        let activeGroups = hubModel.activeWorkspaceGroups
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 9) {
@@ -694,8 +768,8 @@ public struct UnifiedWorkspaceHubView: View {
                     .foregroundStyle(palette.textPrimary.color)
                     .lineLimit(1)
 
-                Text("\(hubModel.filteredActiveItems.count)")
-                    .font(DesignFonts.tabularBody(11, weight: .medium))
+                Text("\(filtActiveCount)")
+                    .font(DesignFonts.body(11, weight: .medium))
                     .foregroundStyle(palette.accent.color)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 1)
@@ -752,14 +826,14 @@ public struct UnifiedWorkspaceHubView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if hubModel.activeWorkspaceGroups.isEmpty
+                    if activeGroups.isEmpty
                         && hubModel.providerErrors.isEmpty
                         && (!hubModel.query.isEmpty || hubModel.workspaceFilter != .all)
                     {
                         WorkspaceEmptyMatchPlaceholder()
                     }
                     WorkspaceGroupedSessionRows(
-                        groups: hubModel.activeWorkspaceGroups,
+                        groups: activeGroups,
                         collapsedKeys: $hubModel.collapsedWorkspaceKeys,
                         workspaceFilter: $hubModel.workspaceFilter,
                         isArchived: false,
@@ -771,6 +845,9 @@ public struct UnifiedWorkspaceHubView: View {
                         hubRowView(
                             entry,
                             partition: .active,
+                            partState: activePartState,
+                            selectedSet: activeSelectedSet,
+                            resolvedSelectedCompositeKey: resolvedSelectedCompositeKey,
                             subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
                         )
                     }
@@ -778,7 +855,7 @@ public struct UnifiedWorkspaceHubView: View {
                     if hubModel.archivedOpen {
                         WorkspaceArchivedExpandedSection(
                             isOpen: $hubModel.archivedOpen,
-                            archivedCount: hubModel.filteredArchivedItems.count
+                            archivedCount: filtArchivedCount
                         ) {
                             WorkspaceGroupedSessionRows(
                                 groups: hubModel.archivedWorkspaceGroups,
@@ -793,6 +870,9 @@ public struct UnifiedWorkspaceHubView: View {
                                 hubRowView(
                                     entry,
                                     partition: .archived,
+                                    partState: archivedPartState,
+                                    selectedSet: archivedSelectedSet,
+                                    resolvedSelectedCompositeKey: resolvedSelectedCompositeKey,
                                     subtitle: group.subtitlesByItemId[entry.compositeKey] ?? ""
                                 )
                             }
@@ -805,7 +885,7 @@ public struct UnifiedWorkspaceHubView: View {
             if !hubModel.archivedOpen {
                 WorkspaceArchivedClosedFooter(
                     isOpen: $hubModel.archivedOpen,
-                    archivedCount: hubModel.filteredArchivedItems.count
+                    archivedCount: filtArchivedCount
                 )
             }
 
@@ -841,12 +921,14 @@ public struct UnifiedWorkspaceHubView: View {
     private func hubRowView(
         _ entry: CrossProviderSessionItem,
         partition: SessionSelectionPartition,
+        partState: SessionSelectionState,
+        selectedSet: Set<String>,
+        resolvedSelectedCompositeKey: String?,
         subtitle: String
     ) -> some View {
         let item = entry.item
-        let partState = hubModel.partitionedSelection.state(for: partition)
-        let isSelected = (hubModel.selectedEntry?.compositeKey == entry.compositeKey)
-        let isMulti = partState.keys.contains(entry.compositeKey)
+        let isSelected = (resolvedSelectedCompositeKey == entry.compositeKey)
+        let isMulti = selectedSet.contains(entry.compositeKey)
 
         return RenameableSessionRowView(
             sessionKey: entry.compositeKey,
@@ -904,20 +986,6 @@ public struct UnifiedWorkspaceHubView: View {
                 if shouldOpen {
                     hubModel.selectedCompositeKey = entry.compositeKey
                 }
-            },
-            onToggleCheckbox: {
-                guard !hubModel.batchBusy else { return }
-                let visible = (partition == .archived)
-                    ? hubModel.visualOrderedArchivedKeys
-                    : hubModel.visualOrderedActiveKeys
-                _ = hubModel.partitionedSelection.click(
-                    partition: partition,
-                    visible: visible,
-                    key: entry.compositeKey,
-                    click: SessionClick(detail: 1, metaKey: true),
-                    activeKey: hubModel.selectedEntry?.compositeKey
-                )
-                hubModel.clearBatchFeedback()
             },
             onRename: { nextTitle in
                 try await hubModel.performRename(entry: entry, newTitle: nextTitle)

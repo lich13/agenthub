@@ -21,12 +21,12 @@ use agenthub_core::{
     services::{
         cleanup::UnifiedCleanupExecuteRequest,
         plans::PlanSaveRequest,
-        probe::ProbeAction,
+        probe::{ProbeAction, ProbeStatusRequest},
         remote::*,
         search::SessionSearchRequest,
         sessions::{SessionBatchExecuteRequest, SessionBatchRequest},
         settings::ProbeSettingsSaveRequest,
-        use_cases::AgentHubUseCases,
+        use_cases::{AgentHubUseCases, JobDetailRequest, LimitU32Request, QueryLimitRequest},
     },
     user_message::SessionAttachmentRequest,
 };
@@ -52,14 +52,6 @@ struct ThreadDetailOptions {
     full: Option<bool>,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ThreadsListArgs {
-    archived: Option<bool>,
-    q: Option<String>,
-    limit: Option<usize>,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ThreadDetailArgs {
@@ -80,34 +72,6 @@ struct ThreadRenameArgs {
     name: String,
 }
 
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LimitU32Args {
-    limit: Option<u32>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JobDetailArgs {
-    id: String,
-    include_output: Option<bool>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ProbeStatusArgs {
-    refresh: Option<bool>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct GithubCiArgs {
-    #[serde(default)]
-    refresh: Option<bool>,
-    #[serde(default)]
-    cached_only: Option<bool>,
-}
-
 #[derive(Deserialize)]
 struct ProbeSettingsSaveArgs {
     settings: ProbeSettingsSaveRequest,
@@ -118,13 +82,6 @@ struct ProbeSettingsSaveArgs {
 struct ClaudeHooksArgs {
     request: ClaudeHooksRequest,
     provider: Option<HookProvider>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct QueryLimitArgs {
-    q: Option<String>,
-    limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -152,15 +109,6 @@ struct IdOnlyArgs {
 #[serde(rename_all = "camelCase")]
 struct SessionKeyOnlyArgs {
     session_key: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ClaudeDetailArgs {
-    session_key: String,
-    agent_id: Option<String>,
-    limit: Option<usize>,
-    before: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -195,6 +143,7 @@ mod providers;
 
 macro_rules! desktop_handlers {
     ($( $id:path => $domain:ident::$handler:ident, )*) => {
+        #[cfg(test)]
         pub const REGISTERED_COMMAND_ENTRIES: &[(&str, &str)] = &[
             $(($id, concat!("dispatch::", stringify!($domain), "::", stringify!($handler))),)*
         ];

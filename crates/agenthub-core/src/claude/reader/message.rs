@@ -19,15 +19,19 @@ impl Parser {
         };
         if !content.is_array() && !content.is_string() {
             issue(&mut self.parsed, "消息正文格式未知，改名已禁用");
-            let mut e = event(
-                key,
-                record,
-                "unknown",
-                Some("未知消息正文".into()),
-                &self.turn,
-            );
-            e.detail = Some(printable(content));
-            self.parsed.events.push(Arc::new(e));
+            if self.summary_only {
+                self.saw_any_event = true;
+            } else {
+                let mut e = event(
+                    key,
+                    record,
+                    "unknown",
+                    Some("未知消息正文".into()),
+                    &self.turn,
+                );
+                e.detail = Some(printable(content));
+                self.push_event(e);
+            }
             return;
         }
         let single;
@@ -50,13 +54,17 @@ impl Parser {
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
             {
-                self.parsed.events.push(Arc::new(event(
-                    format!("{key}:plan"),
-                    record,
-                    "plan",
-                    Some(bounded(plan)),
-                    &self.turn,
-                )));
+                if self.summary_only {
+                    self.saw_any_event = true;
+                } else {
+                    self.push_event(event(
+                        format!("{key}:plan"),
+                        record,
+                        "plan",
+                        Some(bounded(plan)),
+                        &self.turn,
+                    ));
+                }
             }
         }
         let intermediate = kind == "assistant"
@@ -81,9 +89,10 @@ impl Parser {
             }
             self.last_assistant_message_id =
                 (!message_id.is_empty() && message_id.len() <= 512).then(|| message_id.into());
-            if intermediate {
+            if intermediate && !self.summary_only && !self.last_assistant_events.is_empty() {
+                let events = Arc::make_mut(&mut self.parsed.events);
                 for &index in &self.last_assistant_events {
-                    Arc::make_mut(&mut self.parsed.events[index]).assistant_phase =
+                    Arc::make_mut(&mut events[index]).assistant_phase =
                         Some(ClaudeAssistantPhase::Intermediate);
                 }
             }
@@ -154,25 +163,29 @@ impl Parser {
                 .map(|block| block.text.as_str())
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            let (role, title) = if body.trim_start().starts_with("<local-command-") {
-                ("local_command", "命令输出")
-            } else if body.trim_start().starts_with("<task-notification>") {
-                ("task_notification", "任务通知")
-            } else {
-                ("native_context", "上下文")
-            };
-            let mut e = event(
-                key.to_owned(),
-                record,
-                if compact { "compaction" } else { "system" },
-                Some(if compact { "压缩摘要" } else { title }.into()),
-                &self.turn,
-            );
-            e.role = Some(role.into());
-            e.detail = Some(bounded(&body));
-            e.user_message = Some(user);
             if !body.trim().is_empty() {
-                self.parsed.events.push(Arc::new(e));
+                if self.summary_only {
+                    self.saw_any_event = true;
+                } else {
+                    let (role, title) = if body.trim_start().starts_with("<local-command-") {
+                        ("local_command", "命令输出")
+                    } else if body.trim_start().starts_with("<task-notification>") {
+                        ("task_notification", "任务通知")
+                    } else {
+                        ("native_context", "上下文")
+                    };
+                    let mut e = event(
+                        key.to_owned(),
+                        record,
+                        if compact { "compaction" } else { "system" },
+                        Some(if compact { "压缩摘要" } else { title }.into()),
+                        &self.turn,
+                    );
+                    e.role = Some(role.into());
+                    e.detail = Some(bounded(&body));
+                    e.user_message = Some(user);
+                    self.push_event(e);
+                }
             }
         } else if user
             .text
@@ -198,10 +211,12 @@ impl Parser {
             self.last_assistant_events.clear();
             self.last_assistant_text = None;
             self.questions.clear();
-            for call in &self.pending {
-                if let Some(index) = self.calls.get(call) {
-                    Arc::make_mut(&mut self.parsed.events[*index]).status =
-                        Some("cancelled".into());
+            if !self.summary_only {
+                let events = Arc::make_mut(&mut self.parsed.events);
+                for call in &self.pending {
+                    if let Some(&index) = self.calls.get(call) {
+                        Arc::make_mut(&mut events[index]).status = Some("cancelled".into());
+                    }
                 }
             }
             self.pending.clear();
@@ -213,7 +228,7 @@ impl Parser {
                 &self.turn,
             );
             e.user_message = Some(user);
-            self.parsed.events.push(Arc::new(e));
+            self.push_event(e);
         } else {
             // Keep earlier terminal events so an incremental polling cursor
             // can catch up after several turns between scans.
@@ -235,7 +250,7 @@ impl Parser {
                 &self.turn,
             );
             e.user_message = Some(user);
-            self.parsed.events.push(Arc::new(e));
+            self.push_event(e);
         }
     }
 
@@ -255,9 +270,15 @@ impl Parser {
                     e.kind = "assistant_message".into();
                     e.text = Some(bounded(field(part, "text")));
                     e.assistant_phase = intermediate.then_some(ClaudeAssistantPhase::Intermediate);
-                    self.last_assistant_events.push(self.parsed.events.len());
+                    if !self.summary_only {
+                        self.last_assistant_events.push(self.parsed.events.len());
+                    }
                 }
                 "thinking" if kind == "assistant" => {
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                     e.kind = "thinking".into();
                     e.text = Some(bounded(field(part, "thinking")));
                 }
@@ -267,6 +288,13 @@ impl Parser {
                     } else {
                         field(part, "tool_name")
                     };
+                    if name.is_empty() {
+                        warning(&mut self.parsed, "工具引用缺少工具名称，已保留为警告");
+                    }
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                     e.kind = "tool_reference".into();
                     e.text = Some(if name.is_empty() {
                         "工具引用".into()
@@ -275,11 +303,12 @@ impl Parser {
                     });
                     e.role = (!name.is_empty()).then(|| name.into());
                     e.detail = Some(printable(part));
-                    if name.is_empty() {
-                        warning(&mut self.parsed, "工具引用缺少工具名称，已保留为警告");
-                    }
                 }
                 "tool_search_tool_result" => {
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                     e.kind = "tool_reference".into();
                     e.text = Some("工具引用结果".into());
                     e.detail = part.get("content").map(printable);
@@ -288,13 +317,21 @@ impl Parser {
                     continue;
                 }
                 "tool_use" if kind == "assistant" => {
-                    self.read_tool_use(record, position, part, &mut e)
+                    self.read_tool_use(record, position, part, &mut e);
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                 }
                 "tool_result" => {
                     let call = field(part, "tool_use_id");
                     self.pending.remove(call);
                     self.questions.remove(call);
                     self.settle_permission(call);
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                     let result = part
                         .get("content")
                         .map(|c| {
@@ -310,13 +347,13 @@ impl Parser {
                     } else {
                         "completed"
                     };
-                    if let Some(index) = self.calls.get(call) {
+                    if let Some(&index) = self.calls.get(call) {
                         if !self.context.accepts_sidechain()
-                            && self.parsed.events[*index].role.as_deref() == Some("Agent")
+                            && self.parsed.events[index].role.as_deref() == Some("Agent")
                         {
-                            if let Some(result) = record.get("toolUseResult") {
-                                let agent_id = field(result, "agentId");
-                                let name = field(result, "description");
+                            if let Some(result_obj) = record.get("toolUseResult") {
+                                let agent_id = field(result_obj, "agentId");
+                                let name = field(result_obj, "description");
                                 if !agent_id.is_empty() && !name.trim().is_empty() {
                                     self.parsed
                                         .agent_names
@@ -324,7 +361,8 @@ impl Parser {
                                 }
                             }
                         }
-                        let prior = Arc::make_mut(&mut self.parsed.events[*index]);
+                        let events = Arc::make_mut(&mut self.parsed.events);
+                        let prior = Arc::make_mut(&mut events[index]);
                         prior.status = Some(status.into());
                         prior.result = Some(result);
                         continue;
@@ -337,13 +375,17 @@ impl Parser {
                 }
                 "text" | "image" | "document" if kind == "user" => continue,
                 _ => {
+                    warning(&mut self.parsed, "存在未知内容块，已保留为警告");
+                    if self.summary_only {
+                        self.saw_any_event = true;
+                        continue;
+                    }
                     e.kind = "unknown".into();
                     e.text = Some("未知内容块".into());
                     e.detail = Some(printable(part));
-                    warning(&mut self.parsed, "存在未知内容块，已保留为警告");
                 }
             }
-            self.parsed.events.push(Arc::new(e));
+            self.push_event(e);
         }
     }
 
@@ -356,17 +398,19 @@ impl Parser {
     ) {
         let call = field(part, "id");
         let name = field(part, "name");
-        e.kind = "tool_call".into();
-        e.text = Some(name.into());
-        e.role = Some(name.into());
-        e.call_id = Some(call.into());
-        e.status = Some("in_progress".into());
-        e.detail = part.get("input").map(printable);
         if call.is_empty() {
             issue(&mut self.parsed, "工具调用身份缺失，改名已禁用");
         }
         self.pending.insert(call.into());
-        self.calls.insert(call.into(), self.parsed.events.len());
+        if !self.summary_only {
+            e.kind = "tool_call".into();
+            e.text = Some(name.into());
+            e.role = Some(name.into());
+            e.call_id = Some(call.into());
+            e.status = Some("in_progress".into());
+            e.detail = part.get("input").map(printable);
+            self.calls.insert(call.into(), self.parsed.events.len());
+        }
         if name == "AskUserQuestion" && !call.is_empty() {
             if let (Some(turn), Some(ts), Some(qs)) = (
                 &self.turn,

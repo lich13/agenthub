@@ -4,95 +4,116 @@ public struct JobHistorySectionView: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
     public var title: String
+    private var externalExpanded: Binding<Bool>?
 
-    @State private var isExpanded: Bool = false
+    @State private var internalExpanded: Bool = false
     @State private var jobs: [JobRecord] = []
     @State private var errorMessage: String?
     @State private var expandedJobIds: Set<String> = []
+    @State private var lastMachineScope: String = ""
 
-    public init(store: RuntimeConnectionStore, title: String = "执行记录") {
+    public init(
+        store: RuntimeConnectionStore,
+        title: String = "执行记录",
+        isExpanded: Binding<Bool>? = nil
+    ) {
         self.store = store
         self.title = title
+        self.externalExpanded = isExpanded
+    }
+
+    private var expandedBinding: Binding<Bool> {
+        externalExpanded ?? $internalExpanded
+    }
+
+    private var isExpanded: Bool {
+        expandedBinding.wrappedValue
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Button {
-                isExpanded.toggle()
-            } label: {
-                HStack(spacing: 8) {
-                    LucideIcon(isExpanded ? .chevronDown : .chevronRight, size: 15)
-                        .foregroundStyle(palette.textMuted.color)
-                    Text(title)
-                        .font(DesignFonts.body(13, weight: .semibold))
-                        .foregroundStyle(palette.textPrimary.color)
-                    if !jobs.isEmpty {
-                        StatusChip("\(jobs.count)", tone: .neutral)
-                    }
-                    Spacer()
+        CollapsiblePanelCard(
+            title: title,
+            icon: .terminalSquare,
+            isExpanded: expandedBinding,
+            summaryBadges: {
+                if !jobs.isEmpty {
+                    StatusChip("\(jobs.count)", tone: .neutral)
                 }
-                .padding(.vertical, 6)
+                if let latest = jobs.first, latest.status == "running" {
+                    StatusChip("运行中", tone: .warning)
+                } else if let latest = jobs.first, latest.status == "failed" {
+                    StatusChip("失败", tone: .danger)
+                }
             }
-            .buttonStyle(PlainHitButtonStyle())
-
-            if isExpanded {
-                PanelCard(title: title, icon: .terminalSquare) {
-                    if let errorMessage, !errorMessage.isEmpty {
-                        Text(errorMessage)
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.errFg.color)
-                    }
-                    if jobs.isEmpty {
-                        Text("暂无作业记录")
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.textMuted.color)
-                    } else {
-                        VStack(spacing: 8) {
-                            ForEach(jobs) { job in
-                                JobRecordRowView(
-                                    store: store,
-                                    job: job,
-                                    expanded: expandedJobIds.contains(job.id),
-                                    onToggle: {
-                                        if expandedJobIds.contains(job.id) {
-                                            expandedJobIds.remove(job.id)
-                                        } else {
-                                            expandedJobIds.insert(job.id)
-                                        }
-                                    }
-                                )
+        ) {
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.errFg.color)
+            }
+            if jobs.isEmpty {
+                Text("暂无作业记录")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.textMuted.color)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(jobs) { job in
+                        JobRecordRowView(
+                            store: store,
+                            job: job,
+                            expanded: expandedJobIds.contains(job.id),
+                            onToggle: {
+                                if expandedJobIds.contains(job.id) {
+                                    expandedJobIds.remove(job.id)
+                                } else {
+                                    expandedJobIds.insert(job.id)
+                                }
                             }
-                        }
+                        )
                     }
                 }
-                .task(id: "\(store.machineScope):\(isExpanded)") {
-                    guard isExpanded else { return }
+            }
+        }
+        .task(id: store.machineScope) {
+            if lastMachineScope != store.machineScope {
+                lastMachineScope = store.machineScope
+                jobs = []
+                errorMessage = nil
+                expandedJobIds = []
+                if externalExpanded == nil {
+                    internalExpanded = false
+                }
+            }
+        }
+        .task(id: "\(store.machineScope):\(isExpanded)") {
+            guard isExpanded else { return }
+            await refreshJobs()
+            while !Task.isCancelled && isExpanded {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled && isExpanded else { break }
+                if store.isWindowVisible {
                     await refreshJobs()
-                    while !Task.isCancelled && isExpanded {
-                        try? await Task.sleep(nanoseconds: 5_000_000_000)
-                        guard !Task.isCancelled && isExpanded else { break }
-                        if store.isWindowVisible {
-                            await refreshJobs()
-                        }
-                    }
                 }
             }
         }
     }
 
     private func refreshJobs() async {
+        let rev = store.revision
         do {
             let rows: [JobRecord] = try await store.rpc(
                 "jobs.list",
-                args: ["limit": .number(30)]
+                args: ["limit": .number(30)],
+                at: rev
             )
+            guard store.revision == rev else { return }
             jobs = rows
             errorMessage = nil
         } catch {
+            guard store.revision == rev else { return }
             errorMessage = error.localizedDescription
         }
     }
-
 }
 
 public struct JobRecordRowView: View {
@@ -154,7 +175,7 @@ public struct JobRecordRowView: View {
                         .padding(10)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .task(id: job.status) { await fetchOutput() }
+                .task(id: "\(store.machineScope):\(job.id):\(job.status)") { await fetchOutput() }
                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.codeBg.color))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
             }
@@ -165,22 +186,25 @@ public struct JobRecordRowView: View {
     }
 
     private func fetchOutput() async {
+        let rev = store.revision
         repeat {
             loading = true
             do {
                 let record: JobRecord? = try await store.rpc(
-                    "jobs.detail", args: ["id": .string(job.id), "includeOutput": .bool(true)]
+                    "jobs.detail",
+                    args: ["id": .string(job.id), "includeOutput": .bool(true)],
+                    at: rev
                 )
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, store.revision == rev else { return }
                 detail = record
                 outputError = nil
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, store.revision == rev else { return }
                 outputError = error.localizedDescription
             }
             loading = false
             guard (detail ?? job).status == "running" else { return }
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-        } while !Task.isCancelled
+        } while !Task.isCancelled && store.revision == rev
     }
 }

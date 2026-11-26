@@ -68,3 +68,61 @@ fn double_rename_failure_retains_previous_bundle_and_reports_location() {
     assert!(error.contains(backup.to_str().unwrap()));
     assert_eq!(std::fs::read(backup.join("previous")).unwrap(), b"old");
 }
+
+#[test]
+fn desktop_update_status_finds_recent_check_job_past_twenty_five_unrelated_jobs() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let platform = PlatformPaths::macos(&home);
+    let db = agenthub_core::db::PanelDb::open_with_secret_box(
+        root.path().join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"22".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let config = agenthub_core::config::Config::for_platform_kind_with_home(
+        agenthub_core::platform::PlatformKind::Macos,
+        &home,
+    );
+    let state = DesktopState::new(config, db, platform);
+
+    state
+        .db
+        .create_job(
+            "check-1",
+            "agenthub_update_check",
+            "AgentHub app update check",
+        )
+        .unwrap();
+    state
+        .db
+        .append_job_output(
+            "check-1",
+            "checking signed app updater feed\nno signed app update available\n",
+        )
+        .unwrap();
+    state
+        .db
+        .finish_job("check-1", "succeeded", Some(0), None)
+        .unwrap();
+
+    for idx in 0..30 {
+        let jid = format!("unrelated-{idx:02}");
+        state
+            .db
+            .create_job(&jid, "probe_bark_test", "Bark test")
+            .unwrap();
+        state
+            .db
+            .finish_job(&jid, "succeeded", Some(0), None)
+            .unwrap();
+    }
+
+    let status = desktop_update_status_with_state(&state, None, None).unwrap();
+    assert_eq!(status.state, UpdateState::Idle);
+    assert_eq!(status.update_available, Some(false));
+    assert_eq!(
+        status.latest_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+}

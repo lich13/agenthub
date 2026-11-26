@@ -665,7 +665,7 @@ final class WorkspaceGroupingAndHubTests: XCTestCase {
                 return Data(#"{"target":"local","revision":1,"sshHost":null,"configured":false,"activeMachineId":null,"activeMachineName":null,"machines":[]}"#.utf8)
             }
             if cmd == "system.capabilities" {
-                return Data(#"{"protocol":2,"host":"desktop_embedded_tauri","capabilities":{"codex_sessions":true}}"#.utf8)
+                return protocol2CapabilitiesFixture(remote: false)
             }
             return Data("[]".utf8)
         }

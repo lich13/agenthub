@@ -157,6 +157,7 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
         select(&["archived_at"]),
         MAX_RECORDS + 1
     );
+    let tz = jiff::tz::TimeZone::system();
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt
         .query_map([], |row| {
@@ -180,7 +181,7 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
                         .get::<_, super::thread_rows::ValueCell>(11)
                         .ok()
                         .as_ref()
-                        .and_then(super::thread_rows::format_cell_time)
+                        .and_then(|c| super::thread_rows::format_cell_time_with_tz(c, &tz))
                         .is_some(),
                 parents,
                 path: row
@@ -197,7 +198,11 @@ fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
                     .get::<_, Option<String>>(7)?
                     .or_else(|| field(source, &["agent_role"])),
                 cwd: row.get(8)?,
-                updated_at: row.get::<_, Option<String>>(9).unwrap_or_default(),
+                updated_at: row
+                    .get::<_, Option<super::thread_rows::ValueCell>>(9)
+                    .ok()
+                    .flatten()
+                    .and_then(|c| super::thread_rows::format_cell_time_with_tz(&c, &tz)),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

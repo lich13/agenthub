@@ -42,6 +42,14 @@ CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at
 CREATE INDEX IF NOT EXISTS idx_native_probe_claude_session
  ON native_probe_deliveries(json_extract(event_json,'$.session_key'))
  WHERE provider='claude_code' AND json_valid(event_json);
+CREATE INDEX IF NOT EXISTS idx_probe_events_dedupe_created
+ ON probe_events(dedupe_key, created_at DESC)
+ WHERE dedupe_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_pending
+ ON probe_error_incidents(created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC)
+ WHERE bark_status='pending';
+CREATE INDEX IF NOT EXISTS idx_probe_dedupe_expires_at
+ ON probe_dedupe(expires_at);
 ";
 
 const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
@@ -80,6 +88,21 @@ const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
         "native_probe_deliveries",
         "CREATE INDEX IF NOT EXISTS idx_native_probe_claude_session ON native_probe_deliveries(json_extract(event_json,'$.session_key')) WHERE provider='claude_code' AND json_valid(event_json);",
     ),
+    (
+        "idx_probe_events_dedupe_created",
+        "probe_events",
+        "CREATE INDEX IF NOT EXISTS idx_probe_events_dedupe_created ON probe_events(dedupe_key, created_at DESC) WHERE dedupe_key IS NOT NULL;",
+    ),
+    (
+        "idx_probe_error_incidents_pending",
+        "probe_error_incidents",
+        "CREATE INDEX IF NOT EXISTS idx_probe_error_incidents_pending ON probe_error_incidents(created_at ASC, source_ts ASC, source_ts_nanos ASC, source_row_id ASC) WHERE bark_status='pending';",
+    ),
+    (
+        "idx_probe_dedupe_expires_at",
+        "probe_dedupe",
+        "CREATE INDEX IF NOT EXISTS idx_probe_dedupe_expires_at ON probe_dedupe(expires_at);",
+    ),
 ];
 
 #[derive(Clone)]
@@ -87,6 +110,7 @@ pub struct PanelDb {
     path: PathBuf,
     conn: Arc<Mutex<Connection>>,
     crypto: SecretBox,
+    delivery_scan_cursor: Arc<Mutex<Option<(i64, String)>>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -156,6 +180,7 @@ impl PanelDb {
             path,
             conn: Arc::new(Mutex::new(conn)),
             crypto,
+            delivery_scan_cursor: Arc::new(Mutex::new(None)),
         };
         db.migrate()?;
         {
@@ -350,13 +375,10 @@ impl PanelDb {
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            "SELECT value FROM settings WHERE key=?1",
-            params![key],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+        let mut stmt = conn.prepare_cached("SELECT value FROM settings WHERE key=?1")?;
+        stmt.query_row(params![key], |row| row.get(0))
+            .optional()
+            .map_err(Into::into)
     }
 
     pub(crate) fn with_transaction<T>(
@@ -372,24 +394,22 @@ impl PanelDb {
 
     fn get_setting_with_updated_at(&self, key: &str) -> Result<Option<(String, i64)>> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
-            "SELECT value, updated_at FROM settings WHERE key=?1",
-            params![key],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(Into::into)
+        let mut stmt =
+            conn.prepare_cached("SELECT value, updated_at FROM settings WHERE key=?1")?;
+        stmt.query_row(params![key], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        let mut stmt = conn.prepare_cached(
             r#"
             INSERT INTO settings(key, value, updated_at) VALUES(?1, ?2, ?3)
             ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
             "#,
-            params![key, value, Self::now()],
         )?;
+        stmt.execute(params![key, value, Self::now()])?;
         Ok(())
     }
 
@@ -621,11 +641,38 @@ impl PanelDb {
 
     pub fn list_jobs(&self, limit: u32) -> Result<Vec<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, kind, status, title, started_at, finished_at, exit_code, '' AS output, error FROM jobs ORDER BY started_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], job_from_row)?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn latest_job_by_kinds(
+        &self,
+        kinds: &[&str],
+        include_output: bool,
+    ) -> Result<Option<JobRecord>> {
+        if kinds.is_empty() {
+            return Ok(None);
+        }
+        let placeholders = (0..kinds.len())
+            .map(|idx| format!("?{}", idx + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, kind, status, title, started_at, finished_at, exit_code, CASE WHEN ?1 THEN output ELSE '' END, error FROM jobs WHERE kind IN ({placeholders}) ORDER BY started_at DESC, rowid DESC LIMIT 1"
+        );
+        let conn = self.conn.lock().expect("db mutex");
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(kinds.len() + 1);
+        bound.push(&include_output);
+        for kind in kinds {
+            bound.push(kind);
+        }
+        stmt.query_row(bound.as_slice(), job_from_row)
+            .optional()
             .map_err(Into::into)
     }
 
@@ -635,13 +682,12 @@ impl PanelDb {
 
     pub fn job_with_output(&self, id: &str, include_output: bool) -> Result<Option<JobRecord>> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.query_row(
+        let mut stmt = conn.prepare_cached(
             "SELECT id, kind, status, title, started_at, finished_at, exit_code, CASE WHEN ?2 THEN output ELSE '' END, error FROM jobs WHERE id=?1",
-            params![id, include_output],
-            job_from_row,
-        )
-        .optional()
-        .map_err(Into::into)
+        )?;
+        stmt.query_row(params![id, include_output], job_from_row)
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn record_probe_event(&self, event: NewProbeEvent<'_>) -> Result<ProbeEvent> {
@@ -649,25 +695,25 @@ impl PanelDb {
         let now = Self::now();
         let payload_json = event.payload.to_string();
         let conn = self.conn.lock().expect("db mutex");
-        conn.execute(
+        let mut stmt = conn.prepare_cached(
             r#"
             INSERT INTO probe_events(
               id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
             )
             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             "#,
-            params![
-                id,
-                event.kind,
-                event.thread_id,
-                event.title,
-                event.message,
-                event.dedupe_key,
-                event.source,
-                payload_json,
-                now,
-            ],
         )?;
+        stmt.execute(params![
+            id,
+            event.kind,
+            event.thread_id,
+            event.title,
+            event.message,
+            event.dedupe_key,
+            event.source,
+            payload_json,
+            now,
+        ])?;
         Ok(ProbeEvent {
             id,
             kind: event.kind.to_string(),
@@ -683,7 +729,7 @@ impl PanelDb {
 
     pub fn list_probe_events(&self, limit: u32) -> Result<Vec<ProbeEvent>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare_cached(
             r#"
             SELECT id, kind, thread_id, title, message, dedupe_key, source, payload_json, created_at
             FROM probe_events
@@ -696,15 +742,25 @@ impl PanelDb {
             .map_err(Into::into)
     }
 
+    pub fn has_probe_dedupe(&self, namespace: &str, dedupe_key: &str) -> Result<bool> {
+        let now = Self::now();
+        let conn = self.conn.lock().expect("db mutex");
+        let mut stmt = conn.prepare_cached(
+            "SELECT EXISTS(SELECT 1 FROM probe_dedupe WHERE namespace=?1 AND dedupe_key=?2 AND expires_at>?3)",
+        )?;
+        stmt.query_row(params![namespace, dedupe_key, now], |r| r.get(0))
+            .map_err(Into::into)
+    }
+
     pub fn claim_probe_dedupe(
         &self,
         namespace: &str,
         dedupe_key: &str,
         ttl_seconds: i64,
     ) -> Result<bool> {
-        let now = Self::now();
         let conn = self.conn.lock().expect("db mutex");
-        let changed = conn.execute(
+        let now = Self::now();
+        let mut stmt = conn.prepare_cached(
             r#"
             INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
             VALUES(?1, ?2, ?3, ?4)
@@ -712,15 +768,20 @@ impl PanelDb {
             SET expires_at = excluded.expires_at, created_at = excluded.created_at
             WHERE probe_dedupe.expires_at <= excluded.created_at
             "#,
-            params![namespace, dedupe_key, now + ttl_seconds.max(1), now],
         )?;
+        let changed = stmt.execute(params![
+            namespace,
+            dedupe_key,
+            now + ttl_seconds.max(1),
+            now
+        ])?;
         Ok(changed > 0)
     }
 
     pub fn claim_probe_error_incident(&self, incident: &NewProbeErrorIncident) -> Result<bool> {
-        let now = Self::now();
         let conn = self.conn.lock().expect("db mutex");
-        Ok(conn.execute(
+        let now = Self::now();
+        let mut stmt = conn.prepare_cached(
             r#"
             INSERT OR IGNORE INTO probe_error_incidents(
               incident_key, source_ts, source_ts_nanos, source_row_id,
@@ -728,27 +789,25 @@ impl PanelDb {
               bark_status, created_at, updated_at
             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?10)
             "#,
-            params![
-                incident.incident_key,
-                incident.source_ts,
-                incident.source_ts_nanos,
-                incident.source_row_id,
-                incident.thread_id,
-                incident.turn_id,
-                incident.classification,
-                incident.error_sha256,
-                incident.error_summary,
-                now,
-            ],
-        )? == 1)
+        )?;
+        Ok(stmt.execute(params![
+            incident.incident_key,
+            incident.source_ts,
+            incident.source_ts_nanos,
+            incident.source_row_id,
+            incident.thread_id,
+            incident.turn_id,
+            incident.classification,
+            incident.error_sha256,
+            incident.error_summary,
+            now,
+        ])? == 1)
     }
 
     pub fn probe_error_incident_count(&self) -> Result<u64> {
         let conn = self.conn.lock().expect("db mutex");
-        conn.query_row("SELECT COUNT(*) FROM probe_error_incidents", [], |row| {
-            row.get(0)
-        })
-        .map_err(Into::into)
+        let mut stmt = conn.prepare_cached("SELECT COUNT(*) FROM probe_error_incidents")?;
+        stmt.query_row([], |row| row.get(0)).map_err(Into::into)
     }
 
     pub fn list_pending_probe_error_deliveries(
@@ -756,7 +815,7 @@ impl PanelDb {
         limit: u32,
     ) -> Result<Vec<ProbeErrorIncident>> {
         let conn = self.conn.lock().expect("db mutex");
-        let mut statement = conn.prepare(
+        let mut statement = conn.prepare_cached(
             r#"
             SELECT incident_key, source_ts, source_ts_nanos, source_row_id,
                    thread_id, turn_id, classification, error_sha256, error_summary,

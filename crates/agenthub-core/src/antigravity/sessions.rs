@@ -584,33 +584,36 @@ fn read_transcript_tail_rows(
     let tail_cap: u64 = 256 * 1024;
     let skip_partial = len > tail_cap;
     if skip_partial {
-        let _ = file.seek(SeekFrom::Start(len - tail_cap));
+        file.seek(SeekFrom::Start(len - tail_cap)).ok()?;
     }
     let mut reader = BufReader::new(file);
     if skip_partial {
-        let _ = prompt::drain_until_newline(&mut reader);
+        prompt::drain_until_newline(&mut reader).ok()?;
     }
     let mut rows = Vec::new();
-    let _ = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+    prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
         rows.push(row);
         std::ops::ControlFlow::Continue(())
-    });
+    })
+    .ok()?;
     let arc_rows = std::sync::Arc::new(rows);
-    if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if map.len() >= 64 && !map.contains_key(&chosen) {
-            if let Some(oldest) = map
-                .iter()
-                .min_by_key(|(_, (_, _, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest);
+    if cli_meta::AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = TRANSCRIPT_TAIL_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 64 && !map.contains_key(&chosen) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
             }
+            map.insert(
+                chosen.clone(),
+                (stamp, arc_rows.clone(), std::time::Instant::now()),
+            );
         }
-        map.insert(
-            chosen.clone(),
-            (stamp, arc_rows.clone(), std::time::Instant::now()),
-        );
     }
     Some((chosen, arc_rows))
 }
@@ -647,7 +650,7 @@ pub(crate) fn extract_transcript_spawned_subagents(
     };
     let mut reader = BufReader::new(file);
     let mut spawned = BTreeSet::new();
-    let _ = prompt::for_each_bounded_jsonl_line(&mut reader, |line| {
+    let read_ok = prompt::for_each_bounded_jsonl_line(&mut reader, |line| {
         if line.windows(14).any(|w| w == b"conversationId")
             || line.windows(15).any(|w| w == b"conversation_id")
         {
@@ -658,21 +661,24 @@ pub(crate) fn extract_transcript_spawned_subagents(
             }
         }
         std::ops::ControlFlow::Continue(())
-    });
+    })
+    .is_ok();
     spawned.remove(id);
     let result: Vec<String> = spawned.into_iter().collect();
-    if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if map.len() >= 512 && !map.contains_key(&chosen) {
-            if let Some(oldest) = map
-                .iter()
-                .min_by_key(|(_, (_, _, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest);
+    if read_ok && cli_meta::AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = TRANSCRIPT_SPAWNED_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&chosen) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
             }
+            map.insert(chosen, (stamp, result.clone(), std::time::Instant::now()));
         }
-        map.insert(chosen, (stamp, result.clone(), std::time::Instant::now()));
     }
     result
 }
@@ -690,79 +696,82 @@ fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'
             }
         }
     }
-    let status = inspect_conv_db_steps_status_uncached(&db_path);
-    if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if map.len() >= 512 && !map.contains_key(&db_path) {
-            if let Some(oldest) = map
-                .iter()
-                .min_by_key(|(_, (_, _, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest);
+    let status = inspect_conv_db_steps_status_uncached(&db_path).ok()?;
+    if cli_meta::AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = CONV_DB_STEPS_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&db_path) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
             }
+            map.insert(db_path, (stamp, status, std::time::Instant::now()));
         }
-        map.insert(db_path, (stamp, status, std::time::Instant::now()));
     }
     status
 }
 
-fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Option<&'static str> {
-    let mut f = fs::File::open(db_path).ok()?;
-    let mut header = [0u8; 16];
-    if f.read_exact(&mut header).is_err() || &header != b"SQLite format 3\0" {
-        return None;
+fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'static str>> {
+    use std::io::Read;
+    let mut f = match fs::File::open(db_path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut header = Vec::with_capacity(16);
+    (&mut f).take(16).read_to_end(&mut header)?;
+    if header.as_slice() != b"SQLite format 3\0" {
+        return Ok(None);
     }
     drop(f);
     let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    let cols: BTreeSet<String> = conn
-        .prepare("PRAGMA table_info(steps)")
-        .ok()?
-        .query_map([], |row| row.get::<_, String>(1))
-        .ok()?
-        .flatten()
-        .collect();
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
+    let cols: BTreeSet<String> = {
+        let mut s = conn.prepare("PRAGMA table_info(steps)")?;
+        let rows = s.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<rusqlite::Result<BTreeSet<_>>>()?
+    };
     if !cols.contains("idx") || !cols.contains("step_type") || !cols.contains("status") {
-        return None;
+        return Ok(None);
     }
     let mut stmt = conn
-        .prepare("SELECT step_type, COALESCE(status, 0) FROM steps ORDER BY idx DESC LIMIT 64")
-        .ok()?;
+        .prepare("SELECT step_type, COALESCE(status, 0) FROM steps ORDER BY idx DESC LIMIT 64")?;
     let rows: Vec<(i64, i64)> = stmt
-        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-        .ok()?
-        .flatten()
-        .collect();
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     if rows.is_empty() {
-        return None;
+        return Ok(None);
     }
     let mut saw_waiting = false;
     for (pos, &(step_type, status)) in rows.iter().enumerate() {
         // Cortex step status enum: 1 = PENDING, 2 = RUNNING, 7 = ERROR, 8 = GENERATING, 9 = WAITING, 11 = QUEUED
         if matches!(status, 1 | 2 | 8 | 11) {
-            return Some("running");
+            return Ok(Some("running"));
         }
         if status == 9 {
             saw_waiting = true;
         }
         if pos == 0 && (status == 7 || step_type == 17) {
-            return Some("failed");
+            return Ok(Some("failed"));
         }
         if step_type == 14 || step_type == 101 {
             break;
         }
     }
     if saw_waiting {
-        return Some("waiting");
+        return Ok(Some("waiting"));
     }
     if matches!(rows[0], (14 | 101 | 132, 3)) {
-        return Some("between_steps");
+        return Ok(Some("between_steps"));
     }
-    Some("idle")
+    Ok(Some("idle"))
 }
 
 fn transcript_system_message_senders(row: &Value) -> Vec<String> {
@@ -1422,7 +1431,7 @@ fn summarize_unindexed_transcript(
     let mut last_preview: Option<String> = None;
     let mut last_created_at: Option<String> = None;
     let mut count = 0usize;
-    let _ = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+    let read_ok = prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
         let st = row["type"].as_str().unwrap_or("");
         if matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "") {
             return std::ops::ControlFlow::Continue(());
@@ -1449,20 +1458,23 @@ fn summarize_unindexed_transcript(
             }
         }
         std::ops::ControlFlow::Continue(())
-    });
+    })
+    .is_ok();
     let result = (first_title, last_preview, count, last_created_at);
-    if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if map.len() >= 512 && !map.contains_key(&path) {
-            if let Some(oldest) = map
-                .iter()
-                .min_by_key(|(_, (_, _, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest);
+    if read_ok && cli_meta::AntigravityFileStamp::of(&path).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = TRANSCRIPT_SUMMARY_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&path) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
             }
+            map.insert(path, (stamp, result.clone(), std::time::Instant::now()));
         }
-        map.insert(path, (stamp, result.clone(), std::time::Instant::now()));
     }
     result
 }
@@ -1542,11 +1554,15 @@ pub(crate) fn collect_store_known_subagents(paths: &AntigravityPaths) -> BTreeSe
     known
 }
 
-pub(crate) fn list_offline_summaries(
+pub(crate) fn list_offline_summaries_with_raw(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
-) -> Result<Vec<ProviderSessionSummary>> {
-    list_offline_summaries_with_subagents(paths, filter_id, None).map(|(items, _, _)| items)
+) -> Result<(
+    Vec<ProviderSessionSummary>,
+    BTreeMap<String, ParsedRawSummary>,
+)> {
+    list_offline_summaries_with_subagents_and_raw(paths, filter_id, None)
+        .map(|(items, _, _, raw)| (items, raw))
 }
 
 type OfflineStorePass = (
@@ -1555,13 +1571,35 @@ type OfflineStorePass = (
     BTreeSet<String>,
 );
 
+type OfflineStorePassWithRaw = (
+    Vec<ProviderSessionSummary>,
+    BTreeSet<String>,
+    BTreeSet<String>,
+    BTreeMap<String, ParsedRawSummary>,
+);
+
 fn list_offline_summaries_with_subagents(
     paths: &AntigravityPaths,
     filter_id: Option<&str>,
     archived_filter: Option<bool>,
 ) -> Result<OfflineStorePass> {
+    let (items, subs, roots, _) =
+        list_offline_summaries_with_subagents_and_raw(paths, filter_id, archived_filter)?;
+    Ok((items, subs, roots))
+}
+
+fn list_offline_summaries_with_subagents_and_raw(
+    paths: &AntigravityPaths,
+    filter_id: Option<&str>,
+    archived_filter: Option<bool>,
+) -> Result<OfflineStorePassWithRaw> {
     if !paths.home.is_dir() {
-        return Ok((Vec::new(), BTreeSet::new(), BTreeSet::new()));
+        return Ok((
+            Vec::new(),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BTreeMap::new(),
+        ));
     }
     let now_ms = now_epoch_ms();
     let mut by_id: BTreeMap<String, ProviderSessionSummary> = BTreeMap::new();
@@ -2137,6 +2175,7 @@ fn list_offline_summaries_with_subagents(
         by_id.into_values().collect(),
         known_subagents,
         seen_root_ids,
+        raw_summaries,
     ))
 }
 
@@ -2364,58 +2403,79 @@ pub(crate) fn session_summary_without_storage(
         .with_context(|| format!("未找到 Antigravity 会话：{key}"))
 }
 
-pub(crate) fn probe_live_stream_snapshot(
+pub(crate) fn probe_live_stream_snapshots_batch(
     paths: &AntigravityPaths,
-    id: &str,
+    candidates: &[&ProviderSessionSummary],
     now_ms: i64,
-) -> Option<crate::native_probe::NativeStreamSnapshot> {
-    valid_cascade_id(id).ok()?;
-    if let Some(cli) = paths.cli_store_for_id(id) {
-        let summary = list_offline_summaries(&cli, Some(id))
-            .ok()?
-            .into_iter()
-            .next()?;
-        return build_offline_stream_snapshot(&cli, &summary);
+) -> BTreeMap<String, crate::native_probe::NativeStreamSnapshot> {
+    let mut out = BTreeMap::new();
+    if candidates.is_empty() {
+        return out;
     }
     let primary = paths.primary_store();
-    let Some((rpc, all_live)) = connect_endpoint(&primary).ok().flatten() else {
-        let summary = list_offline_summaries(&primary, Some(id))
-            .ok()?
-            .into_iter()
-            .next()?;
-        return build_offline_stream_snapshot(&primary, &summary);
-    };
-    let Some(summary) = all_live["trajectorySummaries"].get(id) else {
-        let offline = list_offline_summaries(&primary, Some(id))
-            .ok()?
-            .into_iter()
-            .next()?;
-        return build_offline_stream_snapshot(&primary, &offline);
-    };
-    let (mut resp, steps) = match fetch_live_trajectory_steps(&rpc, id) {
-        Ok(pair) => pair,
-        Err(err) if err.is::<LiveHistoryUnavailable>() => {
-            let offline = list_offline_summaries(&primary, Some(id))
-                .ok()?
-                .into_iter()
-                .next()?;
-            return build_offline_stream_snapshot(&primary, &offline);
+    let mut live_conn = None;
+    let mut live_subagents: Option<BTreeMap<String, BTreeMap<String, super::SubagentLiveness>>> =
+        None;
+
+    for item in candidates {
+        let id = item.id.as_str();
+        if valid_cascade_id(id).is_err() {
+            continue;
         }
-        Err(_) => return None,
-    };
-    resp["trajectory"]["steps"] = Value::Array(steps);
-    let subagents = all_live["trajectorySummaries"]
-        .as_object()
-        .and_then(|m| collect_subagents_by_root(m).remove(id))
-        .unwrap_or_default();
-    let ctx = super::TrajectoryLivenessContext {
-        has_active_subagents: subagents.values().any(|s| s.active),
-        has_active_child_processes: false,
-        now_ms: Some(now_ms),
-        subagents,
-        tasks: BTreeMap::new(),
-    };
-    super::snapshot_with_context(id, summary, &resp, &ctx).ok()
+        if let Some(cli) = paths.cli_store_for_id(id) {
+            if let Some(snap) = build_offline_stream_snapshot(&cli, item) {
+                out.insert(id.to_owned(), snap);
+            }
+            continue;
+        }
+        let endpoint = live_conn
+            .get_or_insert_with(|| connect_endpoint(&primary).ok().flatten())
+            .as_ref();
+        let Some((rpc, all_live)) = endpoint else {
+            if let Some(snap) = build_offline_stream_snapshot(&primary, item) {
+                out.insert(id.to_owned(), snap);
+            }
+            continue;
+        };
+        let Some(summary) = all_live["trajectorySummaries"].get(id) else {
+            if let Some(snap) = build_offline_stream_snapshot(&primary, item) {
+                out.insert(id.to_owned(), snap);
+            }
+            continue;
+        };
+        let (mut resp, steps) = match fetch_live_trajectory_steps(rpc, id) {
+            Ok(pair) => pair,
+            Err(err) if err.is::<LiveHistoryUnavailable>() => {
+                if let Some(snap) = build_offline_stream_snapshot(&primary, item) {
+                    out.insert(id.to_owned(), snap);
+                }
+                continue;
+            }
+            Err(_) => continue,
+        };
+        resp["trajectory"]["steps"] = Value::Array(steps);
+        let subagents = live_subagents
+            .get_or_insert_with(|| {
+                all_live["trajectorySummaries"]
+                    .as_object()
+                    .map(collect_subagents_by_root)
+                    .unwrap_or_default()
+            })
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        let ctx = super::TrajectoryLivenessContext {
+            has_active_subagents: subagents.values().any(|s| s.active),
+            has_active_child_processes: false,
+            now_ms: Some(now_ms),
+            subagents,
+            tasks: BTreeMap::new(),
+        };
+        if let Ok(snap) = super::snapshot_with_context(id, summary, &resp, &ctx) {
+            out.insert(id.to_owned(), snap);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -5625,6 +5685,242 @@ mod tests {
                 .and_then(|a| a.delegation.as_deref()),
             Some("从子转录恢复委派")
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn offline_delete_uses_atomic_per_id_sqlite_tx_cleans_shared_files_and_retries_after_primary_storage_gone(
+    ) {
+        let root = env::temp_dir().join(format!("agenthub-ag-tx-retry-{}", uuid::Uuid::new_v4()));
+        for d in ["conversations", "brain", "cache", "presence"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        for cid in [&root_id, &sub_id] {
+            fs::write(
+                root.join("conversations").join(format!("{cid}.db")),
+                b"placeholder",
+            )
+            .unwrap();
+            fs::create_dir_all(root.join("brain").join(cid)).unwrap();
+        }
+        fs::write(
+            root.join("history.jsonl"),
+            format!(
+                "{}\n{}\n{}\n",
+                json!({"conversationId": sub_id, "prompt": "sub"}),
+                json!({"conversationId": root_id, "prompt": "root"}),
+                json!({"conversationId": "keep-other", "prompt": "other"}),
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("cache/conversation_metadata.json"),
+            json!({
+                "conversations": {
+                    &sub_id: {"title": "Sub"},
+                    &root_id: {"title": "Root"},
+                    "keep-other": {"title": "Other"}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("cache/last_conversations.json"),
+            json!({
+                "/ws/sub": sub_id,
+                "/ws/root": root_id,
+                "/ws/other": "keep-other"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let conn = Connection::open(paths.summaries_db()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE conversation_summaries (
+                conversation_id TEXT PRIMARY KEY,
+                title TEXT,
+                preview TEXT,
+                step_count INTEGER,
+                last_modified_time TEXT,
+                workspace_uris TEXT,
+                parent_conversation_id TEXT,
+                nesting_depth INTEGER
+            );
+            CREATE TABLE conversations_fts (
+                conversation_id TEXT,
+                chunk_index INTEGER,
+                archived TEXT,
+                title TEXT
+            );
+            CREATE TABLE conversation_parents (
+                conversation_id TEXT,
+                parent_id TEXT
+            );
+            CREATE TRIGGER abort_root_fts_delete BEFORE DELETE ON conversations_fts
+            WHEN OLD.conversation_id IS NOT NULL
+            BEGIN
+                SELECT RAISE(ABORT, 'simulated mid-delete fts failure');
+            END;",
+        )
+        .unwrap();
+        for (cid, title, parent, depth) in [
+            (&root_id, "Root", "", 0),
+            (&sub_id, "Sub", root_id.as_str(), 1),
+        ] {
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, ?2, 'p', 1, '2026-11-26T00:00:00Z', '', ?3, ?4)",
+                params![cid, title, parent, depth],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversations_fts VALUES (?1, 0, '0', ?2)",
+                params![cid, title],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO conversation_parents VALUES (?1, ?2)",
+            params![sub_id, root_id],
+        )
+        .unwrap();
+        drop(conn);
+
+        // Attempt 1: sub_id disk files are removed, then FTS delete aborts!
+        // Per-ID tx rolls back conversation_summaries/conversation_parents for sub_id,
+        // shared files ARE cleaned for sub_id (whose disk files were removed), and root_id is untouched.
+        let attempt_1 = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(attempt_1.status, "failed");
+        assert!(attempt_1.deleted_ids.is_empty());
+        assert!(!attempt_1.residuals.is_empty());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
+        let check_conn = Connection::open(paths.summaries_db()).unwrap();
+        let sub_summary_count: i64 = check_conn
+            .query_row(
+                "SELECT count(*) FROM conversation_summaries WHERE conversation_id = ?1",
+                params![sub_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            sub_summary_count, 1,
+            "per-ID transaction must roll back conversation_summaries when conversations_fts fails"
+        );
+        let hist_after_1 = fs::read_to_string(root.join("history.jsonl")).unwrap();
+        assert!(
+            !hist_after_1.contains(&sub_id) && hist_after_1.contains(&root_id),
+            "shared files must clean disk-deleted sub_id without touching unreached root_id"
+        );
+
+        // Now make only root_id fail FTS delete so sub_id finishes SQLite and root_id loses primary storage!
+        check_conn
+            .execute_batch(&format!(
+                "DROP TRIGGER abort_root_fts_delete;
+                 CREATE TRIGGER abort_only_root BEFORE DELETE ON conversations_fts
+                 WHEN OLD.conversation_id = '{root_id}'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'simulated root fts failure');
+                 END;"
+            ))
+            .unwrap();
+        drop(check_conn);
+
+        let attempt_2 = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(attempt_2.status, "failed");
+        assert_eq!(attempt_2.deleted_ids, vec![sub_id.clone()]);
+        assert!(!root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
+        assert!(!root.join("brain").join(&root_id).exists());
+        // Verify session_summary_without_storage now fails because primary storage is gone!
+        assert!(session_summary_without_storage(&paths, &root_id).is_err());
+
+        // Drop the trigger and verify an unrelated SQLite-only root cannot be smuggled via `descendants`,
+        // then retry execute_batch_item(Delete) with the original confirmation set!
+        let other_root_id = uuid::Uuid::new_v4().to_string();
+        Connection::open(paths.summaries_db())
+            .unwrap()
+            .execute_batch(&format!(
+                "DROP TRIGGER abort_only_root;
+                 INSERT INTO conversation_summaries VALUES ('{other_root_id}', 'Other Root', 'p', 1, '2026-11-26T00:00:00Z', '', '', 0);"
+            ))
+            .unwrap();
+        assert!(
+            execute_batch_item(
+                &paths,
+                &root_id,
+                SessionOperation::Delete,
+                &[sub_id.clone(), other_root_id.clone()],
+                true,
+            )
+            .is_err(),
+            "unrelated SQLite-only root session must be rejected from descendants"
+        );
+        let attempt_3 = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(attempt_3.status, "succeeded");
+        assert!(attempt_3.residuals.is_empty());
+
+        let final_conn = Connection::open(paths.summaries_db()).unwrap();
+        let other_remaining: i64 = final_conn
+            .query_row(
+                "SELECT count(*) FROM conversation_summaries WHERE conversation_id = ?1",
+                params![other_root_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(other_remaining, 1, "unrelated root row must remain intact");
+        for table in [
+            "conversation_summaries",
+            "conversations_fts",
+            "conversation_parents",
+        ] {
+            let rem: i64 = final_conn
+                .query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE conversation_id != ?1"),
+                    params![other_root_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(rem, 0, "{table} must be empty for deleted tree after retry");
+        }
+        let final_hist = fs::read_to_string(root.join("history.jsonl")).unwrap();
+        assert!(!final_hist.contains(&root_id) && final_hist.contains("keep-other"));
+        let final_meta = fs::read_to_string(root.join("cache/conversation_metadata.json")).unwrap();
+        assert!(!final_meta.contains(&root_id) && final_meta.contains("keep-other"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -261,8 +261,22 @@ public final class ThreadMessageStore: ObservableObject {
     public func applyDetail(_ detail: ThreadDetail, now: Date = Date()) -> ThreadMessageSlot {
         let threadId = detail.summary.id
         var slot = self.slot(for: threadId)
-        let reset = (detail.history?.reset == true)
-            || (slot.history != nil && detail.history != nil && slot.history?.epoch != detail.history?.epoch)
+        let reset: Bool = {
+            if detail.history?.reset == true { return true }
+            if let oldH = slot.history, let newH = detail.history {
+                if oldH.epoch != newH.epoch { return true }
+                if let changes = newH.changes,
+                   let idx = changes.firstIndex(where: { $0.revision == oldH.revision }),
+                   changes[(idx + 1)...].contains(where: { $0.reset == true })
+                {
+                    return true
+                }
+            }
+            if let newTotal = detail.totalBlocks, slot.totalBlocks > 0, newTotal < slot.totalBlocks {
+                return true
+            }
+            return false
+        }()
         if reset {
             slot.blocks = []
             slot.beforeCursor = nil
@@ -335,9 +349,17 @@ public final class ThreadMessageStore: ObservableObject {
         let threadId = page.threadId
         var slot = self.slot(for: threadId)
         if let sh = slot.history, let ph = page.history, sh.epoch != ph.epoch {
+            if slot.loadingEarlier {
+                slot.loadingEarlier = false
+                slots[threadId] = slot
+            }
             return slot
         }
         if let expectedCursor, let sb = slot.beforeCursor, sb != expectedCursor {
+            if slot.loadingEarlier {
+                slot.loadingEarlier = false
+                slots[threadId] = slot
+            }
             return slot
         }
 
@@ -348,12 +370,22 @@ public final class ThreadMessageStore: ObservableObject {
         let changed = (merged != slot.blocks)
         slot.blocks = merged
         slot.totalBlocks = max(page.totalBlocks, merged.count)
-        slot.hasMoreBlocks = page.hasMoreBlocks
-        slot.beforeCursor = HistoryAndResumeHelpers.stableHistoryCursor(
+        let resolvedBefore = HistoryAndResumeHelpers.stableHistoryCursor(
             history: page.history ?? slot.history,
             blocks: page.blocks,
             beforeCursor: page.beforeCursor
         )
+        if page.blocks.isEmpty
+            || resolvedBefore == nil
+            || resolvedBefore == expectedCursor
+            || resolvedBefore == slot.beforeCursor
+        {
+            slot.beforeCursor = nil
+            slot.hasMoreBlocks = false
+        } else {
+            slot.beforeCursor = resolvedBefore
+            slot.hasMoreBlocks = page.hasMoreBlocks
+        }
         slot.loadingEarlier = false
         slot.loadError = nil
         if changed { slot.visibleUpdateRevision += 1 }
@@ -886,7 +918,18 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
                     userInfo: [NSLocalizedDescriptionKey: "会话来源已变化，请重新定位"]
                 )
             }
-            pages.append(page)
+            if page.items.isEmpty || page.after == cursor {
+                if !pages.isEmpty {
+                    pages[pages.count - 1].after = nil
+                }
+                if !page.items.isEmpty {
+                    var normalized = page
+                    normalized.after = nil
+                    pages.append(normalized)
+                }
+            } else {
+                pages.append(page)
+            }
             if let h = page.history { windowHistory = h }
         } catch {
             guard token == sequence else { return }
@@ -915,7 +958,22 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
                     userInfo: [NSLocalizedDescriptionKey: "会话来源已变化，请重新定位"]
                 )
             }
-            pages.insert(page, at: 0)
+            if page.items.isEmpty || page.before == nil || page.before == cursor {
+                if page.items.isEmpty {
+                    if !pages.isEmpty {
+                        pages[0].before = nil
+                        pages[0].hasMore = false
+                    }
+                } else {
+                    var terminated = page
+                    terminated.before = nil
+                    terminated.hasMore = false
+                    pages.insert(terminated, at: 0)
+                }
+            } else {
+                pages.insert(page, at: 0)
+            }
+            if let h = page.history { windowHistory = h }
         } catch {
             guard token == sequence else { return }
             self.error = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -959,6 +1017,7 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
         }
         do {
             var nextPages: [TimelineWindowPage<Item>] = []
+            let expectedEpoch = incoming.epoch.isEmpty ? windowHistory?.epoch : incoming.epoch
             for page in pages {
                 guard token == sequence, isActive else { return }
                 let affected: Bool = if let changedIds {
@@ -973,6 +1032,14 @@ public final class TimelineWindowController<Item: Sendable>: ObservableObject {
                 let anchorId = page.firstNativeId ?? page.items.first.map(idOf)
                 if affected, let anchorId, !anchorId.isEmpty {
                     let refreshed = try await read("w:\(anchorId)")
+                    guard token == sequence, isActive else { return }
+                    if refreshed.history?.reset == true
+                        || (expectedEpoch != nil && refreshed.history?.epoch.isEmpty == false && refreshed.history?.epoch != expectedEpoch)
+                    {
+                        returnToLatest()
+                        error = "历史已更新，请重新定位"
+                        return
+                    }
                     nextPages.append(refreshed)
                 } else {
                     nextPages.append(page)

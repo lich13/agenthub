@@ -1247,3 +1247,125 @@ fn outcome_updates_related_events_incidents_and_native_rows_only() {
         "skipped"
     );
 }
+
+#[test]
+fn due_deliveries_cursor_pages_past_same_millisecond_unreadable_rows_without_mutating_ciphertext() {
+    let fixture = Fixture::new();
+    let db = fixture.open();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
+
+    let wrong_db = PanelDb::open_with_secret_box(
+        &fixture.path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"33".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let base_ms = fixture.activated_ms(NotificationChannel::Bark) + 1;
+    // Stage 15 unreadable rows and 2 valid rows, then force ALL 17 rows onto the exact same created_ms.
+    for idx in 0..15 {
+        assert!(wrong_db
+            .stage_notification_delivery(
+                NotificationChannel::Bark,
+                &format!("bad-{idx:02}"),
+                base_ms,
+                &payload(),
+            )
+            .unwrap());
+    }
+    for key in ["valid-01", "valid-02"] {
+        assert!(db
+            .stage_notification_delivery(NotificationChannel::Bark, key, base_ms, &payload())
+            .unwrap());
+    }
+    fixture
+        .connection()
+        .execute(
+            "UPDATE probe_notification_deliveries SET created_ms=1000, next_ms=0 WHERE channel='bark'",
+            [],
+        )
+        .unwrap();
+
+    let due = db.due_notification_deliveries(10).unwrap();
+    let due_keys: Vec<_> = due.iter().map(|d| d.event_key.as_str()).collect();
+    assert_eq!(due_keys, vec!["valid-01", "valid-02"]);
+    // All 15 unreadable rows keep their ciphertext and pending status for the right key.
+    for idx in 0..15 {
+        let row = fixture.row(NotificationChannel::Bark, &format!("bad-{idx:02}"));
+        assert_eq!(row.status, "pending");
+        assert!(row.has_ciphertext);
+        assert!(row.first_attempt_ms.is_none());
+    }
+    assert_eq!(wrong_db.due_notification_deliveries(10).unwrap().len(), 10);
+}
+
+#[test]
+fn due_deliveries_wrap_around_cursor_prevents_starvation_past_thousand_unreadable_rows() {
+    let fixture = Fixture::new();
+    let db = fixture.open();
+    db.sync_notification_channels_from_config(&|| Ok(fixture.config.clone()))
+        .unwrap();
+
+    let wrong_db = PanelDb::open_with_secret_box(
+        &fixture.path,
+        agenthub_core::crypto::SecretBox::from_key_material(&"44".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let base_ms = fixture.activated_ms(NotificationChannel::Bark) + 1;
+
+    for idx in 0..1_000 {
+        assert!(wrong_db
+            .stage_notification_delivery(
+                NotificationChannel::Bark,
+                &format!("bad-{idx:04}"),
+                base_ms,
+                &payload(),
+            )
+            .unwrap());
+    }
+    assert!(db
+        .stage_notification_delivery(
+            NotificationChannel::Bark,
+            "valid-after-1000",
+            base_ms + 1,
+            &payload(),
+        )
+        .unwrap());
+    fixture
+        .connection()
+        .execute(
+            "UPDATE probe_notification_deliveries SET created_ms = 2000, next_ms = 0 WHERE channel = 'bark'",
+            [],
+        )
+        .unwrap();
+
+    // Tick 1 scans the first 1,000 unreadable rows without mutating them and saves cursor at bad-0999.
+    assert!(
+        db.due_notification_deliveries(10).is_err(),
+        "tick 1 must surface decryption error when all 1,000 scanned rows are unreadable"
+    );
+
+    // Tick 2 resumes after bad-0999, delivers valid-after-1000, and wraps around cleanly.
+    let due = db.due_notification_deliveries(10).unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].event_key, "valid-after-1000");
+    let lease = claim(&db, "valid-after-1000");
+    finish(&db, &lease, &accepted());
+    assert_eq!(
+        fixture
+            .row(NotificationChannel::Bark, "valid-after-1000")
+            .status,
+        "sent"
+    );
+
+    // All 1,000 unreadable rows remain untouched and readable under their original key.
+    let preserved: i64 = fixture
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM probe_notification_deliveries WHERE channel = 'bark' AND status = 'pending' AND ciphertext IS NOT NULL AND first_attempt_ms IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(preserved, 1_000);
+    assert_eq!(wrong_db.due_notification_deliveries(10).unwrap().len(), 10);
+}

@@ -45,15 +45,12 @@ pub struct ThreadSummary {
 }
 
 impl ThreadSummary {
-    pub(crate) fn sort_by_message_time(rows: &mut [Self]) {
-        rows.sort_by_cached_key(|thread| {
-            (std::cmp::Reverse(
-                thread
-                    .updated_at
-                    .as_deref()
-                    .and_then(|time| (time).parse::<jiff::Timestamp>().ok()),
-            ),)
-        });
+    pub(crate) fn message_time_sort_key(&self) -> std::cmp::Reverse<Option<jiff::Timestamp>> {
+        std::cmp::Reverse(
+            self.updated_at
+                .as_deref()
+                .and_then(|time| time.parse::<jiff::Timestamp>().ok()),
+        )
     }
 }
 

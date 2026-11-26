@@ -148,7 +148,7 @@ pub(super) async fn run(config_path: &Path) -> Result<()> {
         "managed hook is not installed"
     );
     let db = super::open_panel_db(&config)?;
-    let bytes = tokio::task::spawn_blocking(|| {
+    let bytes = agenthub_core::read_tasks::spawn_blocking(|| {
         let mut bytes = Vec::new();
         std::io::stdin()
             .take(1024 * 1024 + 1)

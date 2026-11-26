@@ -1,8 +1,7 @@
 use super::{
-    hidden_and_archived_thread_ids, is_request_user_input, list_threads, parse_message_event,
-    resolve_codex_paths_with_options, rollout_request_user_input_state, scan_rollout,
-    set_thread_title, thread_detail_page, CodexPathDiscoveryOptions, CodexPaths,
-    RolloutRequestUserInputState, ThreadStatus,
+    is_request_user_input, list_threads, parse_message_event, resolve_codex_paths_with_options,
+    rollout_request_user_input_state, scan_rollout, set_thread_title, thread_detail_page,
+    CodexPathDiscoveryOptions, CodexPaths, RolloutRequestUserInputState, ThreadStatus,
 };
 use rusqlite::Connection;
 use serde_json::json;
@@ -2377,13 +2376,16 @@ fn hidden_thread_ids_exports_state_db_subagent_metadata_for_app_server_pruning()
     )
     .unwrap();
 
-    let hidden = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
-        .unwrap()
-        .0;
+    let hidden = crate::archive::hidden_delete_plan_with_work(
+        &CodexPaths::new(&root),
+        &crate::scan_work::ScanWork::default(),
+    )
+    .unwrap()
+    .hidden_ids;
 
-    assert!(hidden.contains("child-thread"));
-    assert!(hidden.contains("child-source-json"));
-    assert!(!hidden.contains("main-thread"));
+    assert!(hidden.iter().any(|id| id == "child-thread"));
+    assert!(hidden.iter().any(|id| id == "child-source-json"));
+    assert!(!hidden.iter().any(|id| id == "main-thread"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2419,9 +2421,12 @@ fn archived_thread_ids_exports_state_db_archived_status_for_injection_guards() {
     )
     .unwrap();
 
-    let archived = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
-        .unwrap()
-        .1;
+    let archived: std::collections::HashSet<String> =
+        crate::archive::list_archived_threads(&CodexPaths::new(&root))
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
 
     assert!(archived.contains("flag-archived"));
     assert!(archived.contains("time-archived"));
@@ -2511,14 +2516,17 @@ fn exec_readonly_verification_threads_are_hidden_from_main_list() {
     .unwrap();
 
     let rows = list_threads(&CodexPaths::new(&root), false, None, 10).unwrap();
-    let hidden = hidden_and_archived_thread_ids(&CodexPaths::new(&root))
-        .unwrap()
-        .0;
+    let hidden = crate::archive::hidden_delete_plan_with_work(
+        &CodexPaths::new(&root),
+        &crate::scan_work::ScanWork::default(),
+    )
+    .unwrap()
+    .hidden_ids;
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "main-thread");
-    assert!(hidden.contains("internal-exec"));
-    assert!(hidden.contains("internal-subagent-prompt"));
+    assert!(hidden.iter().any(|id| id == "internal-exec"));
+    assert!(hidden.iter().any(|id| id == "internal-subagent-prompt"));
     assert_eq!(hidden.len(), 2);
     let _ = fs::remove_dir_all(root);
 }
@@ -3743,7 +3751,12 @@ fn new_session_meta_preserves_cwd_excludes_exec_spawn_edges_attached_parent_and_
     assert_eq!(rows[0].cwd.as_deref(), Some("/workspace/中文工作区"));
     assert_eq!(rows[0].status, ThreadStatus::Running);
 
-    let (hidden, _) = hidden_and_archived_thread_ids(&paths).unwrap();
+    let hidden = crate::archive::hidden_delete_plan_with_work(
+        &paths,
+        &crate::scan_work::ScanWork::default(),
+    )
+    .unwrap()
+    .hidden_ids;
     for expected_hidden in [
         "exec-ordinary",
         "guardian-1",
@@ -3751,7 +3764,7 @@ fn new_session_meta_preserves_cwd_excludes_exec_spawn_edges_attached_parent_and_
         "edge-child",
     ] {
         assert!(
-            hidden.contains(expected_hidden),
+            hidden.iter().any(|id| id == expected_hidden),
             "missing {expected_hidden}"
         );
     }
@@ -3761,6 +3774,80 @@ fn new_session_meta_preserves_cwd_excludes_exec_spawn_edges_attached_parent_and_
     super::TEST_CODEX_HOST_ALIVE.with(|slot| slot.set(None));
     assert_eq!(rows_orphaned[0].status, ThreadStatus::Recoverable);
     assert_eq!(rows_orphaned[0].active_turn_id, None);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn notification_thread_headers_with_identities_supports_legacy_archived_at_schema() {
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let root = env::temp_dir().join(format!(
+        "agenthub-codex-notif-headers-legacy-{}-{counter}",
+        std::process::id()
+    ));
+    fs::create_dir_all(root.join("sessions")).unwrap();
+    let rollout_active = root.join("sessions/active.jsonl");
+    let rollout_archived = root.join("sessions/archived.jsonl");
+    fs::write(
+        &rollout_active,
+        r#"{"type":"session_meta","payload":{"id":"active-1","cwd":"/workspace/example.invalid"}}"#,
+    )
+    .unwrap();
+    fs::write(
+        &rollout_archived,
+        r#"{"type":"session_meta","payload":{"id":"archived-1","cwd":"/workspace/example.invalid"}}"#,
+    )
+    .unwrap();
+
+    // Legacy state_5.sqlite without `archived` integer column — only `archived_at`
+    let conn = Connection::open(root.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            updated_at INTEGER,
+            archived_at INTEGER,
+            rollout_path TEXT,
+            cwd TEXT,
+            source TEXT,
+            thread_source TEXT
+        );",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES ('active-1', '活跃线程', 1732500000, NULL, ?1, '/workspace/example.invalid', 'vscode', 'user')",
+        [rollout_active.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES ('archived-1', '已归档线程', 1732500010, 1732500010, ?1, '/workspace/example.invalid', 'vscode', 'user')",
+        [rollout_archived.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES ('sub-1', '子线程', 1732500020, NULL, ?1, '/workspace/example.invalid', '{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"active-1\"}}}', 'subagent')",
+        [rollout_active.display().to_string()],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES ('unknown-1', '未知身份线程', 1732500030, NULL, ?1, '/workspace/example.invalid', 'future_source', NULL)",
+        [rollout_active.display().to_string()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let paths = CodexPaths::new(&root);
+    let pairs = super::notification_thread_headers_with_identities(&paths).unwrap();
+    assert_eq!(pairs.len(), 2);
+    let active_pair = pairs.iter().find(|(s, _)| s.id == "active-1").unwrap();
+    assert_eq!(active_pair.0.title, "活跃线程");
+    assert_eq!(active_pair.1, super::CodexTaskIdentity::Main);
+
+    let unknown_pair = pairs.iter().find(|(s, _)| s.id == "unknown-1").unwrap();
+    assert_eq!(unknown_pair.1, super::CodexTaskIdentity::Unknown);
+    assert!(pairs
+        .iter()
+        .all(|(s, _)| s.id != "archived-1" && s.id != "sub-1"));
 
     let _ = fs::remove_dir_all(root);
 }

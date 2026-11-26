@@ -300,51 +300,33 @@ fn grok_cached_tool_and_user_chunk_snapshots_remain_stable_after_append_updates(
 }
 
 #[test]
-fn grok_delete_enforces_non_empty_fingerprint_and_rejects_mismatch() {
-    let (paths, id, path) = fixture();
-    let located = locate_sessions(&paths, &id).unwrap();
-    let fp = grok_fingerprint(&located).unwrap();
-    assert!(!fp.is_empty());
-
-    fs::write(path.join("updates.jsonl"), "{\"changed\":true}\n").unwrap();
-    let err = execute_grok_delete(
-        &paths,
-        GrokDeleteRequest {
-            id: id.clone(),
-            confirmed: true,
-            fingerprint: fp,
-        },
-    )
-    .unwrap_err();
-    assert!(err.to_string().contains("已变化"), "{err:#}");
-    assert!(path.exists());
-
-    let fresh_fp = grok_fingerprint(&locate_sessions(&paths, &id).unwrap()).unwrap();
-    let ok = execute_grok_delete(
-        &paths,
-        GrokDeleteRequest {
-            id,
-            confirmed: true,
-            fingerprint: fresh_fp,
-        },
-    )
-    .unwrap();
-    assert!(ok.deleted);
-    assert!(!path.exists());
-    fs::remove_dir_all(paths.home).unwrap();
-}
-
-#[test]
 fn grok_delete_ignores_changed_content_and_does_not_touch_workspace() {
     let (paths, id, path) = fixture();
-    let preview = preview_grok_delete(&paths, &id).unwrap();
+    let located = locate_sessions(&paths, &id).unwrap();
+    let stale_fp = grok_fingerprint(&located).unwrap();
     fs::write(path.join("updates.jsonl"), "{\"changed\":true}\n").unwrap();
+    let cleanup_err = execute_grok_empty_cleanup_batch(
+        &paths,
+        vec![GrokDeleteRequest {
+            id: id.clone(),
+            confirmed: true,
+            fingerprint: stale_fp.clone(),
+        }],
+    )
+    .remove(0)
+    .unwrap_err();
+    assert!(
+        cleanup_err.to_string().contains("已变化"),
+        "{cleanup_err:#}"
+    );
+    assert!(path.exists());
+
     let result = execute_grok_delete(
         &paths,
         GrokDeleteRequest {
             id,
             confirmed: true,
-            fingerprint: preview.fingerprint,
+            fingerprint: stale_fp,
         },
     )
     .unwrap();
@@ -899,15 +881,16 @@ fn execute_grok_delete_keeps_cleanup_activity_check_and_stops_on_partial_failure
     // Unified cleanup still rejects a running session with a fingerprint.
     let summary = resolve_session(&paths, &id).unwrap();
     activity::test_owner(Some(&id), &summary.cwd);
-    let running_err = execute_grok_delete(
+    let running_err = execute_grok_empty_cleanup_batch(
         &paths,
-        GrokDeleteRequest {
+        vec![GrokDeleteRequest {
             id: id.clone(),
             confirmed: true,
             fingerprint: grok_fingerprint(std::slice::from_ref(&path)).unwrap(),
-        },
+        }],
     )
-    .expect_err("running Grok session must not be deleted");
+    .remove(0)
+    .expect_err("running Grok session must not be deleted by unified cleanup");
     activity::test_owner(None, "");
     assert!(running_err.to_string().contains("正在运行"));
     assert!(path.exists());
@@ -1059,18 +1042,19 @@ fn empty_cleanup_rechecks_unknown_ownership_without_blocking_direct_delete() {
     let (paths, id, path) = fixture();
     let fingerprint = grok_fingerprint(&locate_sessions(&paths, &id).unwrap()).unwrap();
     fs::write(paths.home.join("active_sessions.json"), "invalid json").unwrap();
-    let error = execute_grok_delete(
+    let error = execute_grok_empty_cleanup_batch(
         &paths,
-        GrokDeleteRequest {
+        vec![GrokDeleteRequest {
             id: id.clone(),
             confirmed: true,
-            fingerprint,
-        },
+            fingerprint: fingerprint.clone(),
+        }],
     )
+    .remove(0)
     .unwrap_err();
     assert!(error.to_string().contains("占用状态无法确认"));
     assert!(path.exists());
-    // Direct deletion still does not consult activity; repair the shared index
+    // Direct deletion still does not consult activity or legacy fingerprint; repair the shared index
     // so this assertion covers successful deletion rather than index residuals.
     activity::test_owner(Some(&id), "/work");
     fs::write(paths.home.join("active_sessions.json"), "{}").unwrap();
@@ -1080,7 +1064,7 @@ fn empty_cleanup_rechecks_unknown_ownership_without_blocking_direct_delete() {
             GrokDeleteRequest {
                 id,
                 confirmed: true,
-                fingerprint: String::new()
+                fingerprint,
             }
         )
         .unwrap()
@@ -1229,5 +1213,66 @@ fn grok_tool_loop_intermediate_prose_demotes_to_thinking_in_updates_and_native_h
         native_detail.events[3].text.as_deref(),
         Some("原生历史核验完成。")
     );
+    fs::remove_dir_all(paths.home).unwrap();
+}
+
+#[test]
+fn empty_cleanup_batch_reverifies_ownership_per_item_while_direct_delete_stays_independent() {
+    let (paths, id_a, dir_a) = fixture();
+    let id_b = uuid::Uuid::new_v4().to_string();
+    let dir_b = dir_a.parent().unwrap().join(&id_b);
+    fs::create_dir_all(&dir_b).unwrap();
+    fs::write(
+        dir_b.join("metadata.json"),
+        serde_json::json!({"id": id_b, "cwd": "/work"}).to_string(),
+    )
+    .unwrap();
+    fs::write(dir_b.join("updates.jsonl"), "").unwrap();
+
+    let fp_a = grok_fingerprint(&locate_sessions(&paths, &id_a).unwrap()).unwrap();
+    let fp_b = grok_fingerprint(&locate_sessions(&paths, &id_b).unwrap()).unwrap();
+    let sum_b = resolve_session(&paths, &id_b).unwrap();
+
+    // Item A is inactive on capture #1, then Item B becomes active on capture #2 with unchanged fingerprint.
+    activity::test_owner_sequence(vec![None, Some((id_b.clone(), sum_b.cwd.clone()))]);
+    let results = execute_grok_empty_cleanup_batch(
+        &paths,
+        vec![
+            GrokDeleteRequest {
+                id: id_a.clone(),
+                confirmed: true,
+                fingerprint: fp_a,
+            },
+            GrokDeleteRequest {
+                id: id_b.clone(),
+                confirmed: true,
+                fingerprint: fp_b.clone(),
+            },
+        ],
+    );
+    activity::test_owner_sequence(Vec::new());
+
+    assert!(results[0].as_ref().unwrap().deleted);
+    assert!(!dir_a.exists());
+    let err_b = results[1]
+        .as_ref()
+        .expect_err("second item becoming active mid-batch must be rejected");
+    assert!(err_b.to_string().contains("正在运行"));
+    assert!(dir_b.exists());
+
+    // Direct delete remains independent of activity and fingerprint.
+    activity::test_owner(Some(&id_b), &sum_b.cwd);
+    let direct = execute_grok_delete_batch(
+        &paths,
+        vec![GrokDeleteRequest {
+            id: id_b,
+            confirmed: true,
+            fingerprint: String::new(),
+        }],
+    );
+    activity::test_owner(None, "");
+    assert!(direct[0].as_ref().unwrap().deleted);
+    assert!(!dir_b.exists());
+
     fs::remove_dir_all(paths.home).unwrap();
 }

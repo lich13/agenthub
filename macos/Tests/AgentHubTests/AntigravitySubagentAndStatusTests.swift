@@ -248,7 +248,7 @@ final class AntigravitySubagentAndStatusTests: XCTestCase {
             case "probe.events":
                 return Data(#"{"limit":10,"events":[]}"#.utf8)
             case "github.ci.status":
-                return Data(#"{"enabled":false,"refreshing":false,"selected_repositories":[],"repositories":[],"runs":[]}"#.utf8)
+                return Data(#"{"enabled":false,"refreshing":false,"monitored_repositories":[],"repositories":[],"runs":[]}"#.utf8)
             case "claude.hooks":
                 return Data(#"{"installed":false,"managedCount":0}"#.utf8)
             default:

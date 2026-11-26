@@ -52,12 +52,7 @@ pub fn desktop_update_status_with_state(
     let recent_check_job = if latest_version.is_none() && last_error.is_none() {
         state
             .db
-            .list_jobs(25)?
-            .into_iter()
-            .find(|job| job.kind == "agenthub_update_check")
-            .map(|job| state.db.job(&job.id))
-            .transpose()?
-            .flatten()
+            .latest_job_by_kinds(&["agenthub_update_check"], true)?
     } else {
         None
     };
@@ -387,7 +382,7 @@ async fn install_update(state: &DesktopState, job_id: &str, feed_url: &str) -> R
         &format!("installing signed app update {}\n", manifest.version),
     )?;
     let expected_ver = manifest.version.clone();
-    tokio::task::spawn_blocking(move || -> Result<()> {
+    agenthub_core::read_tasks::spawn_blocking(move || -> Result<()> {
         let staging = tempfile::Builder::new()
             .prefix(".AgentHub-update-")
             .tempdir_in(&parent_dir)

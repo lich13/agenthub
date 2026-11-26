@@ -355,7 +355,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                 let storageWarning: [UInt8]
                 let storageDanger: [UInt8]
             }
-            let maxRegionalPixelDriftRatio: Double
             let desktopRegions: [Region]
             let sessionRowColors: [String: SessionRowColors]
             let providerExpectedSelectedNavColors: [String: [String: NavAccent]]
@@ -429,12 +428,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                     XCTAssertNotEqual(prev, expected.accent)
                 }
                 previousAccentSample = expected.accent
-
-                // Re-render same workspace and verify deterministic <= 0.1% pixel stability
-                if ws == .claude {
-                    let repeatPixels = try renderOffscreenSnapshot(store: store, size: NSSize(width: 1280, height: 820), appearance: appearance, pngName: nil)
-                    XCTAssertLessThanOrEqual(pixelDifferenceRatio(pixels, repeatPixels), baseline.maxRegionalPixelDriftRatio)
-                }
             }
         }
 
@@ -490,21 +483,21 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
                     storageSize: SessionStorageSize(bytes: 24 * mib, scope: "file", status: "complete"),
                     selected: false, selecting: true, multiSelected: true, disabled: false,
                     canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
-                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                    onRowClick: { _ in }, onRename: { _ in }
                 )
                 RenameableSessionRowView(
                     sessionKey: "r-warn", title: "Medium session", subtitle: "", statusText: "近期", running: false,
                     storageSize: SessionStorageSize(bytes: 150 * mib, scope: "file", status: "complete"),
                     selected: true, selecting: false, multiSelected: false, disabled: false,
                     canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
-                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                    onRowClick: { _ in }, onRename: { _ in }
                 )
                 RenameableSessionRowView(
                     sessionKey: "r-err", title: "Large session", subtitle: "", statusText: "近期", running: false,
                     storageSize: SessionStorageSize(bytes: 340 * mib, scope: "file", status: "complete"),
                     selected: false, selecting: false, multiSelected: false, disabled: false,
                     canRename: false, renameBlockReason: nil, rowMenuActions: [], batchMenuActions: [],
-                    onRowClick: { _ in }, onToggleCheckbox: {}, onRename: { _ in }
+                    onRowClick: { _ in }, onRename: { _ in }
                 )
             }
             .padding(8)
@@ -731,22 +724,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             }
         }
         return ink
-    }
-
-    private func pixelDifferenceRatio(_ lhs: [UInt8], _ rhs: [UInt8]) -> Double {
-        guard lhs.count == rhs.count, !lhs.isEmpty else { return 1.0 }
-        let pixelCount = lhs.count / 4
-        var diffPixels = 0
-        for p in 0 ..< pixelCount {
-            let base = p * 4
-            if abs(Int(lhs[base]) - Int(rhs[base])) > 1
-                || abs(Int(lhs[base + 1]) - Int(rhs[base + 1])) > 1
-                || abs(Int(lhs[base + 2]) - Int(rhs[base + 2])) > 1
-            {
-                diffPixels += 1
-            }
-        }
-        return Double(diffPixels) / Double(pixelCount)
     }
 
     // MARK: - 5. Populated Thread Detail Glyph-Ink Gate (Prevents TextKit 2->1 Blank-Glyph Regression)

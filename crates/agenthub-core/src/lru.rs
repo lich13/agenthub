@@ -18,11 +18,19 @@ pub(crate) fn trim<T>(
     mut evictable: impl FnMut(&T) -> bool,
     weight: impl Fn(&T) -> u64,
 ) -> u64 {
+    let mut evicted = false;
     while entries.len() > max_entries || bytes > max_bytes {
         let Some(entry) = take_first(entries, &mut evictable) else {
             break;
         };
         bytes = bytes.saturating_sub(weight(&entry));
+        evicted = true;
+    }
+    if evicted {
+        if entries.capacity() > entries.len().saturating_mul(4).max(16) {
+            entries.shrink_to_fit();
+        }
+        crate::note_cache_eviction();
     }
     bytes
 }

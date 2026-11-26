@@ -96,8 +96,8 @@ public enum ConversationViewModel {
             let attachments = block.userMessage?.attachments ?? []
             if attachments.isEmpty {
                 let rawBody = block.userMessage?.text ?? rawText
-                let proj = UserContextEngine.projectUserMessage(rawBody, contextBlocks: block.userMessage?.contextBlocks)
-                if proj.contextBlocks.isEmpty && UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks).isEmpty {
+                let (proj, segs) = UserContextEngine.projectAndSegmentUserMessage(rawBody, contextBlocks: block.userMessage?.contextBlocks)
+                if proj.contextBlocks.isEmpty && segs.isEmpty {
                     return false
                 }
             }
@@ -890,6 +890,14 @@ public enum ProcessGroupingEngine {
         items: [T],
         classify: (T) -> ProcessClassifyResult
     ) -> [ProcessFoldItem<T>] {
+        foldProcessSequenceIndexed(prefix: prefix, items: items) { _, item in classify(item) }
+    }
+
+    public static func foldProcessSequenceIndexed<T: Equatable & Sendable>(
+        prefix: String,
+        items: [T],
+        classify: (Int, T) -> ProcessClassifyResult
+    ) -> [ProcessFoldItem<T>] {
         var output: [ProcessFoldItem<T>] = []
         var pending: [ProcessStep] = []
         var activeTurnId: String?
@@ -905,8 +913,8 @@ public enum ProcessGroupingEngine {
             activeTurnId = nil
         }
 
-        for item in items {
-            switch classify(item) {
+        for (index, item) in items.enumerated() {
+            switch classify(index, item) {
             case .skip:
                 continue
             case let .step(step):
@@ -972,6 +980,15 @@ public struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
     public var sourceIds: [String]
     public var label: String
     public var entries: [ExecutionRenderItem<ClaudeHistoryEvent>]
+
+    public var renderItems: [ClaudeEventRenderItem] {
+        entries.map { entry in
+            switch entry {
+            case let .item(it, key, sids): .item(item: it, key: key, sourceIds: sids)
+            case let .group(g): .group(g)
+            }
+        }
+    }
 }
 
 public enum ClaudeEventRenderItem: Equatable, Sendable {

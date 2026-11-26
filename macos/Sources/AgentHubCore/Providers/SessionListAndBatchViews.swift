@@ -437,9 +437,8 @@ public struct SessionStorageBadgeView: View {
         self.size = size
     }
 
-    public static func resolvedColor(for size: SessionStorageSize?, palette: DesignPalette) -> RGBAColor {
-        let formatted = SessionStorageFormatter.format(size)
-        switch formatted.tone {
+    public static func resolvedColor(forTone tone: String, palette: DesignPalette) -> RGBAColor {
+        switch tone {
         case "danger": return palette.errFg
         case "warning": return palette.warnFg
         case "success": return palette.okFg
@@ -447,11 +446,15 @@ public struct SessionStorageBadgeView: View {
         }
     }
 
+    public static func resolvedColor(for size: SessionStorageSize?, palette: DesignPalette) -> RGBAColor {
+        resolvedColor(forTone: SessionStorageFormatter.format(size).tone, palette: palette)
+    }
+
     public var body: some View {
         let formatted = SessionStorageFormatter.format(size)
-        let fg = Self.resolvedColor(for: size, palette: palette)
+        let fg = Self.resolvedColor(forTone: formatted.tone, palette: palette)
         Text(formatted.label)
-            .font(DesignFonts.tabularBody(11, weight: .medium))
+            .font(DesignFonts.body(11, weight: .medium))
             .foregroundStyle(fg.color)
             .multilineTextAlignment(.trailing)
             .lineLimit(1)
@@ -970,7 +973,6 @@ public struct RenameableSessionRowView: View {
     public var makeRowMenuActions: (() -> [SessionMenuAction])? = nil
     public var makeBatchMenuActions: (() -> [SessionMenuAction])? = nil
     public let onRowClick: (SessionClick) -> Void
-    public var onToggleCheckbox: () -> Void = {}
     public let onRename: ((String) async throws -> Void)?
 
     @State private var editing: Bool = false
@@ -1292,7 +1294,7 @@ public struct ProjectWorkspaceGroupHeaderView: View {
                 statusIndicator
 
                 Text("\(count)")
-                    .font(DesignFonts.tabularBody(11, weight: .medium))
+                    .font(DesignFonts.body(11, weight: .medium))
                     .foregroundStyle(palette.textMuted.color)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 1)
@@ -1403,11 +1405,16 @@ public struct SessionBatchBarAndDialogView: View {
                             .padding(.vertical, 3)
                             .background(Capsule().fill(palette.selected.color))
 
-                        Button("全选", action: onSelectAll)
-                            .font(DesignFonts.body(12, weight: .semibold))
-                            .foregroundStyle(palette.accent.color)
-                            .buttonStyle(PlainHitButtonStyle())
-                            .disabled(busy)
+                        Button(action: onSelectAll) {
+                            Text("全选")
+                                .font(DesignFonts.body(12, weight: .semibold))
+                                .foregroundStyle(palette.accent.color)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(PlainHitButtonStyle())
+                        .disabled(busy)
 
                         Spacer()
 
@@ -1659,7 +1666,7 @@ public struct WorkspaceArchivedToggleRow: View {
                 Spacer()
                 if isOpen {
                     Text("\(archivedCount)")
-                        .font(DesignFonts.tabularBody(11, weight: .medium))
+                        .font(DesignFonts.body(11, weight: .medium))
                         .foregroundStyle(palette.textMuted.color)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 1)
@@ -1872,7 +1879,7 @@ public struct SessionBatchPreviewDialogContentView: View {
                             }
 
                             Text("\(SessionStorageFormatter.formatThousands(item.bytes)) 字节")
-                                .font(DesignFonts.tabularBody(12))
+                                .font(DesignFonts.body(12))
                                 .foregroundStyle(palette.textMuted.color)
 
                             ForEach(item.warnings ?? [], id: \.self) { warning in

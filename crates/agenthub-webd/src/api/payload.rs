@@ -85,11 +85,11 @@ mod tests {
         assert_eq!(payload.probe.unwrap().poll_seconds, Some(20));
         let notifications = payload.notifications.unwrap();
         assert_eq!(
-            notifications.server_url.as_deref(),
+            notifications.config.server_url.as_deref(),
             Some("https://example.invalid")
         );
         assert_eq!(notifications.device_key.as_deref(), Some("bark"));
-        assert_eq!(notifications.notify_reply_needed, Some(true));
+        assert_eq!(notifications.config.notify_reply_needed, Some(true));
     }
 
     #[test]

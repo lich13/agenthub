@@ -6,14 +6,9 @@ pub(crate) fn jobs_with_state(
     state: &DesktopState,
     limit: Option<u32>,
 ) -> Result<Vec<JobResponse>> {
-    let use_cases = AgentHubUseCases::new(state.platform());
-    let plan = use_cases.jobs().list(limit)?;
-    Ok(state
-        .db
-        .list_jobs(plan)?
-        .into_iter()
-        .map(|job| use_cases.jobs().response(job))
-        .collect())
+    AgentHubUseCases::new(state.platform())
+        .jobs()
+        .list_from_db(&state.db, limit)
 }
 
 pub(crate) fn job_detail_with_state(
@@ -21,10 +16,7 @@ pub(crate) fn job_detail_with_state(
     id: &str,
     include_output: Option<bool>,
 ) -> Result<Option<JobResponse>> {
-    let use_cases = AgentHubUseCases::new(state.platform());
-    let plan = use_cases.jobs().detail(id)?;
-    Ok(state
-        .db
-        .job_with_output(&plan, include_output.unwrap_or(true))?
-        .map(|job| use_cases.jobs().response(job)))
+    AgentHubUseCases::new(state.platform())
+        .jobs()
+        .detail_from_db(&state.db, id, include_output)
 }

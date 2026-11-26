@@ -90,6 +90,7 @@ fn main() -> Result<()> {
     ) {
         let mut builder = tokio::runtime::Builder::new_multi_thread();
         builder.worker_threads(2);
+        builder.max_blocking_threads(32);
         builder
     } else {
         tokio::runtime::Builder::new_current_thread()
@@ -1131,24 +1132,16 @@ async fn record_probe_event_with_bark_timeout(
     }
     let feedback_key = async_question_monitor::delivery_key(&event)
         .or_else(|| question_monitor::delivery_key(&event));
-    let feedback_claimed = match feedback_key.as_deref() {
-        Some(key) => db.claim_feedback_delivery(key)?,
-        None => true,
-    };
     let record_plan = probe_service::probe_event_record_plan(event);
     let event = record_plan.event;
     let passive_sent =
         passive_unresolved_action_sent(db, record_plan.passive_marker_key.as_deref())?;
-    let claimed = db.claim_probe_dedupe(
-        &event.dedupe_namespace,
-        &event.dedupe_key,
-        event.ttl_seconds,
-    )?;
-    let mut bark = notification_delivery::codex(
+    let (feedback_claimed, claimed, mut bark) = notification_delivery::codex_with_claims(
         load_config,
         db,
         &event,
-        claimed && feedback_claimed && !passive_sent,
+        feedback_key.as_deref(),
+        passive_sent,
         bark_timeout,
     )
     .await?;
@@ -1280,7 +1273,12 @@ async fn run_probe_error_monitor_once(
     load_config: &(dyn Fn() -> Result<Config> + Sync),
 ) -> Result<ProbeErrorMonitorRunOutcome> {
     let _guard = PROBE_ERROR_MONITOR_LOCK.lock().await;
-    notification_delivery::retry_pending_with_config(db, load_config).await?;
+    if let Err(error) = notification_delivery::retry_pending_with_config(db, load_config).await {
+        tracing::warn!(
+            "pending notification retry failed: {}",
+            safe_probe_monitor_error(&error.to_string())
+        );
+    }
     let config =
         load_config().map_err(|_| anyhow::anyhow!("notification configuration unavailable"))?;
     let config = &config;
@@ -1288,10 +1286,10 @@ async fn run_probe_error_monitor_once(
         if async_question_monitor::is_enabled(config) || question_monitor::is_enabled(config) {
             let paths = resolve_codex_paths(&config.codex.home).codex_paths();
             agenthub_core::read_tasks::spawn_blocking(move || {
-                agenthub_core::codex::notification_thread_headers(&paths)
+                agenthub_core::codex::notification_thread_headers_with_identities(&paths)
                     .ok()
                     .map(|mut rows| {
-                        rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                        rows.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
                         rows
                     })
             })

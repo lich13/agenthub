@@ -22,13 +22,9 @@ use agenthub_core::{
 };
 
 #[test]
-fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
+fn probe_and_update_actions_expose_shared_rpc_names() {
     assert_eq!(
         ProbeAction::BarkTest.as_rpc_action(),
-        commands::PROBE_BARK_TEST
-    );
-    assert_eq!(
-        ProbeAction::BarkTest.as_desktop_command(),
         commands::PROBE_BARK_TEST
     );
     assert_eq!(
@@ -36,15 +32,7 @@ fn probe_and_update_actions_expose_shared_rpc_and_desktop_command_names() {
         commands::PROBE_INSTALL_HOOKS
     );
     assert_eq!(
-        ProbeAction::InstallHooks.as_desktop_command(),
-        commands::PROBE_INSTALL_HOOKS
-    );
-    assert_eq!(
         ProbeAction::RemoveHooks.as_rpc_action(),
-        commands::PROBE_REMOVE_HOOKS
-    );
-    assert_eq!(
-        ProbeAction::RemoveHooks.as_desktop_command(),
         commands::PROBE_REMOVE_HOOKS
     );
 
@@ -184,11 +172,45 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
         })
         .unwrap();
     assert_eq!(
-        Some(save.secret_writes[0].secret_value.as_str()),
+        Some(save.secret_write.as_ref().unwrap().secret_value.as_str()),
         Some("use-case-bark-key")
     );
     let serialized = serde_json::to_string(&save).unwrap();
     assert!(!serialized.contains("use-case-bark-key"));
+
+    let snapshot = agenthub_core::services::probe::probe_status_snapshot_view(
+        serde_json::json!({"label": "Probe"}),
+        42,
+        true,
+        agenthub_core::services::probe::ProbeSnapshotStatus::Cached,
+    );
+    assert_eq!(snapshot["snapshot_age_seconds"], 42);
+    assert_eq!(snapshot["is_refreshing"], true);
+    assert_eq!(snapshot["snapshot_status"], "cached");
+
+    let use_cases = agenthub_core::services::use_cases::AgentHubUseCases::new(&linux);
+    assert!(use_cases.system().capabilities().systemd);
+    assert!(use_cases
+        .settings()
+        .err()
+        .unwrap()
+        .to_string()
+        .contains("config is required"));
+
+    let failed = use_cases.jobs().response(agenthub_core::db::JobRecord {
+        id: "job-a".to_string(),
+        kind: "codex".to_string(),
+        status: "failed".to_string(),
+        title: "Codex".to_string(),
+        started_at: 1,
+        finished_at: Some(2),
+        exit_code: Some(1),
+        output: "auth failed".to_string(),
+        error: Some("401 Unauthorized".to_string()),
+    });
+    assert!(failed.failure_analysis.is_some());
+    assert!(failed.analysis.as_deref().is_some_and(|v| !v.is_empty()));
+    assert!(failed.explanation.as_deref().is_some_and(|v| !v.is_empty()));
 }
 
 #[test]

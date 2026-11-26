@@ -24,8 +24,22 @@ impl Stamp {
         // Read bounded edges so an appended/replaced native record cannot reuse
         // a snapshot merely because its metadata timestamps share one clock tick.
         let (metadata, edge_hash) = if hash_edges {
-            let mut file = fs::File::open(path).ok()?;
+            let sym_meta = fs::symlink_metadata(path).ok()?;
+            if !sym_meta.is_file() || sym_meta.file_type().is_symlink() {
+                return None;
+            }
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+            let mut file = options.open(path).ok()?;
             let metadata = file.metadata().ok()?;
+            if !metadata.is_file() {
+                return None;
+            }
             let mut digest = Sha256::new();
             let mut edge = [0_u8; 4096];
             let head = file.read(&mut edge).ok()?;
@@ -83,8 +97,11 @@ impl SourceStamp {
     }
 }
 
+type InflightMap = std::collections::HashMap<PathBuf, Arc<Mutex<()>>>;
+
 pub(crate) struct ReadCache<T> {
     entries: Mutex<VecDeque<Entry<T>>>,
+    inflight: Mutex<Option<InflightMap>>,
     max_bytes: u64,
     max_entries: usize,
     hash_edges: bool,
@@ -94,6 +111,7 @@ impl<T: Clone> ReadCache<T> {
     pub(crate) const fn new(max_bytes: u64) -> Self {
         Self {
             entries: Mutex::new(VecDeque::new()),
+            inflight: Mutex::new(None),
             max_bytes,
             max_entries: crate::resource_limits::SOURCE_CACHE_ENTRIES,
             hash_edges: true,
@@ -193,6 +211,59 @@ impl<T: Clone> ReadCache<T> {
                 }
             }
         }
+        let flight = self
+            .inflight
+            .lock()
+            .ok()
+            .map(|mut guard| {
+                guard
+                    .get_or_insert_with(std::collections::HashMap::new)
+                    .entry(path.to_path_buf())
+                    .or_insert_with(|| Arc::new(Mutex::new(())))
+                    .clone()
+            })
+            .unwrap_or_else(|| Arc::new(Mutex::new(())));
+        struct InflightCleanup<'a> {
+            inflight: &'a Mutex<Option<InflightMap>>,
+            path: &'a Path,
+            flight: Arc<Mutex<()>>,
+        }
+        impl Drop for InflightCleanup<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut guard) = self.inflight.lock() {
+                    if let Some(map) = guard.as_mut() {
+                        if map.get(self.path).is_some_and(|slot| {
+                            Arc::ptr_eq(slot, &self.flight) && Arc::strong_count(slot) <= 2
+                        }) {
+                            map.remove(self.path);
+                        }
+                        if map.is_empty() {
+                            *guard = None;
+                        }
+                    }
+                }
+            }
+        }
+        let cleanup = InflightCleanup {
+            inflight: &self.inflight,
+            path,
+            flight,
+        };
+        let _flight_guard = cleanup.flight.lock().unwrap_or_else(|e| e.into_inner());
+        let before = stamp();
+        if let Ok(mut entries) = self.entries.lock() {
+            if let Some(mut entry) =
+                crate::lru::take_first(&mut entries, |entry| entry.path == path)
+            {
+                if Some(&entry.stamp) == before.as_ref() {
+                    entry.last_accessed = std::time::Instant::now();
+                    let value = entry.value.clone();
+                    entries.push_back(entry);
+                    drop(entries);
+                    return Ok((*value).clone());
+                }
+            }
+        }
         let value = Arc::new(load()?);
         // Never publish a snapshot while its source is being appended or replaced.
         if let Some(stamp) = before.filter(|before| Some(before) == stamp().as_ref()) {
@@ -240,6 +311,9 @@ impl<T: Clone> ReadCache<T> {
             entries.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
             let evicted = before - entries.len();
             if evicted > 0 {
+                if entries.capacity() > entries.len().saturating_mul(4).max(16) {
+                    entries.shrink_to_fit();
+                }
                 crate::note_cache_eviction();
             }
             evicted

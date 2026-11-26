@@ -1,5 +1,8 @@
 use crate::overview::DesktopState;
-use agenthub_core::probe::{ProbeRuntime, ProbeStatus};
+use agenthub_core::{
+    probe::{ProbeRuntime, ProbeStatus},
+    services::probe as probe_service,
+};
 use anyhow::Result;
 
 pub async fn desktop_probe_status_with_state(state: &DesktopState) -> Result<ProbeStatus> {
@@ -14,18 +17,7 @@ pub async fn desktop_probe_status_with_options(
     let mut status = ProbeRuntime::new(config, state.platform().clone())
         .status_with_options(force_refresh)
         .await?;
-    if let Some(raw) = state.db.get_setting("probe_error_monitor_status")? {
-        if let Ok(runtime) = serde_json::from_str::<
-            agenthub_core::probe_error_monitor::ProbeErrorMonitorRuntimeStatus,
-        >(&raw)
-        {
-            status.error_monitor_status = runtime.status;
-            status.error_monitor_last_scan_at = Some(runtime.last_scan_at);
-            status.error_monitor_last_error = runtime.last_error;
-            status.error_monitor_incident_count = runtime.incident_count;
-        }
-    }
-    status.provider_notifications = state.db.native_notification_status()?;
+    probe_service::enrich_probe_status_from_db(&mut status, &state.db)?;
     Ok(status)
 }
 

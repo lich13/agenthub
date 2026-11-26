@@ -74,13 +74,16 @@ fn schema_three_reopen_preserves_ciphertext_queue_progress_and_business_state() 
                     'idx_audit_log_created_at',
                     'idx_jobs_started_at',
                     'idx_native_probe_deliveries_updated_at',
-                    'idx_native_probe_claude_session'
+                    'idx_native_probe_claude_session',
+                    'idx_probe_events_dedupe_created',
+                    'idx_probe_error_incidents_pending',
+                    'idx_probe_dedupe_expires_at'
                 )",
                 [],
                 |r| r.get::<_, usize>(0)
             )
             .unwrap(),
-            7
+            10
         );
         assert_eq!(
             conn.pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
@@ -279,7 +282,10 @@ fn existing_schema_three_store_missing_performance_indexes_backfills_idempotentl
         conn.execute_batch(
             "DROP INDEX idx_audit_log_created_at;
              DROP INDEX idx_jobs_started_at;
-             DROP INDEX idx_native_probe_deliveries_updated_at;",
+             DROP INDEX idx_native_probe_deliveries_updated_at;
+             DROP INDEX idx_probe_events_dedupe_created;
+             DROP INDEX idx_probe_error_incidents_pending;
+             DROP INDEX idx_probe_dedupe_expires_at;",
         )
         .unwrap();
     }
@@ -300,13 +306,16 @@ fn existing_schema_three_store_missing_performance_indexes_backfills_idempotentl
                 'idx_audit_log_created_at',
                 'idx_jobs_started_at',
                 'idx_native_probe_deliveries_updated_at',
-                'idx_native_probe_claude_session'
+                'idx_native_probe_claude_session',
+                'idx_probe_events_dedupe_created',
+                'idx_probe_error_incidents_pending',
+                'idx_probe_dedupe_expires_at'
             )",
             [],
             |r| r.get::<_, usize>(0),
         )
         .unwrap(),
-        4
+        7
     );
     assert_eq!(
         conn.pragma_query_value(None, "synchronous", |r| r.get::<_, i64>(0))
@@ -329,4 +338,142 @@ fn existing_schema_three_store_missing_performance_indexes_backfills_idempotentl
             .unwrap(),
         4_194_304
     );
+}
+
+#[test]
+fn corrupted_bark_ciphertext_is_quarantined_without_starving_valid_deliveries_beyond_limit_10() {
+    use crate::db::NotificationChannel;
+    use rusqlite::params;
+    use serde_json::json;
+
+    let fixture = Fixture::new();
+    let key = SecretBox::random_key_material();
+    let db =
+        PanelDb::open_with_secret_box(&fixture.path, SecretBox::from_key_material(&key).unwrap())
+            .unwrap();
+    let mut cfg = crate::config::Config::current_defaults().unwrap();
+    cfg.probe.enabled = true;
+    cfg.probe.notifications.enabled = true;
+    db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-key")
+        .unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(cfg.clone()))
+        .unwrap();
+
+    let now_ms = jiff::Timestamp::now().as_millisecond() + 1_000;
+    for i in 0..10 {
+        let bad_key = format!("bad-{i:02}");
+        assert!(db
+            .stage_notification_delivery(
+                NotificationChannel::Bark,
+                &bad_key,
+                now_ms,
+                &json!({"title": bad_key, "chunks": ["broken"]}),
+            )
+            .unwrap());
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE probe_notification_deliveries SET ciphertext = X'DEADBEEF', created_ms = ?2 WHERE event_key = ?1",
+            params![bad_key, 1_000 + i],
+        )
+        .unwrap();
+    }
+    assert!(db
+        .stage_notification_delivery(
+            NotificationChannel::Bark,
+            "good-10",
+            now_ms,
+            &json!({"title": "valid-bark", "chunks": ["ok"]}),
+        )
+        .unwrap());
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE probe_notification_deliveries SET created_ms = 2000 WHERE event_key = 'good-10'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let due = db.due_notification_deliveries(10).unwrap();
+    assert_eq!(
+        due.len(),
+        1,
+        "valid item past 10 corrupted rows must be returned without starvation"
+    );
+    assert_eq!(due[0].event_key, "good-10");
+    assert_eq!(due[0].payload["title"], "valid-bark");
+
+    let lease = db
+        .claim_notification_delivery(NotificationChannel::Bark, "good-10")
+        .unwrap()
+        .unwrap();
+    db.finish_notification_delivery(
+        &lease,
+        &json!({"sent": true, "skipped": false, "http_status": 200, "retryable": false, "uncertain": false}),
+    )
+    .unwrap();
+    assert!(
+        db.due_notification_deliveries(10).is_err(),
+        "once valid rows are delivered, remaining unreadable rows must surface decryption error while preserving ciphertext"
+    );
+}
+
+#[test]
+fn claim_and_stage_codex_delivery_is_atomic_with_dedupe_and_marker() {
+    use crate::db::NotificationChannel;
+    use serde_json::json;
+
+    let fixture = Fixture::new();
+    let key = SecretBox::random_key_material();
+    let db =
+        PanelDb::open_with_secret_box(&fixture.path, SecretBox::from_key_material(&key).unwrap())
+            .unwrap();
+    let mut cfg = crate::config::Config::current_defaults().unwrap();
+    cfg.probe.enabled = true;
+    cfg.probe.notifications.enabled = true;
+    db.set_secret_setting_bytes("probe_bark_device_key", b"fixture-key")
+        .unwrap();
+    db.sync_notification_channels_from_config(&|| Ok(cfg.clone()))
+        .unwrap();
+
+    let now_ms = jiff::Timestamp::now().as_millisecond() + 1_000;
+    let payload = json!({"title": "Codex｜需要回复｜原子事务", "chunks": ["请确认"]});
+    let first = db
+        .claim_and_stage_codex_delivery(
+            Some("probe_feedback:th-1:turn-1"),
+            "probe_events",
+            "codex:th-1:turn-1",
+            3600,
+            Some((
+                NotificationChannel::Bark,
+                "codex:th-1:turn-1",
+                now_ms,
+                &payload,
+            )),
+        )
+        .unwrap();
+    assert_eq!(first, (true, true, true));
+    assert_eq!(
+        db.get_setting("probe_feedback:th-1:turn-1")
+            .unwrap()
+            .as_deref(),
+        Some("delivering")
+    );
+
+    let duplicate = db
+        .claim_and_stage_codex_delivery(
+            Some("probe_feedback:th-1:turn-1"),
+            "probe_events",
+            "codex:th-1:turn-1",
+            3600,
+            Some((
+                NotificationChannel::Bark,
+                "codex:th-1:turn-1",
+                now_ms,
+                &payload,
+            )),
+        )
+        .unwrap();
+    assert_eq!(duplicate, (false, false, false));
+    assert_eq!(db.due_notification_deliveries(10).unwrap().len(), 1);
 }

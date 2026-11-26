@@ -81,65 +81,70 @@ public struct SubagentSummaryBarView: View {
                     let responder = triggerAnchorView?.window?.firstResponder ?? triggerAnchorView
                     onTogglePanel(responder)
                 } label: {
-                    HStack(spacing: 8) {
+                    HStack(alignment: .center, spacing: 8) {
                         LucideIcon(.bot, size: 16)
                             .foregroundStyle(baseFg)
 
-                        if provider == .claudeCode {
-                            Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
-                                .font(DesignFonts.body(12, weight: .medium))
-                                .foregroundStyle(baseFg)
-                            Text("\(totalCount)")
-                                .font(DesignFonts.tabularBody(12, weight: .medium))
-                                .foregroundStyle(baseFg)
-                        } else {
-                            Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
-                                .font(DesignFonts.body(12, weight: .medium))
-                                .foregroundStyle(baseFg)
+                        FlowButtonRow(spacing: 8, lineSpacing: 4) {
+                            if provider == .claudeCode {
+                                Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
+                                    .font(DesignFonts.body(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
+                                Text("\(totalCount)")
+                                    .font(DesignFonts.body(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
+                            } else {
+                                Text(Self.summaryHeaderTitle(provider: provider, totalCount: totalCount))
+                                    .font(DesignFonts.body(12, weight: .medium))
+                                    .foregroundStyle(baseFg)
 
-                            if runningCount > 0 {
-                                HStack(spacing: 6) {
-                                    RunningIndicator(size: 13)
-                                    Text("\(runningCount) 个运行中")
-                                        .font(DesignFonts.tabularBody(12, weight: .semibold))
-                                        .foregroundStyle(palette.accent.color)
+                                if runningCount > 0 {
+                                    HStack(spacing: 6) {
+                                        RunningIndicator(size: 13)
+                                        Text("\(runningCount) 个运行中")
+                                            .font(DesignFonts.body(12, weight: .semibold))
+                                            .foregroundStyle(palette.accent.color)
+                                    }
+                                }
+                                if completedCount > 0 {
+                                    Text("\(completedCount) 已完成")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(baseFg)
+                                }
+                                if creatingCount > 0 {
+                                    Text("\(creatingCount) 正在创建")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(baseFg)
+                                }
+                                if failedCount > 0 {
+                                    Text("\(failedCount) 失败")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(palette.errFg.color)
+                                }
+                                if interruptedCount > 0 {
+                                    Text("\(interruptedCount) 已中断")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(baseFg)
+                                }
+                                if unknownCount > 0 {
+                                    Text("\(unknownCount) 状态未知")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(baseFg)
+                                }
+                                if unavailableCount > 0 {
+                                    Text("\(unavailableCount) 不可用")
+                                        .font(DesignFonts.body(12, weight: .medium))
+                                        .foregroundStyle(palette.errFg.color)
                                 }
                             }
-                            if completedCount > 0 {
-                                Text("\(completedCount) 已完成")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(baseFg)
-                            }
-                            if creatingCount > 0 {
-                                Text("\(creatingCount) 正在创建")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(baseFg)
-                            }
-                            if failedCount > 0 {
-                                Text("\(failedCount) 失败")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(palette.errFg.color)
-                            }
-                            if interruptedCount > 0 {
-                                Text("\(interruptedCount) 已中断")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(baseFg)
-                            }
-                            if unknownCount > 0 {
-                                Text("\(unknownCount) 状态未知")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(baseFg)
-                            }
-                            if unavailableCount > 0 {
-                                Text("\(unavailableCount) 不可用")
-                                    .font(DesignFonts.tabularBody(12, weight: .medium))
-                                    .foregroundStyle(palette.errFg.color)
-                            }
-                            LucideIcon(.chevronRight, size: 14)
-                                .foregroundStyle(baseFg)
                         }
 
                         Spacer(minLength: 0)
+
+                        if provider != .claudeCode {
+                            LucideIcon(.chevronRight, size: 14)
+                                .foregroundStyle(baseFg)
+                        }
                     }
                     .frame(minHeight: 28)
                     .padding(.vertical, 6)
@@ -208,29 +213,12 @@ public struct SubagentPanelView: View {
     public var restoreFocusResponder: NSResponder?
     public let onClose: () -> Void
 
-    @StateObject private var subagentThreadStore = ThreadMessageStore()
-    @StateObject private var subagentClaudeStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
-    @StateObject private var subagentProviderStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
-
     public enum NavigationFrame: Equatable {
         case list(parent: SubagentActivity?, collection: SubagentCollection?)
         case detail(SubagentActivity)
     }
 
-    @State private var frameStack: [NavigationFrame] = []
-    @State private var scrollAnchorStack: [ConversationTableCoordinator.ScrollAnchorSnapshot?] = []
-    @State private var pendingRestoreAnchor: ConversationTableCoordinator.ScrollAnchorSnapshot?
-    @State private var currentDetailSubagents: SubagentCollection?
-    @State private var rows: [ConversationRowItem] = []
-    @State private var timelineEntries: [TimelineEntry] = []
-    @State private var activeTimelineId: String?
-    @State private var beforeCursor: String?
-    @State private var hasMoreOlder: Bool = false
-    @State private var loadingOlder: Bool = false
-    @State private var delegationExpanded: Bool = false
-    @State private var loading: Bool = false
-    @State private var errorText: String?
-    @State private var coordinatorRef: ConversationTableCoordinator?
+    @StateObject private var panelController: SubagentPanelController
 
     public init(
         store: RuntimeConnectionStore,
@@ -244,6 +232,14 @@ public struct SubagentPanelView: View {
         restoreFocusResponder: NSResponder? = nil,
         onClose: @escaping () -> Void
     ) {
+        _panelController = StateObject(
+            wrappedValue: SubagentPanelController(
+                store: store,
+                provider: provider,
+                rootSessionKey: rootSessionKey,
+                initialAgent: initialAgent
+            )
+        )
         self.store = store
         self.provider = provider
         self.rootSessionKey = rootSessionKey
@@ -257,14 +253,11 @@ public struct SubagentPanelView: View {
     }
 
     public var currentAgent: SubagentActivity? {
-        if case let .detail(agent)? = frameStack.last {
-            return agent
-        }
-        return nil
+        panelController.currentAgent
     }
 
     private var activeListCollection: SubagentCollection? {
-        if case let .list(_, nestedCollection)? = frameStack.last {
+        if case let .list(_, nestedCollection)? = panelController.frameStack.last {
             return nestedCollection ?? collection
         }
         return collection
@@ -274,7 +267,7 @@ public struct SubagentPanelView: View {
         VStack(spacing: 0) {
             // Drawer Header
             HStack(spacing: 8) {
-                if !frameStack.isEmpty {
+                if !panelController.frameStack.isEmpty {
                     Button {
                         popAgent()
                     } label: {
@@ -316,7 +309,7 @@ public struct SubagentPanelView: View {
             if let current = currentAgent {
                 // Child Codex / Antigravity subagent uses its OWN direct subagents collection (L0 -> L1 -> L2)
                 if provider == .codex || provider == .antigravity,
-                   let childCol = currentDetailSubagents,
+                   let childCol = panelController.currentDetailSubagents,
                    SubagentSummaryBarView.shouldDisplay(provider: provider, collection: childCol, isSupported: true)
                 {
                     SubagentSummaryBarView(
@@ -324,18 +317,17 @@ public struct SubagentPanelView: View {
                         collection: childCol,
                         isSupported: true
                     ) { _ in
-                        scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
-                        frameStack.append(.list(parent: current, collection: childCol))
+                        panelController.pushChildList(parent: current, collection: childCol)
                     }
                 }
 
                 if let del = current.delegation, !del.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
                         Button {
-                            delegationExpanded.toggle()
+                            panelController.delegationExpanded.toggle()
                         } label: {
                             HStack(spacing: 6) {
-                                LucideIcon(delegationExpanded ? .chevronDown : .chevronRight, size: 14)
+                                LucideIcon(panelController.delegationExpanded ? .chevronDown : .chevronRight, size: 14)
                                 Text("委派内容")
                                     .font(DesignFonts.body(12, weight: .medium))
                                 Spacer()
@@ -344,9 +336,9 @@ public struct SubagentPanelView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(PlainHitButtonStyle())
-                        .background(SubagentKeyTargetView(enabled: true, onActivate: { delegationExpanded.toggle() }))
+                        .background(SubagentKeyTargetView(enabled: true, onActivate: { panelController.delegationExpanded.toggle() }))
 
-                        if delegationExpanded {
+                        if panelController.delegationExpanded {
                             Text(VisibleMarkdownEngine.visibleMarkdown(del))
                                 .font(DesignFonts.body(12))
                                 .foregroundStyle(palette.textSecondary.color)
@@ -361,46 +353,43 @@ public struct SubagentPanelView: View {
                         Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
                     }
                 }
-                if let errorText {
+                if let errorText = panelController.errorText {
                     Text(errorText)
                         .font(DesignFonts.body(12))
                         .foregroundStyle(palette.errFg.color)
                         .padding(12)
                 }
-                if let coord = coordinatorRef {
-                    ZStack(alignment: .leading) {
-                        ConversationReaderTableView(
-                            coordinator: coord,
-                            rows: rows,
-                            scheme: scheme,
-                            workspace: workspace,
-                            sessionScopeKey: "\(store.machineScope):subagent:\(rootSessionKey):\(current.agentId ?? current.id)",
-                            sessionProvider: provider,
-                            sessionKey: current.agentId ?? rootSessionKey,
-                            rootThreadId: (provider == .codex || provider == .antigravity) ? rootSessionKey : nil,
-                            hasTimelineRail: !timelineEntries.isEmpty,
-                            isSubagent: true,
-                            canLoadOlder: hasMoreOlder && beforeCursor != nil,
-                            isLoadingOlder: loadingOlder,
-                            isLoadOlderBlockedByError: errorText != nil
-                        )
-                        if !timelineEntries.isEmpty {
-                            TimelineRailView(
-                                entries: timelineEntries,
-                                activeId: activeTimelineId,
-                                availableWidth: LayoutMetrics.subagentDrawerWidth,
-                                loadOlder: (hasMoreOlder && beforeCursor != nil) ? {
-                                    errorText = nil
-                                    Task { await loadOlderSubagentPageIfNeeded() }
-                                } : nil,
-                                loadingOlder: loadingOlder
-                            ) { entry in
-                                _ = coord.scrollToPositionKey(entry.id)
-                            }
+                let coord = panelController.coordinator
+                ZStack(alignment: .leading) {
+                    ConversationReaderTableView(
+                        coordinator: coord,
+                        rows: panelController.rows,
+                        scheme: scheme,
+                        workspace: workspace,
+                        sessionScopeKey: "\(store.machineScope):subagent:\(rootSessionKey):\(current.agentId ?? current.id)",
+                        sessionProvider: provider,
+                        sessionKey: current.agentId ?? rootSessionKey,
+                        rootThreadId: (provider == .codex || provider == .antigravity) ? rootSessionKey : nil,
+                        hasTimelineRail: !panelController.timelineEntries.isEmpty,
+                        isSubagent: true,
+                        canLoadOlder: panelController.hasMoreOlder && panelController.beforeCursor != nil,
+                        isLoadingOlder: panelController.loadingOlder,
+                        isLoadOlderBlockedByError: panelController.errorText != nil
+                    )
+                    if !panelController.timelineEntries.isEmpty {
+                        TimelineRailView(
+                            entries: panelController.timelineEntries,
+                            activeId: panelController.activeTimelineId,
+                            availableWidth: LayoutMetrics.subagentDrawerWidth,
+                            loadOlder: (panelController.hasMoreOlder && panelController.beforeCursor != nil) ? {
+                                panelController.errorText = nil
+                                Task { await panelController.loadOlderSubagentPageIfNeeded() }
+                            } : nil,
+                            loadingOlder: panelController.loadingOlder
+                        ) { entry in
+                            _ = coord.scrollToPositionKey(entry.id)
                         }
                     }
-                } else {
-                    Spacer()
                 }
             } else {
                 // Agent List (sorted by status priority; omits generic collection.warning per AGENTS.md:109)
@@ -489,34 +478,25 @@ public struct SubagentPanelView: View {
             }
         }
         .onAppear {
-            if coordinatorRef == nil {
-                let c = ConversationTableCoordinator(store: store)
-                c.onOpenSubagent = { nextSub in
-                    if provider == .codex || provider == .antigravity {
-                        pushAgent(nextSub)
-                    }
-                }
-                c.onLoadOlderRequested = {
-                    Task { await loadOlderSubagentPageIfNeeded() }
-                }
-                c.onActiveTimelineChanged = { id in
-                    DispatchQueue.main.async {
-                        if activeTimelineId != id { activeTimelineId = id }
-                    }
-                }
-                coordinatorRef = c
-            }
-            if let initialAgent, frameStack.isEmpty {
-                pushAgent(initialAgent)
+            panelController.syncContext(provider: provider, rootSessionKey: rootSessionKey)
+            if let initialAgent, panelController.frameStack.isEmpty {
+                panelController.pushAgent(initialAgent)
             }
         }
-        .task(id: currentAgent?.agentId ?? currentAgent?.id) {
+        .onChange(of: rootSessionKey) { nextRoot in
+            panelController.syncContext(provider: provider, rootSessionKey: nextRoot)
+        }
+        .task(id: "\(store.revision):\(provider.rawValue):\(rootSessionKey):\(panelController.navigationGeneration):\(currentAgent?.agentId ?? currentAgent?.id ?? "list")") {
+            panelController.syncContext(provider: provider, rootSessionKey: rootSessionKey)
             guard let initial = currentAgent else { return }
+            let capturedGen = panelController.navigationGeneration
             while !Task.isCancelled {
                 let liveAgent = currentAgent ?? initial
-                guard liveAgent.agentId == initial.agentId else { break }
+                guard panelController.navigationGeneration == capturedGen,
+                      liveAgent.agentId == initial.agentId
+                else { break }
                 if store.isWindowVisible {
-                    await fetchSubagentDetail(liveAgent)
+                    await panelController.fetchSubagentDetail(liveAgent, generation: capturedGen)
                 }
                 let latestStatus = currentAgent?.status ?? liveAgent.status
                 let pollNs = Self.pollingIntervalNanoseconds(provider: provider, status: latestStatus)
@@ -548,30 +528,7 @@ public struct SubagentPanelView: View {
     }
 
     public func pushAgent(_ agent: SubagentActivity) {
-        guard agent.available, let nextId = agent.agentId, !nextId.isEmpty,
-              !frameStack.contains(where: {
-                  if case let .detail(existing) = $0 { return existing.agentId == nextId }
-                  return false
-              })
-        else { return }
-        if let top = frameStack.last {
-            if case .detail = top {
-                scrollAnchorStack.append(coordinatorRef?.captureScrollAnchor())
-            } else {
-                scrollAnchorStack.append(nil)
-            }
-        }
-        pendingRestoreAnchor = nil
-        delegationExpanded = false
-        currentDetailSubagents = nil
-        frameStack.append(.detail(agent))
-        rows = []
-        timelineEntries = []
-        beforeCursor = nil
-        hasMoreOlder = false
-        loadingOlder = false
-        loading = false
-        errorText = nil
+        panelController.pushAgent(agent)
     }
 
     public static func propagateUpdatedChildToParentList(
@@ -598,9 +555,123 @@ public struct SubagentPanelView: View {
     }
 
     public func popAgent() {
-        guard !frameStack.isEmpty else { return }
-        let popped = frameStack.removeLast()
-        Self.propagateUpdatedChildToParentList(popped: popped, into: &frameStack)
+        panelController.popAgent()
+    }
+
+    public func subagentStatusLabel(_ status: String) -> String {
+        if provider == .claudeCode && status == "unknown" {
+            return "状态未知"
+        }
+        return switch status {
+        case "creating": "创建中"
+        case "running": "运行中"
+        case "completed": "已完成"
+        case "failed": "失败"
+        case "interrupted": "已中断"
+        default: "状态未知"
+        }
+    }
+
+    private func subagentTone(_ status: String) -> StatusChipTone {
+        switch status {
+        case "running", "creating": .info
+        case "completed": .success
+        case "failed": .danger
+        case "interrupted": .warning
+        default: .neutral
+        }
+    }
+}
+
+@MainActor
+private final class SubagentPanelController: ObservableObject {
+    let store: RuntimeConnectionStore
+    var provider: SessionProvider
+    var rootSessionKey: String
+    let coordinator: ConversationTableCoordinator
+
+    private let subagentThreadStore = ThreadMessageStore()
+    private let subagentClaudeStore = PagedEventHistoryStore<ClaudeHistoryEvent> { ev, _ in ev.id }
+    private let subagentProviderStore = PagedEventHistoryStore<ProviderHistoryEvent>.forProviderEvents()
+
+    @Published var frameStack: [SubagentPanelView.NavigationFrame] = []
+    @Published var currentDetailSubagents: SubagentCollection?
+    @Published var rows: [ConversationRowItem] = []
+    @Published var timelineEntries: [TimelineEntry] = []
+    @Published var activeTimelineId: String?
+    @Published var beforeCursor: String?
+    @Published var hasMoreOlder: Bool = false
+    @Published var loadingOlder: Bool = false
+    @Published var delegationExpanded: Bool = false
+    @Published var loading: Bool = false
+    @Published var errorText: String?
+    @Published private(set) var navigationGeneration: UInt64 = 0
+
+    private var scrollAnchorStack: [ConversationTableCoordinator.ScrollAnchorSnapshot?] = []
+    private var pendingRestoreAnchor: ConversationTableCoordinator.ScrollAnchorSnapshot?
+    private var lastPollSignature: SubagentPollSignature?
+
+    private struct SubagentPollSignature: Equatable {
+        let scopeKey: String
+        let epoch: String
+        let revision: String
+        let agent: SubagentActivity?
+        let subagents: SubagentCollection?
+        let subagentUpdates: [String: SubagentActivity]?
+    }
+
+    init(
+        store: RuntimeConnectionStore,
+        provider: SessionProvider,
+        rootSessionKey: String,
+        initialAgent: SubagentActivity?
+    ) {
+        let coord = ConversationTableCoordinator(store: store)
+        self.store = store
+        self.provider = provider
+        self.rootSessionKey = rootSessionKey
+        self.coordinator = coord
+
+        coord.onOpenSubagent = { [weak self] nextSub in
+            guard let self, self.provider == .codex || self.provider == .antigravity else { return }
+            self.pushAgent(nextSub)
+        }
+        coord.onLoadOlderRequested = { [weak self] in
+            guard let self else { return }
+            Task { await self.loadOlderSubagentPageIfNeeded() }
+        }
+        coord.onActiveTimelineChanged = { [weak self] id in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.activeTimelineId != id else { return }
+                self.activeTimelineId = id
+            }
+        }
+
+        if let initialAgent {
+            pushAgent(initialAgent)
+        }
+    }
+
+    var currentAgent: SubagentActivity? {
+        if case let .detail(agent)? = frameStack.last {
+            return agent
+        }
+        return nil
+    }
+
+    func syncContext(provider nextProvider: SessionProvider, rootSessionKey nextRoot: String) {
+        guard provider != nextProvider || rootSessionKey != nextRoot else { return }
+        provider = nextProvider
+        rootSessionKey = nextRoot
+        navigationGeneration &+= 1
+        frameStack = []
+        scrollAnchorStack = []
+        pendingRestoreAnchor = nil
+        resetDetailSlice()
+    }
+
+    private func resetDetailSlice() {
+        lastPollSignature = nil
         delegationExpanded = false
         currentDetailSubagents = nil
         rows = []
@@ -610,12 +681,82 @@ public struct SubagentPanelView: View {
         loadingOlder = false
         loading = false
         errorText = nil
+    }
+
+    func pushChildList(parent: SubagentActivity, collection: SubagentCollection) {
+        navigationGeneration &+= 1
+        scrollAnchorStack.append(coordinator.captureScrollAnchor())
+        frameStack.append(.list(parent: parent, collection: collection))
+        resetDetailSlice()
+    }
+
+    func pushAgent(_ agent: SubagentActivity) {
+        guard agent.available, let nextId = agent.agentId, !nextId.isEmpty,
+              !frameStack.contains(where: {
+                  if case let .detail(existing) = $0 { return existing.agentId == nextId }
+                  return false
+              })
+        else { return }
+        navigationGeneration &+= 1
+        if let top = frameStack.last {
+            if case .detail = top {
+                scrollAnchorStack.append(coordinator.captureScrollAnchor())
+            } else {
+                scrollAnchorStack.append(nil)
+            }
+        }
+        pendingRestoreAnchor = nil
+        frameStack.append(.detail(agent))
+        resetDetailSlice()
+    }
+
+    func popAgent() {
+        guard !frameStack.isEmpty else { return }
+        navigationGeneration &+= 1
+        let popped = frameStack.removeLast()
+        SubagentPanelView.propagateUpdatedChildToParentList(popped: popped, into: &frameStack)
+        resetDetailSlice()
         let poppedAnchor = scrollAnchorStack.isEmpty ? nil : scrollAnchorStack.removeLast()
         if case .detail? = frameStack.last {
             pendingRestoreAnchor = poppedAnchor
         } else {
             pendingRestoreAnchor = nil
         }
+    }
+
+    private func isCurrentSubagent(
+        agentId: String,
+        generation: UInt64,
+        revision: UInt64,
+        rootKey: String
+    ) -> Bool {
+        !Task.isCancelled
+            && store.revision == revision
+            && navigationGeneration == generation
+            && rootSessionKey == rootKey
+            && currentAgent?.agentId == agentId
+    }
+
+    private func makePollSignature(
+        scopeKey: String,
+        history: HistoryMetadata?,
+        agent: SubagentActivity?,
+        subagents: SubagentCollection? = nil,
+        subagentUpdates: [String: SubagentActivity]? = nil
+    ) -> SubagentPollSignature? {
+        guard let h = history, !h.epoch.isEmpty, !h.revision.isEmpty, h.reset != true else { return nil }
+        return SubagentPollSignature(
+            scopeKey: scopeKey,
+            epoch: h.epoch,
+            revision: h.revision,
+            agent: agent,
+            subagents: subagents,
+            subagentUpdates: subagentUpdates
+        )
+    }
+
+    private func shouldSkipUnchangedPoll(_ candidate: SubagentPollSignature?) -> Bool {
+        !rows.isEmpty && pendingRestoreAnchor == nil && candidate != nil && candidate == lastPollSignature
     }
 
     private func updateCurrentFrameAgent(_ incoming: SubagentActivity) {
@@ -662,39 +803,56 @@ public struct SubagentPanelView: View {
     }
 
     private func applyOlderPageRows(_ nextRows: [ConversationRowItem]) {
-        coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
+        coordinator.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: false)
         rows = nextRows
     }
 
-    private func fetchSubagentDetail(_ agent: SubagentActivity) async {
+    func fetchSubagentDetail(_ agent: SubagentActivity, generation: UInt64) async {
         guard let agentId = agent.agentId, !agentId.isEmpty else { return }
+        let capturedRev = store.revision
+        let capturedRoot = rootSessionKey
+        guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
         if rows.isEmpty { loading = true }
-        defer { if currentAgent?.agentId == agentId, !Task.isCancelled { loading = false } }
-        let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
+        defer {
+            if isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) {
+                loading = false
+            }
+        }
+        let scopeKey = "\(store.machineScope):sub:\(capturedRoot):\(agentId)"
         do {
             if provider == .codex {
                 struct ReqWrap: Encodable { let request: SubagentDetailRequest }
                 let resp: SubagentDetailResponse = try await store.rpc(
                     "threads.subagentDetail",
-                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: 120))
+                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: capturedRoot, agentId: agentId, limit: 120))
                 )
-                guard currentAgent?.agentId == agentId else { return }
-                guard resp.rootThreadId == rootSessionKey, resp.agent.agentId == agentId else {
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
+                guard resp.rootThreadId == capturedRoot, resp.agent.agentId == agentId else {
                     throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                 }
                 updateCurrentFrameAgent(resp.agent)
-                let slot = subagentThreadStore.applyDetail(resp.detail)
-                let nextSubs = slot.subagents ?? resp.detail.subagents
-                if currentDetailSubagents != nextSubs { currentDetailSubagents = nextSubs }
-                if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = buildCodexSubagentRows(blocks: slot.blocks, agentName: resp.agent.name)
-                if rows != nextRows { rows = nextRows }
-                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
-                    provider: .codex,
-                    sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                let candidateSig = makePollSignature(
+                    scopeKey: scopeKey,
+                    history: resp.detail.history,
+                    agent: resp.agent,
+                    subagents: resp.detail.subagents,
+                    subagentUpdates: resp.detail.subagentUpdates
                 )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                if !shouldSkipUnchangedPoll(candidateSig) {
+                    let slot = subagentThreadStore.applyDetail(resp.detail)
+                    let nextSubs = slot.subagents ?? resp.detail.subagents
+                    if currentDetailSubagents != nextSubs { currentDetailSubagents = nextSubs }
+                    if hasMoreOlder != slot.hasMoreBlocks { hasMoreOlder = slot.hasMoreBlocks }
+                    if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                    let nextRows = buildCodexSubagentRows(blocks: slot.blocks, agentName: resp.agent.name)
+                    if rows != nextRows { rows = nextRows }
+                    let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                        provider: .codex,
+                        sources: slot.blocks.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                    )
+                    if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                    lastPollSignature = candidateSig
+                }
             } else if provider == .claudeCode {
                 struct ClaudeSubReq: Encodable {
                     let sessionKey: String
@@ -703,100 +861,135 @@ public struct SubagentPanelView: View {
                 }
                 let detail: ClaudeSessionDetail = try await store.rpc(
                     "claude.detail",
-                    args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: 160)
+                    args: ClaudeSubReq(sessionKey: capturedRoot, agentId: agentId, limit: 160)
                 )
-                guard currentAgent?.agentId == agentId else { return }
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
                 if let latestAgent = detail.agent {
                     updateCurrentFrameAgent(latestAgent)
                 }
-                let slot = subagentClaudeStore.applyHeadPoll(
-                    key: scopeKey,
-                    headEvents: detail.events,
+                let candidateSig = makePollSignature(
+                    scopeKey: scopeKey,
                     history: detail.history,
-                    totalEvents: detail.totalEvents,
-                    beforeCursor: detail.beforeCursor,
-                    hasMore: detail.hasMore,
-                    timeline: detail.timeline
+                    agent: detail.agent ?? currentAgent
                 )
-                if currentDetailSubagents != nil { currentDetailSubagents = nil }
-                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = buildClaudeSubagentRows(events: slot.events)
-                if rows != nextRows { rows = nextRows }
-                if !timelineEntries.isEmpty { timelineEntries = [] }
+                if !shouldSkipUnchangedPoll(candidateSig) {
+                    let slot = subagentClaudeStore.applyHeadPoll(
+                        key: scopeKey,
+                        headEvents: detail.events,
+                        history: detail.history,
+                        totalEvents: detail.totalEvents,
+                        beforeCursor: detail.beforeCursor,
+                        hasMore: detail.hasMore,
+                        timeline: detail.timeline
+                    )
+                    if currentDetailSubagents != nil { currentDetailSubagents = nil }
+                    if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                    if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                    let nextRows = buildClaudeSubagentRows(events: slot.events)
+                    if rows != nextRows { rows = nextRows }
+                    if !timelineEntries.isEmpty { timelineEntries = [] }
+                    lastPollSignature = candidateSig
+                }
             } else if provider == .antigravity {
                 struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let detail: ProviderSessionDetail = try await store.rpc(
                     "antigravity.detail",
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: 160))
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: capturedRoot, agentId: agentId, limit: 160))
                 )
-                guard currentAgent?.agentId == agentId else { return }
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
                 if let latestAgent = detail.agent {
                     guard latestAgent.agentId == agentId else {
                         throw AgentHubFFIError("子智能体关联已变化，请重新打开")
                     }
                     updateCurrentFrameAgent(latestAgent)
                 }
-                let slot = subagentProviderStore.applyHeadPoll(
-                    key: scopeKey,
-                    headEvents: detail.events,
+                let candidateSig = makePollSignature(
+                    scopeKey: scopeKey,
                     history: detail.history,
-                    totalEvents: detail.totalEvents,
-                    beforeCursor: detail.beforeCursor,
-                    hasMore: detail.hasMore,
-                    timeline: detail.timeline,
+                    agent: detail.agent ?? currentAgent,
                     subagents: detail.subagents,
                     subagentUpdates: detail.subagentUpdates
                 )
-                if currentDetailSubagents != slot.subagents { currentDetailSubagents = slot.subagents }
-                if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
-                if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
-                let nextRows = buildAntigravitySubagentRows(events: slot.events, latestAgent: detail.agent)
-                if rows != nextRows { rows = nextRows }
-                let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
-                    provider: .antigravity,
-                    sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
-                )
-                if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                if !shouldSkipUnchangedPoll(candidateSig) {
+                    let slot = subagentProviderStore.applyHeadPoll(
+                        key: scopeKey,
+                        headEvents: detail.events,
+                        history: detail.history,
+                        totalEvents: detail.totalEvents,
+                        beforeCursor: detail.beforeCursor,
+                        hasMore: detail.hasMore,
+                        timeline: detail.timeline,
+                        subagents: detail.subagents,
+                        subagentUpdates: detail.subagentUpdates
+                    )
+                    if currentDetailSubagents != slot.subagents { currentDetailSubagents = slot.subagents }
+                    if hasMoreOlder != slot.hasMore { hasMoreOlder = slot.hasMore }
+                    if beforeCursor != slot.beforeCursor { beforeCursor = slot.beforeCursor }
+                    let nextRows = buildAntigravitySubagentRows(events: slot.events, latestAgent: detail.agent)
+                    if rows != nextRows { rows = nextRows }
+                    let nextTimeline = slot.timeline ?? TimelineViewModel.userTimelineEntries(
+                        provider: .antigravity,
+                        sources: slot.events.map { TimelineSourceItem(id: $0.id, role: $0.role, kind: $0.kind, text: $0.text, userMessage: $0.userMessage) }
+                    )
+                    if timelineEntries != nextTimeline { timelineEntries = nextTimeline }
+                    lastPollSignature = candidateSig
+                }
             }
-            errorText = nil
+            if errorText != nil { errorText = nil }
             if let restore = pendingRestoreAnchor {
                 pendingRestoreAnchor = nil
-                coordinatorRef?.updateRowsPreservingAnchor(rows, preferAutoFollowBottom: false)
-                coordinatorRef?.restoreExplicitAnchor(restore)
+                coordinator.updateRowsPreservingAnchor(rows, preferAutoFollowBottom: false)
+                coordinator.restoreExplicitAnchor(restore)
             }
         } catch {
-            guard currentAgent?.agentId == agentId, !Task.isCancelled else { return }
+            guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
             errorText = error.localizedDescription
         }
     }
 
-    private func loadOlderSubagentPageIfNeeded() async {
+    func loadOlderSubagentPageIfNeeded() async {
+        let capturedGen = navigationGeneration
+        let capturedRev = store.revision
+        let capturedRoot = rootSessionKey
         guard hasMoreOlder, !loadingOlder, errorText == nil else { return }
-        coordinatorRef?.markUpwardNavigationIntent()
-        for step in 0 ..< 5 {
-            guard hasMoreOlder, !loadingOlder, errorText == nil,
-                  let agent = currentAgent, let agentId = agent.agentId, !agentId.isEmpty
-            else { break }
-            let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
-            let prevCount = rows.count
-            let limitOverride: Int? = (step > 0 || prevCount <= 2) ? 500 : nil
-            let loaded = await loadSingleOlderSubagentPage(agentId: agentId, limitOverride: limitOverride)
-            if !loaded { break }
-            guard let coord = coordinatorRef else { break }
-            let newHeight = coord.renderedContentHeight
-            let needsMore = coord.isViewportUnderfilled
-                || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
-                || (rows.count <= prevCount && rows.count <= 2)
-            if !needsMore { break }
+        coordinator.markUpwardNavigationIntent()
+        _ = await ConversationTableCoordinator.runBoundedOlderContinuationLoop(
+            coordinator: { [weak self] in self?.coordinator },
+            currentRowCount: { [weak self] in self?.rows.count ?? 0 },
+            upgradeLimitOnSparseRows: true
+        ) { [weak self] limitOverride in
+            guard let self,
+                  self.hasMoreOlder, !self.loadingOlder, self.errorText == nil,
+                  let agent = self.currentAgent, let agentId = agent.agentId, !agentId.isEmpty,
+                  self.isCurrentSubagent(agentId: agentId, generation: capturedGen, revision: capturedRev, rootKey: capturedRoot)
+            else { return false }
+            return await self.loadSingleOlderSubagentPage(
+                agentId: agentId,
+                generation: capturedGen,
+                revision: capturedRev,
+                rootKey: capturedRoot,
+                limitOverride: limitOverride
+            )
         }
     }
 
-    private func loadSingleOlderSubagentPage(agentId: String, limitOverride: Int?) async -> Bool {
-        guard hasMoreOlder, !loadingOlder, let cursor = beforeCursor else { return false }
+    private func loadSingleOlderSubagentPage(
+        agentId: String,
+        generation: UInt64,
+        revision: UInt64,
+        rootKey: String,
+        limitOverride: Int?
+    ) async -> Bool {
+        guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
+              hasMoreOlder, !loadingOlder, let cursor = beforeCursor
+        else { return false }
         loadingOlder = true
-        defer { if currentAgent?.agentId == agentId { loadingOlder = false } }
-        let scopeKey = "\(store.machineScope):sub:\(rootSessionKey):\(agentId)"
+        defer {
+            if isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey) {
+                loadingOlder = false
+            }
+        }
+        let scopeKey = "\(store.machineScope):sub:\(rootKey):\(agentId)"
 
         do {
             if provider == .codex {
@@ -804,9 +997,11 @@ public struct SubagentPanelView: View {
                 struct ReqWrap: Encodable { let request: SubagentDetailRequest }
                 let resp: SubagentDetailResponse = try await store.rpc(
                     "threads.subagentDetail",
-                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor))
+                    args: ReqWrap(request: SubagentDetailRequest(rootThreadId: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
+                      beforeCursor == cursor
+                else { return false }
                 let page = ThreadBlockPage(
                     threadId: resp.detail.summary.id,
                     blocks: resp.detail.blocks,
@@ -831,9 +1026,11 @@ public struct SubagentPanelView: View {
                 }
                 let page: ClaudeSessionDetail = try await store.rpc(
                     "claude.detail",
-                    args: ClaudeSubReq(sessionKey: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor)
+                    args: ClaudeSubReq(sessionKey: rootKey, agentId: agentId, limit: reqLimit, before: cursor)
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
+                      beforeCursor == cursor
+                else { return false }
                 let slot = subagentClaudeStore.applyOlderPage(
                     key: scopeKey,
                     expectedCursor: cursor,
@@ -852,9 +1049,11 @@ public struct SubagentPanelView: View {
                 struct Wrap: Encodable { let request: ProviderDetailRequest }
                 let page: ProviderSessionDetail = try await store.rpc(
                     "antigravity.detail",
-                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootSessionKey, agentId: agentId, limit: reqLimit, before: cursor))
+                    args: Wrap(request: ProviderDetailRequest(sessionKey: rootKey, agentId: agentId, limit: reqLimit, before: cursor))
                 )
-                guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
+                guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
+                      beforeCursor == cursor
+                else { return false }
                 if let latestAgent = page.agent, latestAgent.agentId == agentId {
                     updateCurrentFrameAgent(latestAgent)
                 }
@@ -878,33 +1077,11 @@ public struct SubagentPanelView: View {
             }
             return false
         } catch {
-            guard currentAgent?.agentId == agentId, beforeCursor == cursor else { return false }
+            guard isCurrentSubagent(agentId: agentId, generation: generation, revision: revision, rootKey: rootKey),
+                  beforeCursor == cursor
+            else { return false }
             errorText = error.localizedDescription
             return false
-        }
-    }
-
-    public func subagentStatusLabel(_ status: String) -> String {
-        if provider == .claudeCode && status == "unknown" {
-            return "状态未知"
-        }
-        return switch status {
-        case "creating": "创建中"
-        case "running": "运行中"
-        case "completed": "已完成"
-        case "failed": "失败"
-        case "interrupted": "已中断"
-        default: "状态未知"
-        }
-    }
-
-    private func subagentTone(_ status: String) -> StatusChipTone {
-        switch status {
-        case "running", "creating": .info
-        case "completed": .success
-        case "failed": .danger
-        case "interrupted": .warning
-        default: .neutral
         }
     }
 }

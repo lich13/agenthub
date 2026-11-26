@@ -132,7 +132,9 @@ pub fn scan_codex_turn_errors(
     let limit = batch_limit.clamp(1, 1_000) as i64;
     let mut statement = conn.prepare(
         r#"
-        SELECT id, ts, ts_nanos, target, feedback_log_body, thread_id
+        SELECT id, ts, ts_nanos, target,
+               CASE WHEN target = 'codex_core::session::turn' THEN feedback_log_body END,
+               thread_id
         FROM logs
         WHERE ts > ?1
            OR (ts = ?1 AND ts_nanos > ?2)

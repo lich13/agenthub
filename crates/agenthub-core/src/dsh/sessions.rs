@@ -270,59 +270,154 @@ fn decode_log_lines_checked(
     for_append: bool,
     mut on_line: impl FnMut(&[u8]) -> Result<()>,
 ) -> Result<bool> {
-    let file = regular_file(path)?;
-    let mut bytes = Vec::new();
-    file.take(LOG_FILE_LIMIT + 1).read_to_end(&mut bytes)?;
+    let mut file = regular_file(path)?;
     ensure!(
-        bytes.len() as u64 <= LOG_FILE_LIMIT,
+        file.metadata()?.len() <= LOG_FILE_LIMIT,
         "DSH 会话日志超出读取上限"
     );
 
     let mut needs_newline = false;
+    let mut line_buf = Vec::new();
+    let mut emit_record = |raw: &[u8], ended_with_nl: bool| -> Result<()> {
+        needs_newline = !ended_with_nl;
+        if !raw.iter().all(u8::is_ascii_whitespace) {
+            if for_append {
+                serde_json::from_slice::<serde::de::IgnoredAny>(raw)
+                    .context("DSH 会话日志记录损坏，已拒绝改名")?;
+            }
+            on_line(raw)?;
+        }
+        Ok(())
+    };
     if compressed {
-        let mut consumed = 0usize;
-        let mut decoded_total = 0usize;
-        while consumed < bytes.len() {
-            let tail = &bytes[consumed..];
-            let magic = [0x28, 0xb5, 0x2f, 0xfd];
-            if tail.len() < 4 || tail[..4] != magic {
+        let mut dctx =
+            zstd::zstd_safe::DCtx::try_create().context("初始化 DSH Zstandard 解码器失败")?;
+        let mut in_chunk = vec![0u8; zstd::zstd_safe::DCtx::in_size().max(64 * 1024)];
+        let mut out_chunk = vec![0u8; zstd::zstd_safe::DCtx::out_size().max(64 * 1024)];
+        let mut in_pos = 0usize;
+        let mut in_len = 0usize;
+        let mut total_comp_read = 0u64;
+        let mut decoded_total = 0u64;
+        let mut reached_eof = false;
+        let magic = [0x28, 0xb5, 0x2f, 0xfd];
+
+        loop {
+            // Ensure up to 4 bytes are available at the start of each concatenated frame.
+            while !reached_eof && (in_len - in_pos) < 4 {
+                if in_pos > 0 {
+                    in_chunk.copy_within(in_pos..in_len, 0);
+                    in_len -= in_pos;
+                    in_pos = 0;
+                }
+                let n = file.read(&mut in_chunk[in_len..])?;
+                if n == 0 {
+                    reached_eof = true;
+                    break;
+                }
+                total_comp_read = total_comp_read.saturating_add(n as u64);
+                ensure!(
+                    total_comp_read <= LOG_FILE_LIMIT,
+                    "DSH 会话日志超出读取上限"
+                );
+                in_len += n;
+            }
+            let avail = in_len - in_pos;
+            if avail == 0 {
+                break;
+            }
+            let prefix = &in_chunk[in_pos..in_pos + avail.min(4)];
+            ensure!(prefix == &magic[..prefix.len()], "DSH Zstandard 帧损坏");
+            if avail < 4 {
                 ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
                 break;
             }
-            let size = match zstd::zstd_safe::find_frame_compressed_size(tail) {
-                Ok(size) => size,
-                Err(error) if zstd::zstd_safe::get_error_name(error) == "Src size is incorrect" => {
-                    ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
+
+            let mut saved_line_len = line_buf.len();
+            loop {
+                let (hint, consumed_in, produced_out) = {
+                    let mut in_buf = zstd::zstd_safe::InBuffer::around(&in_chunk[in_pos..in_len]);
+                    let mut out_buf = zstd::zstd_safe::OutBuffer::around(out_chunk.as_mut_slice());
+                    let hint = dctx
+                        .decompress_stream(&mut out_buf, &mut in_buf)
+                        .map_err(|_| anyhow::anyhow!("DSH Zstandard 帧损坏"))?;
+                    (hint, in_buf.pos(), out_buf.pos())
+                };
+                in_pos += consumed_in;
+                if produced_out > 0 {
+                    decoded_total = decoded_total.saturating_add(produced_out as u64);
+                    ensure!(
+                        decoded_total <= LOG_FILE_LIMIT,
+                        "DSH 解压后会话日志超出读取上限"
+                    );
+                    let mut slice = &out_chunk[..produced_out];
+                    while let Some(nl) = slice.iter().position(|&b| b == b'\n') {
+                        saved_line_len = 0;
+                        if line_buf.is_empty() {
+                            emit_record(&slice[..nl], true)?;
+                        } else {
+                            line_buf.extend_from_slice(&slice[..nl]);
+                            emit_record(&line_buf, true)?;
+                            line_buf.clear();
+                        }
+                        slice = &slice[nl + 1..];
+                    }
+                    if !slice.is_empty() {
+                        line_buf.extend_from_slice(slice);
+                    }
+                }
+                if hint == 0 {
                     break;
                 }
-                Err(_) => bail!("DSH Zstandard 帧损坏"),
-            };
-            ensure!(size > 0 && size <= tail.len(), "DSH Zstandard 帧长度无效");
-            let mut decoded = Vec::new();
-            zstd::stream::read::Decoder::new(&tail[..size])?
-                .take(LOG_FILE_LIMIT + 1)
-                .read_to_end(&mut decoded)?;
-            decoded_total = decoded_total.saturating_add(decoded.len());
-            ensure!(
-                decoded_total as u64 <= LOG_FILE_LIMIT,
-                "DSH 解压后会话日志超出读取上限"
-            );
-            for raw in decoded.split(|&b| b == b'\n') {
-                if !raw.iter().all(u8::is_ascii_whitespace) {
-                    on_line(raw)?;
+                if in_pos < in_len || produced_out == out_chunk.len() {
+                    ensure!(consumed_in > 0 || produced_out > 0, "DSH Zstandard 帧损坏");
+                    continue;
                 }
+                if reached_eof {
+                    ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
+                    line_buf.truncate(saved_line_len);
+                    break;
+                }
+                let n = file.read(&mut in_chunk)?;
+                if n == 0 {
+                    reached_eof = true;
+                    ensure!(!for_append, "DSH Zstandard 尾帧不完整，已拒绝改名");
+                    line_buf.truncate(saved_line_len);
+                    break;
+                }
+                total_comp_read = total_comp_read.saturating_add(n as u64);
+                ensure!(
+                    total_comp_read <= LOG_FILE_LIMIT,
+                    "DSH 会话日志超出读取上限"
+                );
+                in_pos = 0;
+                in_len = n;
             }
-            if let Some(last) = decoded.last() {
-                needs_newline = *last != b'\n';
+            if reached_eof && in_pos == in_len {
+                break;
             }
-            consumed += size;
+        }
+        if !line_buf.is_empty() {
+            emit_record(&line_buf, false)?;
+            line_buf.clear();
         }
     } else {
-        needs_newline = bytes.last().is_some_and(|last| *last != b'\n');
-        for raw in bytes.split(|&b| b == b'\n') {
-            if !raw.iter().all(u8::is_ascii_whitespace) {
-                on_line(raw)?;
+        let mut reader = BufReader::with_capacity(64 * 1024, file.take(LOG_FILE_LIMIT + 1));
+        let mut total_read = 0u64;
+        loop {
+            line_buf.clear();
+            let n = reader.read_until(b'\n', &mut line_buf)?;
+            if n == 0 {
+                break;
             }
+            total_read = total_read.saturating_add(n as u64);
+            ensure!(total_read <= LOG_FILE_LIMIT, "DSH 会话日志超出读取上限");
+            let ended_with_nl = line_buf.last() == Some(&b'\n');
+            let raw = if ended_with_nl {
+                &line_buf[..line_buf.len() - 1]
+            } else {
+                &line_buf[..]
+            };
+            emit_record(raw, ended_with_nl)?;
         }
     }
     Ok(needs_newline)
@@ -863,7 +958,7 @@ fn resolve_dsh_attachment_parts(paths: &DshPaths, content: &Value) -> Value {
         if ptype == "image" || ptype == "attachment" || ptype == "file" {
             let candidate_path = part["path"].as_str().map(PathBuf::from).or_else(|| {
                 part["sha256"].as_str().and_then(|hash| {
-                    if hash.len() >= 4 {
+                    if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
                         let p1 = paths
                             .home
                             .join("cache/attachments/request-images")
@@ -2971,6 +3066,150 @@ mod tests {
                 ("assistant_message", "seq-7-assistant"),
             ]
         );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn streaming_decode_handles_multiframe_zstd_plain_no_newline_and_rejects_invalid_sha256() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-stream-{}", uuid::Uuid::new_v4()));
+        let proj = home.join("sessions/proj-stream");
+        let zstd_id = "66666666-7777-4888-8999-aaaaaaaaaaaa";
+        let plain_id = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+        fs::create_dir_all(proj.join(zstd_id)).unwrap();
+        fs::create_dir_all(proj.join(plain_id)).unwrap();
+
+        // 1. Multi-frame zstd with non-ASCII 64-byte UTF-8 sha256 ("é".repeat(32)) and traversal sha256
+        let multibyte_64 = "é".repeat(32);
+        assert_eq!(multibyte_64.len(), 64);
+        let zstd_path = proj.join(zstd_id).join("session.v4.jsonl.zstd");
+        write_zstd_frames(
+            &zstd_path,
+            &[
+                json!({"type":"session","version":4,"id":zstd_id,"createdAt":10,"cwd":"/workspace/dsh"}),
+                json!({"type":"turn/start","seq":0,"time":11,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":1,"time":12,"data":{"turn":1,"source":{"kind":"user"},"content":[
+                    {"type":"text","text":"核查附件哈希校验"},
+                    {"type":"image","sha256":multibyte_64},
+                    {"type":"image","sha256":"../".repeat(21) + "a"}
+                ]}}),
+                json!({"type":"assistant/message","seq":2,"time":13,"data":{"turn":1,"message":{"content":"已安全忽略非法哈希"}}}),
+                json!({"type":"turn/end","seq":3,"time":14,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+
+        // 2. Plain JSONL without trailing newline
+        let plain_path = proj.join(plain_id).join("session.v4.jsonl");
+        let plain_payload = format!(
+            "{}\n{}\n{}",
+            json!({"type":"session","version":4,"id":plain_id,"createdAt":20,"cwd":"/workspace/dsh"}),
+            json!({"type":"turn/start","seq":0,"time":21,"data":{"turn":1}}),
+            json!({"type":"user/message","seq":1,"time":22,"data":{"turn":1,"source":{"kind":"user"},"content":"无尾换行记录"}}),
+        );
+        fs::write(&plain_path, plain_payload.as_bytes()).unwrap();
+
+        let paths = DshPaths { home: home.clone() };
+        let zstd_detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: zstd_id.into(),
+                agent_id: None,
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(zstd_detail.events.len(), 2);
+        assert!(
+            zstd_detail.events[0]
+                .user_message
+                .as_ref()
+                .unwrap()
+                .attachments
+                .is_empty(),
+            "non-hex or non-ASCII 64-byte sha256 must never panic or resolve files"
+        );
+
+        let plain_detail = session_detail(
+            &paths,
+            &ProviderDetailRequest {
+                session_key: plain_id.into(),
+                agent_id: None,
+                limit: None,
+                before: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(plain_detail.events.len(), 1);
+
+        // 3. `for_append = true` rejects truncated JSON line and truncated zstd frame
+        let trunc_plain = home.join("truncated.jsonl");
+        fs::write(&trunc_plain, br#"{"type":"session","version":4"#).unwrap();
+        assert!(decode_log_lines_checked(&trunc_plain, false, true, |_| Ok(())).is_err());
+
+        let mut trunc_zstd_bytes = fs::read(&zstd_path).unwrap();
+        trunc_zstd_bytes.truncate(trunc_zstd_bytes.len() - 3);
+        let trunc_zstd = home.join("truncated.jsonl.zstd");
+        fs::write(&trunc_zstd, &trunc_zstd_bytes).unwrap();
+        assert!(decode_log_lines_checked(&trunc_zstd, true, true, |_| Ok(())).is_err());
+
+        // 4. Corrupt non-magic zstd bytes fail even on read-only path, whereas a <4B magic prefix stops cleanly on read
+        let corrupt_zstd = home.join("corrupt.jsonl.zstd");
+        fs::write(&corrupt_zstd, b"not-a-zstd-frame").unwrap();
+        assert!(decode_log_lines_checked(&corrupt_zstd, true, false, |_| Ok(())).is_err());
+
+        let mut magic_prefix_tail = fs::read(&zstd_path).unwrap();
+        magic_prefix_tail.extend_from_slice(&[0x28, 0xb5]);
+        let half_magic_zstd = home.join("half-magic.jsonl.zstd");
+        fs::write(&half_magic_zstd, &magic_prefix_tail).unwrap();
+        assert!(decode_log_lines_checked(&half_magic_zstd, true, false, |_| Ok(())).is_ok());
+        assert!(decode_log_lines_checked(&half_magic_zstd, true, true, |_| Ok(())).is_err());
+
+        // 5. Single-line zstd payload exceeding 128 MiB without `\n` is bounded by `.take(LOG_FILE_LIMIT + 1)`
+        let zip_bomb_bytes =
+            zstd::encode_all(std::io::repeat(b'a').take(LOG_FILE_LIMIT + 4096), 1).unwrap();
+        assert!(zip_bomb_bytes.len() < 64 * 1024);
+        let zip_bomb_path = home.join("zip-bomb.jsonl.zstd");
+        fs::write(&zip_bomb_path, &zip_bomb_bytes).unwrap();
+        let bomb_err = decode_log_lines_checked(&zip_bomb_path, true, false, |_| Ok(()))
+            .expect_err("over-limit zstd line without newline must be rejected");
+        assert!(bomb_err.to_string().contains("超出读取上限"));
+
+        // 6. Single multi-MiB `.zstd` frame (> DCtx::in_size/out_size) concatenated with a second frame streams linearly
+        let mut large_plain = Vec::with_capacity(3 * 1024 * 1024);
+        let pad = "x".repeat(768);
+        for seq in 0..4_000u64 {
+            serde_json::to_writer(&mut large_plain, &json!({"seq": seq, "pad": pad})).unwrap();
+            if seq + 1 < 4_000 {
+                large_plain.push(b'\n');
+            }
+        }
+        // Frame 1 (>3 MiB uncompressed, no trailing newline)
+        // + Frame 2 ("\n{\"seq\":4000}\n{\"seq\":4001,\"pad\":\"hel")
+        // + Frame 3 ("lo\"}") + Frame 4 (empty frame)
+        let mut multi_mb_zstd = zstd::encode_all(large_plain.as_slice(), 1).unwrap();
+        multi_mb_zstd.extend_from_slice(
+            &zstd::encode_all(
+                b"\n{\"seq\":4000}\n{\"seq\":4001,\"pad\":\"hel".as_slice(),
+                1,
+            )
+            .unwrap(),
+        );
+        multi_mb_zstd.extend_from_slice(&zstd::encode_all(b"lo\"}".as_slice(), 1).unwrap());
+        multi_mb_zstd.extend_from_slice(&zstd::encode_all(b"".as_slice(), 1).unwrap());
+        let multi_mb_path = home.join("multi-mb-stream.jsonl.zstd");
+        fs::write(&multi_mb_path, &multi_mb_zstd).unwrap();
+        let mut count = 0u64;
+        let needs_nl = decode_log_lines_checked(&multi_mb_path, true, true, |line| {
+            let v: Value = serde_json::from_slice(line)?;
+            ensure!(v["seq"].as_u64() == Some(count), "seq mismatch");
+            count += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(count, 4_002);
+        assert!(needs_nl);
+
         fs::remove_dir_all(home).unwrap();
     }
 }

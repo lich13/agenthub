@@ -406,6 +406,9 @@ public struct HistoryLoadingBarView: View {
                 Button(action: onRetry) {
                     Text("重试")
                         .underline()
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
                 }
                 .font(DesignFonts.body(12, weight: .medium))
                 .foregroundStyle(palette.accent.color)
@@ -474,6 +477,9 @@ public struct TimelineHistoryStatusView: View {
                             Button(action: onLoadNewer) {
                                 Text("加载较新记录")
                                     .underline()
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 2)
+                                    .contentShape(Rectangle())
                             }
                             .font(DesignFonts.body(12, weight: .medium))
                             .foregroundStyle(palette.accent.color)
@@ -483,6 +489,9 @@ public struct TimelineHistoryStatusView: View {
                         Button(action: onReturnLatest) {
                             Text("返回最新")
                                 .underline()
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .contentShape(Rectangle())
                         }
                         .font(DesignFonts.body(12, weight: .medium))
                         .foregroundStyle(palette.accent.color)
@@ -540,6 +549,7 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     @State private var renameDraft: String = ""
     @State private var renameSaving: Bool = false
     @State private var renameError: String?
+    @State private var didSeedCurrentRenameSession: Bool = false
 
     public init(
         title: String,
@@ -568,18 +578,20 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
     public var body: some View {
         let isNarrowHeader = availableWidth <= 520
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
+            HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
                         .font(DesignFonts.body(15, weight: .bold))
                         .foregroundStyle(palette.textPrimary.color)
-                        .lineLimit(1)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
                             .font(DesignFonts.mono(12))
                             .foregroundStyle(palette.textMuted.color)
-                            .lineLimit(1)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                             .help(subtitle)
                     }
                 }
@@ -591,6 +603,7 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
                     }
                     trailing()
                 }
+                .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, isNarrowHeader ? 16 : 24)
             .padding(.vertical, 10)
@@ -652,9 +665,24 @@ public struct WorkspaceStageHeaderView<TrailingContent: View>: View {
                     Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
                 }
                 .onAppear {
+                    if !didSeedCurrentRenameSession {
+                        didSeedCurrentRenameSession = true
+                        renameDraft = initialRenameText
+                        renameError = nil
+                    }
+                }
+            }
+        }
+        .onChange(of: inlineRenameActive) { active in
+            if active {
+                if !didSeedCurrentRenameSession {
+                    didSeedCurrentRenameSession = true
                     renameDraft = initialRenameText
                     renameError = nil
                 }
+            } else {
+                didSeedCurrentRenameSession = false
+                renameError = nil
             }
         }
     }

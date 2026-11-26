@@ -9,7 +9,6 @@ mod app_server_client;
 mod assistant_question;
 mod identity;
 mod mutations;
-mod name_client;
 mod paths;
 #[cfg(test)]
 mod rollout_accuracy_tests;
@@ -23,12 +22,11 @@ mod thread_rows;
 mod types;
 mod user_input;
 
-pub use app_server_client::CodexAppServerClient;
+pub use app_server_client::{set_thread_title, CodexAppServerClient};
 pub use assistant_question::assistant_feedback_request;
 pub(crate) use identity::codex_task_identity_from_connection;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
 pub use mutations::set_thread_archived;
-pub use name_client::set_thread_title;
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,
@@ -39,7 +37,7 @@ use rollout_events::{
 };
 pub(crate) use rollout_events::{
     hidden_thread_metadata_category, rollout_has_confirmed_inactive_state,
-    rollout_has_running_signal, ThreadVisibilityMetadata,
+    rollout_has_running_signal, visit_search_blocks, ThreadVisibilityMetadata,
 };
 pub use rollout_events::{
     is_macos_network_volume_path, rollout_completion_last_agent_message,
@@ -54,7 +52,6 @@ use rollout_events::{
 };
 use session_index::{read_session_index, SessionIndexEntry};
 pub(crate) use thread_rows::coalesce_non_empty as coalesce_non_empty_columns;
-pub use thread_rows::hidden_and_archived_thread_ids;
 use thread_rows::read_thread_rows;
 pub use types::{
     extract_proposed_plan_text, CodexMessage, MessageBlock, PendingElicitation, ThreadDetail,
@@ -79,6 +76,25 @@ pub fn list_threads(
     q: Option<&str>,
     limit: usize,
 ) -> Result<Vec<ThreadSummary>> {
+    list_threads_inner(paths, archived, q, limit, true)
+}
+
+pub(crate) fn list_threads_without_storage(
+    paths: &CodexPaths,
+    archived: bool,
+    q: Option<&str>,
+    limit: usize,
+) -> Result<Vec<ThreadSummary>> {
+    list_threads_inner(paths, archived, q, limit, false)
+}
+
+fn list_threads_inner(
+    paths: &CodexPaths,
+    archived: bool,
+    q: Option<&str>,
+    limit: usize,
+    include_storage: bool,
+) -> Result<Vec<ThreadSummary>> {
     let mut rows = read_thread_rows(paths)?;
     rows.retain(|row| matches!(row.summary.status, ThreadStatus::Archived) == archived);
     let session_index = read_session_index(paths).unwrap_or_default();
@@ -90,40 +106,56 @@ pub fn list_threads(
             .map(|m| !m.file_type().is_symlink())
             .unwrap_or(false)
     });
-    rows.retain_mut(|row| {
-        enrich_local_thread_row_with_home(
+    let mut enriched = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let index_entry = session_index.get(&row.summary.id);
+        if let Some(storage_valid) = enrich_local_thread_row_with_home(
             paths,
             canonical_home.as_deref(),
             storage_canonical_home,
-            row,
-            session_index.get(&row.summary.id),
+            &mut row,
+            index_entry,
             true,
-        )
-    });
-    let mut rows = rows.into_iter().map(|row| row.summary).collect::<Vec<_>>();
+            false,
+        ) {
+            enriched.push((row.summary, storage_valid));
+        }
+    }
 
     let needle = q.map(|v| v.trim().to_lowercase()).filter(|v| !v.is_empty());
-    rows.retain(|row| {
-        if let Some(needle) = &needle {
-            let title = row.title.to_lowercase();
-            let id = row.id.to_lowercase();
-            let latest = row
-                .latest_message
-                .as_deref()
-                .unwrap_or_default()
-                .to_lowercase();
-            let cwd = row.cwd.as_deref().unwrap_or_default().to_lowercase();
-            title.contains(needle)
-                || id.contains(needle)
-                || latest.contains(needle)
-                || cwd.contains(needle)
-        } else {
-            true
+    if let Some(needle) = &needle {
+        enriched.retain(|(row, _)| {
+            crate::services::search::contains_folded_str(&row.title, needle)
+                || crate::services::search::contains_folded_str(&row.id, needle)
+                || row
+                    .latest_message
+                    .as_deref()
+                    .is_some_and(|m| crate::services::search::contains_folded_str(m, needle))
+                || row
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|c| crate::services::search::contains_folded_str(c, needle))
+        });
+    }
+    enriched.sort_by_cached_key(|(row, _)| row.message_time_sort_key());
+    enriched.truncate(limit.max(1));
+    if include_storage {
+        use crate::session_storage::{self, SessionStorageSize, StorageScope};
+        for (row, storage_valid) in &mut enriched {
+            if let Some(path) = row.rollout_path.as_deref() {
+                row.storage_size = Some(if *storage_valid {
+                    session_storage::file_size_with_canonical_root(
+                        &paths.home,
+                        storage_canonical_home,
+                        path,
+                    )
+                } else {
+                    SessionStorageSize::unavailable(StorageScope::File)
+                });
+            }
         }
-    });
-    ThreadSummary::sort_by_message_time(&mut rows);
-    rows.truncate(limit.max(1));
-    Ok(rows)
+    }
+    Ok(enriched.into_iter().map(|(row, _)| row).collect())
 }
 
 pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<ThreadSummary>> {
@@ -137,11 +169,17 @@ pub fn local_thread_summary(paths: &CodexPaths, id: &str) -> Result<Option<Threa
 
 /// Notification discovery reads headers only; it never scans every historical rollout.
 pub fn notification_thread_headers(paths: &CodexPaths) -> Result<Vec<ThreadSummary>> {
-    Ok(read_thread_rows(paths)?
+    Ok(notification_thread_headers_with_identities(paths)?
         .into_iter()
-        .map(|row| row.summary)
-        .filter(|thread| !matches!(thread.status, ThreadStatus::Archived))
+        .map(|(summary, _)| summary)
         .collect())
+}
+
+/// Batch notification header + task identity read on a single SQLite connection.
+pub fn notification_thread_headers_with_identities(
+    paths: &CodexPaths,
+) -> Result<Vec<(ThreadSummary, CodexTaskIdentity)>> {
+    thread_rows::read_notification_thread_headers_with_identities(paths)
 }
 
 /// Recheck one notification source without loading other threads or history.
@@ -172,7 +210,9 @@ fn enrich_local_thread_row(
         row,
         index_entry,
         true,
+        true,
     )
+    .is_some()
 }
 
 fn enrich_local_thread_row_with_home(
@@ -182,7 +222,8 @@ fn enrich_local_thread_row_with_home(
     row: &mut thread_rows::LocalThreadRow,
     index_entry: Option<&SessionIndexEntry>,
     cwd_already_resolved: bool,
-) -> bool {
+    compute_storage_immediately: bool,
+) -> Option<bool> {
     // Native updated_at also changes on metadata writes; only messages order the list.
     row.summary.updated_at = None;
     if row.summary.rollout_path.is_none() {
@@ -198,7 +239,7 @@ fn enrich_local_thread_row_with_home(
                 && !is_macos_network_volume_path(&raw_path)
                 && path_has_ancestor_inside_canonical_home(canonical_home, &raw_path) =>
             {
-                return false;
+                return None;
             }
             None => {}
         }
@@ -217,13 +258,15 @@ fn enrich_local_thread_row_with_home(
             })
             .unwrap_or_else(|| "未命名线程".to_string());
     }
-    !enrich_thread_from_rollout_inner(
+    let (is_subagent, storage_valid) = enrich_thread_from_rollout_inner(
         &mut row.summary,
         Some(&paths.home),
         storage_canonical_home,
         cwd_already_resolved,
+        compute_storage_immediately,
     )
-    .unwrap_or(false)
+    .unwrap_or((false, false));
+    (!is_subagent).then_some(storage_valid)
 }
 
 fn resolve_existing_rollout_path(
@@ -303,7 +346,7 @@ fn path_has_ancestor_inside_canonical_home(canonical_home: Option<&Path>, path: 
 }
 
 pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
-    enrich_thread_from_rollout_inner(row, None, None, false)
+    enrich_thread_from_rollout_inner(row, None, None, false, false).map(|(sub, _)| sub)
 }
 
 fn enrich_thread_from_rollout_inner(
@@ -311,20 +354,22 @@ fn enrich_thread_from_rollout_inner(
     root: Option<&Path>,
     canonical_root: Option<&Path>,
     cwd_already_resolved: bool,
-) -> Result<bool> {
+    compute_storage_immediately: bool,
+) -> Result<(bool, bool)> {
     let Some(path) = &row.rollout_path else {
-        return Ok(false);
+        return Ok((false, false));
     };
     let scan = scan_rollout(path, 80)?;
-    if let Some(root) = root {
-        use crate::session_storage::{self, SessionStorageSize, StorageScope};
-        row.storage_size = Some(
-            if !scan.identity_conflict && scan.session_id.as_deref() == Some(&row.id) {
+    let storage_valid = !scan.identity_conflict && scan.session_id.as_deref() == Some(&row.id);
+    if compute_storage_immediately {
+        if let Some(root) = root {
+            use crate::session_storage::{self, SessionStorageSize, StorageScope};
+            row.storage_size = Some(if storage_valid {
                 session_storage::file_size_with_canonical_root(root, canonical_root, path)
             } else {
                 SessionStorageSize::unavailable(StorageScope::File)
-            },
-        );
+            });
+        }
     }
     row.message_count = scan.message_count;
     row.latest_message = scan.latest_message;
@@ -377,7 +422,7 @@ fn enrich_thread_from_rollout_inner(
     row.active_turn_id = active_turn_id;
     row.pending_elicitation = scan.pending_elicitation;
     row.last_event_kind = scan.last_event_kind;
-    Ok(scan.is_subagent)
+    Ok((scan.is_subagent, storage_valid))
 }
 
 #[cfg(test)]

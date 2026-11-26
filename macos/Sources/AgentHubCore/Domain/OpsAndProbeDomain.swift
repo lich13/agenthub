@@ -444,3 +444,244 @@ public enum GithubCiDomain {
         return already ? cleaned : (cleaned + [targetName])
     }
 }
+
+public enum ProbeDisclosureSection: String, CaseIterable, Hashable, Sendable {
+    case ci
+    case ciRepos = "ci.repos"
+    case advanced
+    case bark
+    case hosts
+    case live
+    case events
+    case jobs
+}
+
+public struct ProbeDisclosureRules: Equatable, Sendable {
+    private static let tokenSeparator = "\u{001F}"
+
+    public private(set) var machineScope: String
+    public private(set) var openSections: Set<ProbeDisclosureSection>
+    public private(set) var activeIssueTokens: [ProbeDisclosureSection: Set<String>]
+
+    public init(machineScope: String = "") {
+        self.machineScope = machineScope
+        self.openSections = []
+        self.activeIssueTokens = [:]
+    }
+
+    public func isExpanded(_ section: ProbeDisclosureSection) -> Bool {
+        openSections.contains(section)
+    }
+
+    public mutating func reset(machineScope: String) {
+        self.machineScope = machineScope
+        self.openSections = []
+        self.activeIssueTokens = [:]
+    }
+
+    public mutating func resetIfMachineChanged(_ nextScope: String) {
+        guard machineScope != nextScope else { return }
+        reset(machineScope: nextScope)
+    }
+
+    public mutating func setExpanded(_ section: ProbeDisclosureSection, _ expanded: Bool) {
+        if expanded {
+            openSections.insert(section)
+        } else {
+            openSections.remove(section)
+        }
+    }
+
+    @discardableResult
+    public mutating func observeIssues(
+        machineScope nextScope: String,
+        section: ProbeDisclosureSection,
+        tokens: Set<String>
+    ) -> Bool {
+        resetIfMachineChanged(nextScope)
+        let cleaned = Set(
+            tokens
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        guard !cleaned.isEmpty else {
+            activeIssueTokens.removeValue(forKey: section)
+            return false
+        }
+        let previous = activeIssueTokens[section] ?? []
+        let hasNewIssue = !cleaned.subtracting(previous).isEmpty
+        activeIssueTokens[section] = cleaned
+        guard hasNewIssue else {
+            return false
+        }
+        openSections.insert(section)
+        return true
+    }
+
+    @discardableResult
+    public mutating func observeIssue(
+        machineScope nextScope: String,
+        section: ProbeDisclosureSection,
+        issueSignature: String?
+    ) -> Bool {
+        let tokens: Set<String> = if let issueSignature {
+            Set(issueSignature.components(separatedBy: Self.tokenSeparator))
+        } else {
+            []
+        }
+        return observeIssues(machineScope: nextScope, section: section, tokens: tokens)
+    }
+
+    private static func joinTokens(_ tokens: [String]) -> String? {
+        let uniqueSorted = Array(Set(tokens)).sorted()
+        return uniqueSorted.isEmpty ? nil : uniqueSorted.joined(separator: tokenSeparator)
+    }
+
+    public static func ciIssueSignature(
+        errorMessage: String?,
+        snapshotError: String?,
+        visibleRuns: [GithubCiRun]
+    ) -> String? {
+        var tokens: [String] = []
+        if let err = (errorMessage ?? snapshotError)?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+            tokens.append("err:\(err)")
+        }
+        for run in visibleRuns {
+            let state = run.status == "completed" ? (run.conclusion ?? "completed") : run.status
+            if state == "failure" || state == "timed_out" || state == "startup_failure" {
+                tokens.append("run:\(run.id):\(run.runAttempt ?? 1):\(state)")
+            }
+        }
+        return joinTokens(tokens)
+    }
+
+    public static func hostsIssueSignature(
+        codexHookStatus: String?,
+        statusError: String?,
+        hookErrors: [String: String]
+    ) -> String? {
+        var tokens: [String] = []
+        if codexHookStatus == "stale" {
+            tokens.append("codex:stale")
+        } else if codexHookStatus == nil, let err = statusError, !err.isEmpty {
+            tokens.append("codex:unavailable")
+        }
+        for key in hookErrors.keys.sorted() {
+            if let err = hookErrors[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty {
+                tokens.append("hook:\(key):\(err)")
+            }
+        }
+        return joinTokens(tokens)
+    }
+
+    public static func liveIssueSignature(sessions: [ProbeLiveSession]) -> String? {
+        let tokens = sessions
+            .filter { $0.bucket == "reply_needed" || $0.bucket == "recoverable" }
+            .map { "live:\($0.uniqueKey):\($0.bucket ?? "")" }
+        return joinTokens(tokens)
+    }
+
+    public static func eventsIssueSignature(eventsError: String?) -> String? {
+        guard let err = eventsError?.trimmingCharacters(in: .whitespacesAndNewlines), !err.isEmpty else {
+            return nil
+        }
+        return "err:\(err)"
+    }
+}
+
+// MARK: - Probe Settings Out-of-Order Read/Save Fencing
+
+public struct ProbeSettingsSyncState: Equatable, Sendable {
+    public var settingsView: ProbeSettingsView?
+    public var settingsError: String?
+    public var loadedDraft: ProbeSettingsDraft?
+    public var draft: ProbeSettingsDraft?
+    public var draftRevision: UInt64
+    public private(set) var settingsFence: UInt64 = 0
+
+    public init(revision: UInt64 = 0) {
+        self.draftRevision = revision
+    }
+
+    public mutating func reset(revision: UInt64) {
+        settingsFence &+= 1
+        settingsView = nil
+        settingsError = nil
+        loadedDraft = nil
+        draft = nil
+        draftRevision = revision
+    }
+
+    public func beginSettingsRead() -> UInt64 {
+        settingsFence
+    }
+
+    @discardableResult
+    public mutating func applyLoadedSettings(
+        _ loaded: ProbeSettingsView,
+        readFence: UInt64,
+        revision: UInt64
+    ) -> Bool {
+        guard readFence == settingsFence else { return false }
+        settingsView = loaded
+        settingsError = nil
+        let parsed = ProbeSettingsDraft.from(loaded)
+        let previousBaseline = loadedDraft
+        loadedDraft = parsed
+        if var currentDraft = draft, draftRevision == revision {
+            for subScope in [ProbeSettingsSaveScope.ci, .settings, .bark] {
+                let isClean = previousBaseline.map { currentDraft.subsetEquals($0, scope: subScope) } ?? true
+                if isClean {
+                    currentDraft.applySubset(from: parsed, scope: subScope)
+                }
+            }
+            draft = currentDraft
+        } else {
+            draft = parsed
+            draftRevision = revision
+        }
+        return true
+    }
+
+    @discardableResult
+    public mutating func applySettingsReadError(
+        _ message: String,
+        readFence: UInt64
+    ) -> Bool {
+        guard readFence == settingsFence else { return false }
+        settingsError = message
+        return true
+    }
+
+    public mutating func applySavedSettings(
+        _ saved: ProbeSettingsView,
+        submittedDraft: ProbeSettingsDraft,
+        scope: ProbeSettingsSaveScope,
+        revision: UInt64
+    ) {
+        settingsFence &+= 1
+        settingsView = saved
+        settingsError = nil
+        draftRevision = revision
+        var refreshed = ProbeSettingsDraft.from(saved)
+        if scope == .bark && !submittedDraft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            refreshed.barkDeviceKeyConfigured = true
+        }
+        if var baseline = loadedDraft {
+            baseline.applySubset(from: refreshed, scope: scope)
+            loadedDraft = baseline
+        } else {
+            loadedDraft = refreshed
+        }
+        if var live = draft, live.subsetEquals(submittedDraft, scope: scope) {
+            live.applySubset(from: refreshed, scope: scope)
+            draft = live
+        }
+    }
+
+    public mutating func applyHookManageFlag(_ installed: Bool) {
+        settingsFence &+= 1
+        draft?.manageStopHook = installed
+        loadedDraft?.manageStopHook = installed
+    }
+}

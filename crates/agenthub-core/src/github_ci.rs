@@ -11,6 +11,7 @@ use std::{
 use tokio::process::Command;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
     #[serde(default)]
     pub refresh: bool,
@@ -500,8 +501,11 @@ impl Monitor {
         load_config: &(dyn Fn() -> Result<Config> + Sync),
         token: impl std::future::Future<Output = Result<String>>,
     ) -> Result<Vec<Event>> {
-        let request = request_ms(db)?;
         let active = enabled(&load_config()?);
+        if !active && self.active == Some(false) {
+            return Ok(Vec::new());
+        }
+        let request = request_ms(db)?;
         let time = now();
         if self.active == Some(active)
             && request <= self.request_ms
@@ -700,11 +704,12 @@ impl Monitor {
                 .get("x-ratelimit-reset")
                 .and_then(|s| s.to_str().ok())
                 .and_then(|s| s.parse::<i64>().ok());
+            let now_ms = now();
             self.retry_at = seconds
-                .map(|s| now() + s * 1000)
-                .or(reset.map(|s| s * 1000))
-                .unwrap_or_else(|| now() + 60000)
-                .max(now() + 1000);
+                .map(|s| now_ms.saturating_add(s.max(0).saturating_mul(1000)))
+                .or(reset.map(|s| s.max(0).saturating_mul(1000)))
+                .unwrap_or_else(|| now_ms.saturating_add(60000))
+                .max(now_ms.saturating_add(1000));
             anyhow::bail!("GitHub 请求限流，稍后刷新");
         }
         anyhow::ensure!(
@@ -829,17 +834,23 @@ impl Monitor {
         let mut observed = BTreeMap::new();
         let configured_repos = &config.probe.notifications.github_ci_repositories;
         let repositories = state.snapshot.repositories.clone();
-        self.repository_due_ms.retain(|id, _| {
-            repositories.iter().any(|repo| {
-                repo.id == *id
-                    && !repo.archived
-                    && matches_repository_filter(repo, configured_repos)
-            })
-        });
-        for (index, repo) in repositories.iter().enumerate() {
-            if repo.archived || !matches_repository_filter(repo, configured_repos) {
-                continue;
+        let eligible_repos: Vec<&Repository> = repositories
+            .iter()
+            .filter(|repo| !repo.archived && matches_repository_filter(repo, configured_repos))
+            .collect();
+        let eligible_ids: HashSet<u64> = eligible_repos.iter().map(|repo| repo.id).collect();
+        self.repository_due_ms
+            .retain(|id, _| eligible_ids.contains(id));
+        let mut prev_runs_by_repo: HashMap<u64, Vec<&Run>> = HashMap::new();
+        for run in &state.snapshot.runs {
+            if eligible_ids.contains(&run.repository_id) {
+                prev_runs_by_repo
+                    .entry(run.repository_id)
+                    .or_default()
+                    .push(run);
             }
+        }
+        for (index, repo) in eligible_repos.iter().copied().enumerate() {
             if !refresh
                 && !baseline
                 && self
@@ -847,30 +858,34 @@ impl Monitor {
                     .get(&repo.id)
                     .is_some_and(|due| time < *due)
             {
-                runs.extend(
-                    state
-                        .snapshot
-                        .runs
-                        .iter()
-                        .filter(|run| run.repository_id == repo.id)
-                        .cloned(),
-                );
+                if let Some(prev) = prev_runs_by_repo.get(&repo.id) {
+                    runs.extend(prev.iter().copied().cloned());
+                }
                 continue;
             }
             let result = self.repository_runs(repo).await;
-            let fast = result
-                .as_ref()
-                .unwrap_or(&state.snapshot.runs)
-                .iter()
-                .any(|run| {
-                    run.repository_id == repo.id
-                        && run.status != "completed"
+            let fast = match &result {
+                Ok(incoming) => incoming.iter().any(|run| {
+                    run.status != "completed"
                         && matches_run_filter(
                             run,
                             configured_repos,
                             config.probe.notifications.github_ci_filter_bots,
                         )
-                });
+                }),
+                Err(_) => prev_runs_by_repo
+                    .get(&repo.id)
+                    .into_iter()
+                    .flatten()
+                    .any(|run| {
+                        run.status != "completed"
+                            && matches_run_filter(
+                                run,
+                                configured_repos,
+                                config.probe.notifications.github_ci_filter_bots,
+                            )
+                    }),
+            };
             self.repository_due_ms.insert(
                 repo.id,
                 time + if fast {
@@ -897,16 +912,15 @@ impl Monitor {
                         } else {
                             state.snapshot.bot_baseline_ms
                         });
+                    let prev_slice = prev_runs_by_repo
+                        .get(&repo.id)
+                        .map_or(&[][..], Vec::as_slice);
                     if state
                         .snapshot
                         .repository_observed_ms
                         .get(&repo.id)
                         .is_none_or(|at| *at < baseline)
-                        || incoming.iter().ne(state
-                            .snapshot
-                            .runs
-                            .iter()
-                            .filter(|run| run.repository_id == repo.id))
+                        || incoming.iter().ne(prev_slice.iter().copied())
                     {
                         observed.insert(repo.id, time);
                     }
@@ -914,29 +928,15 @@ impl Monitor {
                 }
                 Err(e) => {
                     errors.push(format!("{}：{e}", repo.full_name));
-                    runs.extend(
-                        state
-                            .snapshot
-                            .runs
-                            .iter()
-                            .filter(|r| r.repository_id == repo.id)
-                            .cloned(),
-                    );
+                    if let Some(prev) = prev_runs_by_repo.get(&repo.id) {
+                        runs.extend(prev.iter().copied().cloned());
+                    }
                     if self.retry_at > time {
-                        runs.extend(
-                            state
-                                .snapshot
-                                .runs
-                                .iter()
-                                .filter(|r| {
-                                    repositories[index + 1..].iter().any(|repo| {
-                                        !repo.archived
-                                            && matches_repository_filter(repo, configured_repos)
-                                            && repo.id == r.repository_id
-                                    })
-                                })
-                                .cloned(),
-                        );
+                        for remaining_repo in &eligible_repos[index + 1..] {
+                            if let Some(prev) = prev_runs_by_repo.get(&remaining_repo.id) {
+                                runs.extend(prev.iter().copied().cloned());
+                            }
+                        }
                         break;
                     }
                 }

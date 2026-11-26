@@ -294,7 +294,7 @@ public enum LayoutMetrics {
     public static let timelineRailWidth: CGFloat = 22
     public static let timelinePreviewMaxWidth: CGFloat = 288
 
-    public static let fallbackAppVersion: String = "2.1.38"
+    public static let fallbackAppVersion: String = "2.1.39"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,
@@ -319,12 +319,17 @@ public enum LayoutMetrics {
 }
 
 public enum DesignFonts {
-    public static func body(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
-        Font.system(size: size, weight: weight, design: .default).monospacedDigit()
+    private struct FontCacheKey: Hashable {
+        let sizeCentipoints: Int
+        let weightBits: UInt64
+        let monospaced: Bool
     }
 
-    public static func tabularBody(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
-        body(size, weight: weight)
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var fontCache: [FontCacheKey: NSFont] = [:]
+
+    public static func body(_ size: CGFloat = 14, weight: Font.Weight = .regular) -> Font {
+        Font.system(size: size, weight: weight, design: .default).monospacedDigit()
     }
 
     public static func mono(_ size: CGFloat = 13, weight: Font.Weight = .regular) -> Font {
@@ -332,6 +337,18 @@ public enum DesignFonts {
     }
 
     public static func nsBodyFont(size: CGFloat = 15, weight: NSFont.Weight = .regular) -> NSFont {
+        let key = FontCacheKey(
+            sizeCentipoints: Int((size * 100.0).rounded()),
+            weightBits: Double(weight.rawValue).bitPattern,
+            monospaced: false
+        )
+        cacheLock.lock()
+        if let hit = fontCache[key] {
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
         let base = NSFont.systemFont(ofSize: size, weight: weight)
         let pingFang = NSFontDescriptor(fontAttributes: [.name: "PingFang SC", .size: size])
         let descriptor = base.fontDescriptor.addingAttributes([
@@ -343,11 +360,36 @@ public enum DesignFonts {
                 ],
             ],
         ])
-        return NSFont(descriptor: descriptor, size: size) ?? base
+        let resolved = NSFont(descriptor: descriptor, size: size) ?? base
+
+        cacheLock.lock()
+        if fontCache.count < 128 {
+            fontCache[key] = resolved
+        }
+        cacheLock.unlock()
+        return resolved
     }
 
     public static func nsMonoFont(size: CGFloat = 13, weight: NSFont.Weight = .regular) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        let key = FontCacheKey(
+            sizeCentipoints: Int((size * 100.0).rounded()),
+            weightBits: Double(weight.rawValue).bitPattern,
+            monospaced: true
+        )
+        cacheLock.lock()
+        if let hit = fontCache[key] {
+            cacheLock.unlock()
+            return hit
+        }
+        cacheLock.unlock()
+
+        let resolved = NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+        cacheLock.lock()
+        if fontCache.count < 128 {
+            fontCache[key] = resolved
+        }
+        cacheLock.unlock()
+        return resolved
     }
 }
 

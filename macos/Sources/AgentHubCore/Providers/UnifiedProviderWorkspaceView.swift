@@ -100,13 +100,9 @@ public struct UnifiedProviderWorkspaceView: View {
 
     @StateObject private var model: ProviderWorkspaceStore
     @StateObject private var timelineTracker = TimelineActiveTracker()
+    @StateObject private var stageController = ProviderStageController()
     @State private var readWarningExpanded: Bool = false
     @State private var searchModalOpen: Bool = false
-    @State private var subagentDrawerOpen: Bool = false
-    @State private var subagentTriggerResponder: NSResponder?
-    @State private var selectedSubagent: SubagentActivity?
-    @State private var previewImageItem: (title: String, image: NSImage)?
-    @State private var coordinatorRef: ConversationTableCoordinator?
 
     public init(
         store: RuntimeConnectionStore,
@@ -244,9 +240,9 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             }
 
-            if let imgItem = previewImageItem {
+            if let imgItem = stageController.previewImageItem {
                 ImagePreviewModalView(title: imgItem.title, image: imgItem.image) {
-                    previewImageItem = nil
+                    stageController.previewImageItem = nil
                 }
             }
         }
@@ -254,7 +250,7 @@ public struct UnifiedProviderWorkspaceView: View {
             Group {
                 if !hideSidebar {
                     WorkspaceKeyboardShortcutMonitorView(
-                        isModalOpen: store.hasAnyActiveModal || ModalPresentationRegistry.shared.hasActiveModal || searchModalOpen || model.batchPreview != nil || previewImageItem != nil,
+                        isModalOpen: store.hasAnyActiveModal || ModalPresentationRegistry.shared.hasActiveModal || searchModalOpen || model.batchPreview != nil || stageController.previewImageItem != nil,
                         onRenameSelected: {
                             guard model.provider != .grokbot, !model.currentSelectionState.selecting, let item = model.selectedItem else { return false }
                             model.renameRequestSeqByKey[item.sessionKey, default: 0] += 1
@@ -295,7 +291,7 @@ public struct UnifiedProviderWorkspaceView: View {
                     model.selectedKey = externalSeedItem.sessionKey
                 }
             }
-            ensureCoordinator()
+            wireCoordinatorCallbacks()
         }
         // Note: 1-parameter .onChange fires async and may capture pre-update `self`;
         // use `nextHideSidebar`/`nextSeed` parameters here while ExternalBindingsSyncView
@@ -311,6 +307,7 @@ public struct UnifiedProviderWorkspaceView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentHubSearchRequested)) { _ in
+            guard searchModalOpen || canPresentSearchModal else { return }
             searchModalOpen = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .agentHubSelectAllRequested)) { _ in
@@ -321,7 +318,7 @@ public struct UnifiedProviderWorkspaceView: View {
                   !ModalPresentationRegistry.shared.hasActiveModal,
                   !searchModalOpen,
                   model.batchPreview == nil,
-                  previewImageItem == nil
+                  stageController.previewImageItem == nil
             else { return }
             model.selectAllVisible()
         }
@@ -335,11 +332,11 @@ public struct UnifiedProviderWorkspaceView: View {
             }
         }
         .onChange(of: model.selectedItem?.sessionKey) { _ in
-            subagentDrawerOpen = false
-            selectedSubagent = nil
+            stageController.subagentDrawerOpen = false
+            stageController.selectedSubagent = nil
             if model.searchSelection?.sessionKey != model.selectedKey { model.searchSelection = nil }
             if model.pendingSearch?.sessionKey != model.selectedKey { model.pendingSearch = nil }
-            previewImageItem = nil
+            stageController.previewImageItem = nil
             readWarningExpanded = false
             model.resetDetailStateForSelectionChange()
         }
@@ -395,9 +392,24 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
+    private var canPresentSearchModal: Bool {
+        !model.batchBusy
+            && !store.hasAnyActiveModal
+            && !ModalPresentationRegistry.shared.hasActiveModal
+            && model.batchPreview == nil
+            && stageController.previewImageItem == nil
+    }
+
     private var sidebarColumn: some View {
         let activePart = model.activeSelectionPartition
         let activeSel = model.partitionedSelection.state(for: activePart)
+        let resolvedSelectedKey = model.selectedItem?.sessionKey
+        let activePartState = model.partitionedSelection.active
+        let activeSelectedSet = Set(activePartState.keys)
+        let archivedPartState = model.partitionedSelection.archived
+        let archivedSelectedSet = Set(archivedPartState.keys)
+        let filtActive = model.filteredActiveItems
+        let filtArchived = model.filteredArchivedItems
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 9) {
@@ -413,8 +425,8 @@ public struct UnifiedProviderWorkspaceView: View {
                     .foregroundStyle(palette.textPrimary.color)
                     .lineLimit(1)
 
-                Text("\(model.filteredActiveItems.count)")
-                    .font(DesignFonts.tabularBody(11, weight: .medium))
+                Text("\(filtActive.count)")
+                    .font(DesignFonts.body(11, weight: .medium))
                     .foregroundStyle(palette.accent.color)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 1)
@@ -482,7 +494,7 @@ public struct UnifiedProviderWorkspaceView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
-                    if model.filteredActiveItems.isEmpty
+                    if filtActive.isEmpty
                         && model.errorMessage == nil
                         && (!model.query.isEmpty || model.workspaceFilter != .all)
                     {
@@ -501,19 +513,29 @@ public struct UnifiedProviderWorkspaceView: View {
                             sessionRowView(
                                 item,
                                 partition: .active,
+                                partState: activePartState,
+                                selectedSet: activeSelectedSet,
+                                resolvedSelectedKey: resolvedSelectedKey,
                                 groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
                             )
                         }
                     } else {
-                        ForEach(model.filteredActiveItems) { item in
-                            sessionRowView(item, partition: .active, groupedSubtitleOverride: nil)
+                        ForEach(filtActive) { item in
+                            sessionRowView(
+                                item,
+                                partition: .active,
+                                partState: activePartState,
+                                selectedSet: activeSelectedSet,
+                                resolvedSelectedKey: resolvedSelectedKey,
+                                groupedSubtitleOverride: nil
+                            )
                         }
                     }
 
                     if model.supportsArchive && model.archivedOpen {
                         WorkspaceArchivedExpandedSection(
                             isOpen: $model.archivedOpen,
-                            archivedCount: model.filteredArchivedItems.count
+                            archivedCount: filtArchived.count
                         ) {
                             if model.supportsWorkspaceGrouping && model.groupingMode == .byWorkspace {
                                 WorkspaceGroupedSessionRows(
@@ -529,12 +551,22 @@ public struct UnifiedProviderWorkspaceView: View {
                                     sessionRowView(
                                         item,
                                         partition: .archived,
+                                        partState: archivedPartState,
+                                        selectedSet: archivedSelectedSet,
+                                        resolvedSelectedKey: resolvedSelectedKey,
                                         groupedSubtitleOverride: group.subtitlesByItemId[item.sessionKey] ?? ""
                                     )
                                 }
                             } else {
-                                ForEach(model.filteredArchivedItems) { item in
-                                    sessionRowView(item, partition: .archived, groupedSubtitleOverride: nil)
+                                ForEach(filtArchived) { item in
+                                    sessionRowView(
+                                        item,
+                                        partition: .archived,
+                                        partState: archivedPartState,
+                                        selectedSet: archivedSelectedSet,
+                                        resolvedSelectedKey: resolvedSelectedKey,
+                                        groupedSubtitleOverride: nil
+                                    )
                                 }
                             }
                         }
@@ -546,7 +578,7 @@ public struct UnifiedProviderWorkspaceView: View {
             if model.supportsArchive && !model.archivedOpen {
                 WorkspaceArchivedClosedFooter(
                     isOpen: $model.archivedOpen,
-                    archivedCount: model.filteredArchivedItems.count
+                    archivedCount: filtArchived.count
                 )
             }
 
@@ -587,11 +619,13 @@ public struct UnifiedProviderWorkspaceView: View {
     private func sessionRowView(
         _ item: UnifiedSessionSummaryItem,
         partition: SessionSelectionPartition,
+        partState: SessionSelectionState,
+        selectedSet: Set<String>,
+        resolvedSelectedKey: String?,
         groupedSubtitleOverride: String?
     ) -> some View {
-        let partState = model.partitionedSelection.state(for: partition)
-        let isSelected = (model.selectedItem?.sessionKey == item.sessionKey)
-        let isMulti = partState.keys.contains(item.sessionKey)
+        let isSelected = (resolvedSelectedKey == item.sessionKey)
+        let isMulti = selectedSet.contains(item.sessionKey)
         let resolvedSubtitle = groupedSubtitleOverride ?? (model.provider == .grokbot ? "" : item.cwd)
 
         return RenameableSessionRowView(
@@ -663,23 +697,6 @@ public struct UnifiedProviderWorkspaceView: View {
                     model.headerInlineRename = false
                 }
             },
-            onToggleCheckbox: {
-                guard !model.batchBusy else { return }
-                let partVisibleKeys = (partition == .archived)
-                    ? model.visualOrderedArchivedKeys
-                    : model.visualOrderedActiveKeys
-                _ = model.partitionedSelection.click(
-                    partition: partition,
-                    visible: partVisibleKeys,
-                    key: item.sessionKey,
-                    click: SessionClick(detail: 1, metaKey: true),
-                    activeKey: model.selectedItem?.sessionKey
-                )
-                model.batchPreview = nil
-                model.batchResult = nil
-                model.batchPrepareError = nil
-                model.batchExecuteError = nil
-            },
             onRename: model.provider == .grokbot ? nil : { nextTitle in
                 try await model.performRename(item: item, newTitle: nextTitle)
             }
@@ -693,7 +710,7 @@ public struct UnifiedProviderWorkspaceView: View {
         if let item = model.selectedItem {
             let canDockSubagents = availableWidth >= LayoutMetrics.subagentDockThreshold
             let subagentsSupported = model.subagentsSupportedForCurrentProvider
-            let mainColumnWidth = (subagentDrawerOpen && canDockSubagents)
+            let mainColumnWidth = (stageController.subagentDrawerOpen && canDockSubagents)
                 ? max(320, availableWidth - LayoutMetrics.subagentDrawerWidth)
                 : availableWidth
             let currentRows = model.displayedRows
@@ -742,9 +759,9 @@ public struct UnifiedProviderWorkspaceView: View {
                                 isSupported: subagentsSupported,
                                 capabilitiesReady: store.capabilities.isReady
                             ) { triggerResponder in
-                                subagentTriggerResponder = triggerResponder
-                                selectedSubagent = nil
-                                subagentDrawerOpen.toggle()
+                                stageController.subagentTriggerResponder = triggerResponder
+                                stageController.selectedSubagent = nil
+                                stageController.subagentDrawerOpen.toggle()
                             }
                         }
 
@@ -872,23 +889,21 @@ public struct UnifiedProviderWorkspaceView: View {
                         ZStack(alignment: .bottomTrailing) {
                             ZStack(alignment: .top) {
                                 ZStack(alignment: .leading) {
-                                    if let coord = coordinatorRef {
-                                        ConversationReaderTableView(
-                                            coordinator: coord,
-                                            rows: currentRows,
-                                            scheme: scheme,
-                                            workspace: workspace,
-                                            sessionScopeKey: "\(store.machineScope):\(model.provider.rawValue):\(item.sessionKey)",
-                                            sessionProvider: model.provider,
-                                            sessionKey: item.sessionKey,
-                                            cwd: item.cwd,
-                                            hasTimelineRail: !model.timelineEntries.isEmpty,
-                                            isSubagent: false,
-                                            canLoadOlder: model.timelineWindow.isActive ? model.timelineWindow.hasMoreOlder : (model.hasMoreOlder && model.beforeCursor != nil),
-                                            isLoadingOlder: model.loadingOlder || model.timelineWindow.busy,
-                                            isLoadOlderBlockedByError: model.loadOlderError != nil || (model.timelineWindow.isActive && model.timelineWindow.error != nil)
-                                        )
-                                    }
+                                    ConversationReaderTableView(
+                                        coordinator: model.coordinatorRef ?? model.tableCoordinator,
+                                        rows: currentRows,
+                                        scheme: scheme,
+                                        workspace: workspace,
+                                        sessionScopeKey: "\(store.machineScope):\(model.provider.rawValue):\(item.sessionKey)",
+                                        sessionProvider: model.provider,
+                                        sessionKey: item.sessionKey,
+                                        cwd: item.cwd,
+                                        hasTimelineRail: !model.timelineEntries.isEmpty,
+                                        isSubagent: false,
+                                        canLoadOlder: model.timelineWindow.isActive ? model.timelineWindow.hasMoreOlder : (model.hasMoreOlder && model.beforeCursor != nil),
+                                        isLoadingOlder: model.loadingOlder || model.timelineWindow.busy,
+                                        isLoadOlderBlockedByError: model.loadOlderError != nil || (model.timelineWindow.isActive && model.timelineWindow.error != nil)
+                                    )
 
                                     if !model.detailLoading && model.detailLoadedForKey == item.sessionKey && currentRows.isEmpty {
                                         VStack {
@@ -947,6 +962,7 @@ public struct UnifiedProviderWorkspaceView: View {
                                 )
 
                                 FloatingSearchPillButton {
+                                    guard canPresentSearchModal else { return }
                                     searchModalOpen = true
                                 }
                             }
@@ -957,26 +973,26 @@ public struct UnifiedProviderWorkspaceView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    if subagentDrawerOpen && canDockSubagents {
+                    if stageController.subagentDrawerOpen && canDockSubagents {
                         SubagentPanelView(
                             store: store,
                             provider: model.provider,
                             rootSessionKey: item.sessionKey,
                             collection: model.subagents,
-                            initialAgent: selectedSubagent,
+                            initialAgent: stageController.selectedSubagent,
                             scheme: scheme,
                             workspace: workspace,
                             isModalOverlay: false,
-                            onClose: { subagentDrawerOpen = false }
+                            onClose: { stageController.subagentDrawerOpen = false }
                         )
                     }
                 }
 
                 // <960pt Overlay Subagent Drawer with .34 Backdrop, Isolated Focus Root & Trigger Focus Restore
-                if subagentDrawerOpen && !canDockSubagents {
+                if stageController.subagentDrawerOpen && !canDockSubagents {
                     Color.black.opacity(0.34)
                         .ignoresSafeArea()
-                        .onTapGesture { subagentDrawerOpen = false }
+                        .onTapGesture { stageController.subagentDrawerOpen = false }
 
                     SubagentOverlayFocusContainerView(palette: palette) {
                         SubagentPanelView(
@@ -984,12 +1000,12 @@ public struct UnifiedProviderWorkspaceView: View {
                             provider: model.provider,
                             rootSessionKey: item.sessionKey,
                             collection: model.subagents,
-                            initialAgent: selectedSubagent,
+                            initialAgent: stageController.selectedSubagent,
                             scheme: scheme,
                             workspace: workspace,
                             isModalOverlay: true,
-                            restoreFocusResponder: subagentTriggerResponder,
-                            onClose: { subagentDrawerOpen = false }
+                            restoreFocusResponder: stageController.subagentTriggerResponder,
+                            onClose: { stageController.subagentDrawerOpen = false }
                         )
                     }
                     .frame(width: min(LayoutMetrics.subagentDrawerWidth, availableWidth))
@@ -1045,32 +1061,16 @@ public struct UnifiedProviderWorkspaceView: View {
         }
     }
 
-    private func ensureCoordinator() {
-        guard coordinatorRef == nil else { return }
-        let c = ConversationTableCoordinator(store: store)
-        c.onLoadOlderRequested = {
-            guard model.loadOlderError == nil,
-                  !model.timelineWindow.isActive || model.timelineWindow.error == nil
-            else { return }
-            Task { await model.loadOlderPageIfNeeded() }
+    private func wireCoordinatorCallbacks() {
+        let c = model.coordinatorRef ?? model.tableCoordinator
+        c.onOpenSubagent = { [weak model, weak stageController] sub in
+            guard let model, let stageController, model.subagentsSupportedForCurrentProvider else { return }
+            stageController.subagentTriggerResponder = NSApp.keyWindow?.firstResponder
+            stageController.selectedSubagent = sub
+            stageController.subagentDrawerOpen = true
         }
-        c.onShowAllHistory = {
-            model.showAllHistory = true
-            if let item = model.selectedItem, model.provider == .codex {
-                model.threadStore.setHistoryExpanded(threadId: item.sessionKey, expanded: true)
-            }
-        }
-        c.onOpenSubagent = { sub in
-            guard model.subagentsSupportedForCurrentProvider else { return }
-            subagentTriggerResponder = NSApp.keyWindow?.firstResponder
-            selectedSubagent = sub
-            subagentDrawerOpen = true
-        }
-        c.onPreviewImage = { title, img in
-            previewImageItem = (title, img)
-        }
-        c.onCopyFeedback = { text in
-            model.feedbackMessage = text
+        c.onPreviewImage = { [weak stageController] title, img in
+            stageController?.previewImageItem = (title, img)
         }
         c.onActiveTimelineChanged = { [weak timelineTracker] id in
             DispatchQueue.main.async {
@@ -1079,8 +1079,6 @@ public struct UnifiedProviderWorkspaceView: View {
                 }
             }
         }
-        model.coordinatorRef = c
-        coordinatorRef = c
     }
 
     private func buildMenuActionsForItem(_ item: UnifiedSessionSummaryItem, isHeaderMenu: Bool) -> [SessionMenuAction] {
@@ -1143,6 +1141,14 @@ public struct UnifiedProviderWorkspaceView: View {
     }
 
 
+}
+
+@MainActor
+private final class ProviderStageController: ObservableObject {
+    @Published var subagentDrawerOpen: Bool = false
+    @Published var selectedSubagent: SubagentActivity?
+    @Published var previewImageItem: (title: String, image: NSImage)?
+    weak var subagentTriggerResponder: NSResponder?
 }
 
 @MainActor

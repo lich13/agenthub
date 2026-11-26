@@ -1,8 +1,5 @@
 //! Durable Bark delivery claims and bounded retries; credentials stay outside the queue.
-use super::{
-    async_question_monitor, bark, question_monitor, task_notification_suppression_reason,
-    ProbeBarkOutcome, ProbeBarkRequest,
-};
+use super::{async_question_monitor, bark, question_monitor, ProbeBarkOutcome, ProbeBarkRequest};
 use agenthub_core::{
     claude::ClaudeNotificationState,
     codex,
@@ -74,19 +71,25 @@ fn codex_path(config: &Config, event: &ProbeBuiltEvent) -> Option<PathBuf> {
 }
 
 fn prefix_digest(path: &Path, length: u64) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?.take(length);
-    let mut digest = Sha256::new();
-    let mut buffer = [0u8; 32768];
-    let mut count = 0;
-    loop {
-        let size = file.read(&mut buffer).ok()?;
-        if size == 0 {
-            break;
+    prefix_digest_checked(path, length).ok().flatten()
+}
+
+fn same_source_checked(path: &Path, proof: &SourceProof) -> Result<bool> {
+    let identity = match native_probe::file_identity(path) {
+        Ok(id) => id,
+        Err(err)
+            if err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(false);
         }
-        count += size as u64;
-        digest.update(&buffer[..size]);
+        Err(err) => return Err(err),
+    };
+    if identity != proof.identity {
+        return Ok(false);
     }
-    (count == length).then(|| hex::encode(digest.finalize()))
+    Ok(prefix_digest_checked(path, proof.length)?.as_deref() == Some(&proof.digest))
 }
 
 fn codex_fingerprint(config: &Config, event: &ProbeBuiltEvent) -> Option<SourceProof> {
@@ -202,14 +205,11 @@ pub async fn github_ci(
     Ok(())
 }
 
-pub async fn codex(
-    load_config: &ConfigLoader<'_>,
+fn build_codex_candidate(
+    config: &Config,
     db: &PanelDb,
     event: &ProbeBuiltEvent,
-    bark_allowed: bool,
-    timeout: Duration,
-) -> Result<ProbeBarkOutcome> {
-    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
+) -> Result<(String, Candidate)> {
     let key = codex_key(event);
     let title = event
         .payload
@@ -234,14 +234,18 @@ pub async fn codex(
     } else {
         String::new()
     };
-    let origin_ms = event.payload["question_created_at_ms"]
+    let origin_ms = match event.payload["question_created_at_ms"]
         .as_i64()
         .or_else(|| event.payload["feedback_completed_at_ms"].as_i64())
         .or_else(|| event.payload["source_log_ts"].as_i64().map(|ts| ts * 1000))
         .or_else(|| event.payload["notification_source_ms"].as_i64())
-        .or(db.notification_first_seen_ms(&event.dedupe_key)?)
-        .unwrap_or_else(|| Timestamp::now().as_millisecond());
-    let mut candidate = queued_candidate(
+    {
+        Some(ms) => ms,
+        None => db
+            .notification_first_seen_ms(&event.dedupe_key)?
+            .unwrap_or_else(|| Timestamp::now().as_millisecond()),
+    };
+    let candidate = queued_candidate(
         config,
         db,
         Source::Codex {
@@ -259,10 +263,75 @@ pub async fn codex(
         ),
         origin_ms,
     )?;
-    if let Some(skipped) =
-        skipped_before_staging(config, NotificationChannel::Bark, &candidate, bark_allowed)
-    {
-        return Ok(skipped);
+    Ok((key, candidate))
+}
+
+fn existing_codex_outcome(db: &PanelDb, key: &str, enabled: bool) -> Result<ProbeBarkOutcome> {
+    Ok(db
+        .notification_delivery_outcome(NotificationChannel::Bark, key)?
+        .and_then(|v| serde_json::from_value(v).ok())
+        .filter(|v: &ProbeBarkOutcome| !v.sent && !v.skipped)
+        .unwrap_or_else(|| ProbeBarkOutcome::skipped("dedupe", enabled, true, true)))
+}
+
+pub async fn codex_with_claims(
+    load_config: &ConfigLoader<'_>,
+    db: &PanelDb,
+    event: &ProbeBuiltEvent,
+    feedback_key: Option<&str>,
+    passive_sent: bool,
+    timeout: Duration,
+) -> Result<(bool, bool, ProbeBarkOutcome)> {
+    let config = &db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
+    let (key, mut candidate) = build_codex_candidate(config, db, event)?;
+    let enabled = NotificationChannel::Bark.enabled(config);
+    let switch_enabled = event_enabled(config, &candidate);
+    if !enabled || !switch_enabled || passive_sent {
+        let (feedback_claimed, dedupe_claimed, _) = db.claim_and_stage_codex_delivery(
+            feedback_key,
+            &event.dedupe_namespace,
+            &event.dedupe_key,
+            event.ttl_seconds,
+            None,
+        )?;
+        let outcome = if !enabled || !switch_enabled {
+            ProbeBarkOutcome::skipped(
+                if enabled {
+                    "event_switch_disabled"
+                } else {
+                    "notifications_disabled"
+                },
+                enabled,
+                switch_enabled,
+                false,
+            )
+        } else {
+            ProbeBarkOutcome::skipped("dedupe", enabled, true, true)
+        };
+        return Ok((feedback_claimed, dedupe_claimed, outcome));
+    }
+    if feedback_key.is_none() && db.has_probe_dedupe(&event.dedupe_namespace, &event.dedupe_key)? {
+        return Ok((
+            true,
+            false,
+            ProbeBarkOutcome::skipped("dedupe", enabled, true, true),
+        ));
+    }
+    if feedback_key.is_some_and(|fk| db.get_setting(fk).ok().flatten().is_some()) {
+        let (feedback_claimed, dedupe_claimed, _) = db.claim_and_stage_codex_delivery(
+            feedback_key,
+            &event.dedupe_namespace,
+            &event.dedupe_key,
+            event.ttl_seconds,
+            None,
+        )?;
+        if !(feedback_claimed && dedupe_claimed) {
+            return Ok((
+                feedback_claimed,
+                dedupe_claimed,
+                ProbeBarkOutcome::skipped("dedupe", enabled, true, true),
+            ));
+        }
     }
     // Only a delivery that reaches staging needs the rollout proof, so the skips above
     // never hash the file. Staging must still follow this step: a retry treats a
@@ -276,18 +345,44 @@ pub async fn codex(
     if let Source::Codex { fingerprint, .. } = &mut candidate.source {
         *fingerprint = proof;
     }
-    let bark = deliver(
+    let candidate_value = serde_json::to_value(&candidate)?;
+    let (feedback_claimed, dedupe_claimed, staged) = db.claim_and_stage_codex_delivery(
+        feedback_key,
+        &event.dedupe_namespace,
+        &event.dedupe_key,
+        event.ttl_seconds,
+        Some((
+            NotificationChannel::Bark,
+            &key,
+            candidate.event_ms,
+            &candidate_value,
+        )),
+    )?;
+    if !(feedback_claimed && dedupe_claimed) {
+        return Ok((
+            feedback_claimed,
+            dedupe_claimed,
+            ProbeBarkOutcome::skipped("dedupe", enabled, true, true),
+        ));
+    }
+    if !staged {
+        return Ok((
+            feedback_claimed,
+            dedupe_claimed,
+            existing_codex_outcome(db, &key, enabled)?,
+        ));
+    }
+    let bark = process(
         load_config,
-        config,
         db,
         &key,
         NotificationChannel::Bark,
         &candidate,
-        bark_allowed,
         timeout,
+        false,
     )
     .await?;
-    Ok(bark)
+    Ok((feedback_claimed, dedupe_claimed, bark))
 }
 
 pub async fn native(
@@ -762,13 +857,18 @@ async fn process(
         } else {
             native_source_state(candidate).await
         };
+        let current_check = if claude_state.is_none()
+            && native_state.is_none()
+            && (revalidate || lease.chunk_attempts > 1)
+        {
+            Some(current_state(&checked_config, db, candidate).await)
+        } else {
+            None
+        };
         let valid_source = match claude_state {
             Some(state) => state != ClaudeNotificationState::Obsolete,
             None if native_state.is_some() => !matches!(native_state, Some(Ok(false))),
-            None => {
-                !(revalidate || lease.chunk_attempts > 1)
-                    || current(&checked_config, db, candidate).await
-            }
+            None => !matches!(current_check, Some(Ok(false))),
         };
         // Source checks can yield while a scan runs. Refresh again before any HTTP
         // request, including another segment of the same queued notification.
@@ -803,10 +903,20 @@ async fn process(
             ProbeBarkOutcome::skipped("device_key_missing", channel.enabled(config), true, false)
         } else if claude_state == Some(ClaudeNotificationState::Pending)
             || matches!(native_state, Some(Err(_)))
+            || matches!(current_check, Some(Err(_)))
         {
             let mut outcome = claude_source_outcome(ClaudeNotificationState::Pending, true, true);
             if native_state.is_some() {
                 outcome.reason = Some("native_source_pending".into());
+            } else if current_check.is_some() {
+                outcome.reason = Some(
+                    if matches!(&candidate.source, Source::GithubCi { .. }) {
+                        "ci_source_pending"
+                    } else {
+                        "codex_source_pending"
+                    }
+                    .into(),
+                );
             }
             outcome
         } else if matches!(&candidate.source, Source::Native { delivery } if delivery.provider == native_probe::NativeProvider::Claude && delivery.event.prompt_id.is_none())
@@ -979,8 +1089,16 @@ async fn claude_source_state(
             let (hook, proof, verified) = (hook.clone(), proof.clone(), *verified);
             Some(
                 agenthub_core::read_tasks::spawn_blocking(move || {
-                    if !verified || !proof.as_ref().is_some_and(|p| same_source(&hook.path, p)) {
+                    if !verified {
                         return Obsolete;
+                    }
+                    let Some(p) = proof.as_ref() else {
+                        return Obsolete;
+                    };
+                    match same_source_checked(&hook.path, p) {
+                        Ok(true) => {}
+                        Ok(false) => return Obsolete,
+                        Err(_) => return Pending,
                     }
                     let Ok(context) = super::claude_hook::context(&hook) else {
                         return Pending;
@@ -1072,19 +1190,45 @@ async fn native_source_state(candidate: &Candidate) -> Option<Result<bool>> {
     )
 }
 
+#[cfg(test)]
 async fn current(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
-    let (config, db, candidate) = (config.clone(), db.clone(), candidate.clone());
-    agenthub_core::read_tasks::spawn_blocking(move || current_snapshot(&config, &db, &candidate))
-        .await
-        .unwrap_or(false)
+    current_state(config, db, candidate).await.unwrap_or(false)
 }
 
-fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> bool {
-    match &candidate.source {
-        Source::Test => true,
-        Source::GithubCi { event } => {
-            agenthub_core::github_ci::event_current(db, config, event).unwrap_or(false)
+async fn current_state(config: &Config, db: &PanelDb, candidate: &Candidate) -> Result<bool> {
+    let (config, db, candidate) = (config.clone(), db.clone(), candidate.clone());
+    agenthub_core::read_tasks::spawn_blocking(move || {
+        current_snapshot_state(&config, &db, &candidate)
+    })
+    .await
+    .map_err(anyhow::Error::from)
+    .and_then(|res| res)
+}
+
+fn prefix_digest_checked(path: &Path, length: u64) -> Result<Option<String>> {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file.take(length),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 32768];
+    let mut count = 0;
+    loop {
+        let size = file.read(&mut buffer)?;
+        if size == 0 {
+            break;
         }
+        count += size as u64;
+        digest.update(&buffer[..size]);
+    }
+    Ok((count == length).then(|| hex::encode(digest.finalize())))
+}
+
+fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) -> Result<bool> {
+    match &candidate.source {
+        Source::Test => Ok(true),
+        Source::GithubCi { event } => agenthub_core::github_ci::event_current(db, config, event),
         Source::Native { .. } => unreachable!("native source checked above"),
         Source::ClaudeHook { .. } => unreachable!("Claude source checked above"),
         Source::Codex {
@@ -1092,14 +1236,63 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
             fingerprint,
             original_body,
         } => {
-            if task_notification_suppression_reason(config, event.thread_id.as_deref()).is_some() {
-                return false;
-            }
-            let (Some(proof), Some(path)) = (fingerprint, codex_path(config, event)) else {
-                return false;
+            let Some(id) = event.thread_id.as_deref() else {
+                return Ok(false);
             };
-            if !same_source(&path, proof) {
-                return false;
+            let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
+            if codex::codex_task_identity(&paths, id)?
+                .suppression_reason()
+                .is_some()
+            {
+                return Ok(false);
+            }
+            let Some(proof) = fingerprint else {
+                return Ok(false);
+            };
+            let Some(thread) = codex::notification_thread_header(&paths, id)? else {
+                return Ok(false);
+            };
+            let Some(path) = thread.rollout_path else {
+                return Ok(false);
+            };
+            let meta = match std::fs::symlink_metadata(&path) {
+                Ok(meta) => meta,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
+            if !meta.is_file() || meta.file_type().is_symlink() {
+                return Ok(false);
+            }
+            let cur_identity = match native_probe::file_identity(&path) {
+                Ok(identity) => identity,
+                Err(err)
+                    if err
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    return Ok(false);
+                }
+                Err(err) => return Err(err),
+            };
+            if cur_identity != proof.identity {
+                return Ok(false);
+            }
+            let Some(digest) = prefix_digest_checked(&path, proof.length)? else {
+                return Ok(false);
+            };
+            if digest != proof.digest {
+                return Ok(false);
+            }
+            let mut file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(err) => return Err(err.into()),
+            };
+            file.seek(SeekFrom::Start(proof.length))?;
+            let mut tail = String::new();
+            file.take(2 * 1024 * 1024 + 1).read_to_string(&mut tail)?;
+            if !tail.is_empty() && !tail.ends_with('\n') && tail.len() <= 2 * 1024 * 1024 {
+                anyhow::bail!("codex tail flush pending");
             }
             let mut event = (**event).clone();
             event.bark_body = original_body
@@ -1108,11 +1301,14 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
             if event.payload["question_tool"] == "request_user_input_async"
                 || event.payload["body_source"] == "assistant_question"
             {
-                async_question_monitor::prepare_event(config, db, event)
-                    .and_then(|e| question_monitor::prepare_event(config, db, e))
-                    .is_ok_and(|e| {
-                        e.suppression_reason.is_none() && event_enabled(config, candidate)
-                    })
+                if event.payload["question_tool"] == "request_user_input_async" {
+                    let _ = codex::rollout_async_questions(&path)?;
+                } else {
+                    let _ = codex::rollout_pending_feedback(&path)?;
+                }
+                let prepared = async_question_monitor::prepare_event(config, db, event)
+                    .and_then(|e| question_monitor::prepare_event(config, db, e))?;
+                Ok(prepared.suppression_reason.is_none() && event_enabled(config, candidate))
             } else {
                 let pending_question = event.payload["body_source"] == "request_user_input";
                 if pending_question {
@@ -1121,19 +1317,18 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
                             .as_str()
                             .or(event.payload["item_id"].as_str()),
                     ) else {
-                        return false;
+                        return Ok(false);
                     };
                     if !matches!(
-                        codex::rollout_request_user_input_state(&path, turn, call),
-                        Ok(codex::RolloutRequestUserInputState::Pending)
+                        codex::rollout_request_user_input_state(&path, turn, call)?,
+                        codex::RolloutRequestUserInputState::Pending
                     ) {
-                        return false;
+                        return Ok(false);
                     }
                 } else if event.payload["body_source"] == "proposed_plan" {
-                    let Ok(Some(selection)) =
-                        codex::rollout_hook_stop_message_selection(&path, None)
+                    let Some(selection) = codex::rollout_hook_stop_message_selection(&path, None)?
                     else {
-                        return false;
+                        return Ok(false);
                     };
                     if selection.selected_turn_id != event.turn_id
                         || !matches!(
@@ -1141,27 +1336,15 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
                             "request_user_input" | "proposed_plan"
                         )
                     {
-                        return false;
+                        return Ok(false);
                     }
                 }
                 // Only append-only, unrelated records may leave an older notification current.
-                let Ok(mut file) = std::fs::File::open(&path) else {
-                    return false;
-                };
-                if file.seek(SeekFrom::Start(proof.length)).is_err() {
-                    return false;
+                if tail.len() > 2 * 1024 * 1024 {
+                    return Ok(false);
                 }
-                let mut tail = String::new();
-                if file
-                    .take(2 * 1024 * 1024 + 1)
-                    .read_to_string(&mut tail)
-                    .is_err()
-                    || tail.len() > 2 * 1024 * 1024
-                    || (!tail.is_empty() && !tail.ends_with('\n'))
-                {
-                    return false;
-                }
-                tail.lines()
+                Ok(tail
+                    .lines()
                     .filter(|line| !line.trim().is_empty())
                     .all(|line| {
                         let Ok(row) = serde_json::from_str::<Value>(line) else {
@@ -1189,7 +1372,7 @@ fn current_snapshot(config: &Config, db: &PanelDb, candidate: &Candidate) -> boo
                             && payload["role"] != "user"
                             && !(outer == "turn_context"
                                 && turn.is_some_and(|id| Some(id) != event.turn_id.as_deref()))
-                    })
+                    }))
             }
         }
     }

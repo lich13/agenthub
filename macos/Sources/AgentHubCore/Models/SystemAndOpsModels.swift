@@ -248,6 +248,30 @@ public struct JobRecord: Codable, Equatable, Identifiable, Sendable {
         case failureAnalysis
     }
 
+    public init(
+        id: String,
+        kind: String,
+        status: String,
+        title: String,
+        startedAt: Int64,
+        finishedAt: Int64? = nil,
+        exitCode: Int32? = nil,
+        output: String? = nil,
+        error: String? = nil,
+        failureAnalysis: JobFailureAnalysis? = nil
+    ) {
+        self.id = id
+        self.kind = kind
+        self.status = status
+        self.title = title
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.exitCode = exitCode
+        self.output = output
+        self.error = error
+        self.failureAnalysis = failureAnalysis
+    }
+
     public var isTerminal: Bool {
         status == "succeeded" || status == "failed" || status == "cancelled"
     }

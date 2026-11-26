@@ -4,7 +4,7 @@ use agenthub_core::services::plans::{PlanSaveRequest, PlanSaveResult};
 use std::{fs::OpenOptions, io::Write, path::Path};
 
 pub async fn savePlanMarkdown(request: PlanSaveRequest) -> Result<PlanSaveResult, String> {
-    tokio::task::spawn_blocking(move || {
+    agenthub_core::read_tasks::spawn_blocking(move || {
         let directory = dirs::download_dir().ok_or("无法定位下载文件夹")?;
         save_markdown(&directory, request)
     })

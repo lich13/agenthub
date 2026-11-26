@@ -51,20 +51,36 @@ pub(crate) fn invalidate_readonly_snapshot_cache() {
 }
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    let mut evicted = false;
     if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
         if guard
             .as_ref()
             .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
         {
             *guard = None;
-            crate::note_cache_eviction();
+            evicted = true;
         }
+    }
+    if let Ok(mut entries) = TURN_CACHE.0.lock() {
+        let before = entries.len();
+        let now = std::time::Instant::now();
+        entries.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
+        if entries.len() < before {
+            if entries.capacity() > entries.len().saturating_mul(4).max(16) {
+                entries.shrink_to_fit();
+            }
+            evicted = true;
+        }
+    }
+    if evicted {
+        crate::note_cache_eviction();
     }
 }
 
 #[cfg(test)]
 thread_local! {
     static TEST_SNAPSHOT: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+    static TEST_SNAPSHOT_QUEUE: std::cell::RefCell<VecDeque<Option<(String, String)>>> = const { std::cell::RefCell::new(VecDeque::new()) };
 }
 
 #[cfg(test)]
@@ -72,6 +88,14 @@ pub(super) fn test_owner(id: Option<&str>, cwd: &str) {
     invalidate_readonly_snapshot_cache();
     TEST_SNAPSHOT.with(|slot| {
         *slot.borrow_mut() = id.map(|id| (id.to_owned(), cwd.to_owned()));
+    });
+}
+
+#[cfg(test)]
+pub(super) fn test_owner_sequence(seq: Vec<Option<(String, String)>>) {
+    invalidate_readonly_snapshot_cache();
+    TEST_SNAPSHOT_QUEUE.with(|q| {
+        *q.borrow_mut() = VecDeque::from(seq);
     });
 }
 
@@ -97,6 +121,35 @@ impl Snapshot {
     }
 
     pub(super) fn capture(paths: &GrokPaths) -> Self {
+        #[cfg(test)]
+        if let Some(queued) = TEST_SNAPSHOT_QUEUE.with(|q| q.borrow_mut().pop_front()) {
+            return match queued {
+                Some((id, cwd)) => {
+                    let mut processes = HashMap::new();
+                    processes.insert(
+                        42,
+                        Process {
+                            started_at: Some(100),
+                            zombie: false,
+                            native: Some(true),
+                        },
+                    );
+                    Self {
+                        registrations: Some(vec![Registration {
+                            id,
+                            pid: Some(42),
+                            opened_at: Some(200),
+                            cwd: Some(cwd),
+                        }]),
+                        processes: Some(processes),
+                    }
+                }
+                None => Self {
+                    registrations: Some(Vec::new()),
+                    processes: Some(HashMap::new()),
+                },
+            };
+        }
         #[cfg(test)]
         if let Some((id, cwd)) = TEST_SNAPSHOT.with(|slot| slot.borrow().clone()) {
             let mut processes = HashMap::new();
@@ -260,14 +313,30 @@ fn read_registrations(path: &Path) -> Option<Vec<Registration>> {
 }
 
 fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u32, Process>> {
-    let output = Command::new("/bin/ps")
-        .env("LC_ALL", "C")
-        .env("TZ", "UTC")
-        .args(["-axo", "pid=,lstart=,stat=,args="])
-        .output()
-        .ok()?;
-    if !output.status.success() || output.stdout.len() > 8 * 1024 * 1024 {
-        return None;
+    if pids.is_empty() {
+        return Some(HashMap::new());
+    }
+    let live_pids: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|&pid| {
+            #[cfg(unix)]
+            {
+                // Filter out exited or out-of-range PIDs (e.g. > PID_MAX on macOS) via kernel
+                // signal-0 check so dead PIDs never cause `/bin/ps -p` to abort with exit=1.
+                // SAFETY: `kill(pid, 0)` sends no signal and only checks existence/permissions.
+                (unsafe { libc::kill(pid as libc::pid_t, 0) == 0 })
+                    || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = pid;
+                true
+            }
+        })
+        .collect();
+    if live_pids.is_empty() {
+        return Some(HashMap::new());
     }
     let executables: HashSet<_> = std::env::var_os("PATH")
         .into_iter()
@@ -278,30 +347,55 @@ fn collect_processes(paths: &GrokPaths, pids: &HashSet<u32>) -> Option<HashMap<u
         .filter_map(|path| path.canonicalize().ok())
         .collect();
     let mut processes = HashMap::new();
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let mut fields = line.split_whitespace();
-        let Some(pid) = fields.next().and_then(|value| value.parse().ok()) else {
-            continue;
-        };
-        if !pids.contains(&pid) {
-            continue;
+    for chunk in live_pids.chunks(256) {
+        let pid_list = chunk
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        let output = Command::new("/bin/ps")
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .args(["-ww", "-p", &pid_list, "-o", "pid=,lstart=,stat=,args="])
+            .output()
+            .ok()?;
+        if output.stdout.len() > 8 * 1024 * 1024 {
+            return None;
         }
-        let start = fields.by_ref().take(5).collect::<Vec<_>>().join(" ");
-        let started_at = jiff::civil::DateTime::strptime("%a %b %e %T %Y", &start)
-            .ok()
-            .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
-            .map(|ts| ts.as_second());
-        let zombie = fields.next().is_some_and(|state| state.starts_with('Z'));
-        let args: Vec<&str> = fields.collect();
-        let native = classify_grok_process(pid, &args, &executables);
-        processes.insert(
-            pid,
-            Process {
-                started_at,
-                zombie,
-                native,
-            },
-        );
+        if !output.status.success() {
+            if output.status.code() == Some(1)
+                && output.stdout.trim_ascii().is_empty()
+                && output.stderr.trim_ascii().is_empty()
+            {
+                continue;
+            }
+            return None;
+        }
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let mut fields = line.split_whitespace();
+            let Some(pid) = fields.next().and_then(|value| value.parse().ok()) else {
+                continue;
+            };
+            if !pids.contains(&pid) {
+                continue;
+            }
+            let start = fields.by_ref().take(5).collect::<Vec<_>>().join(" ");
+            let started_at = jiff::civil::DateTime::strptime("%a %b %e %T %Y", &start)
+                .ok()
+                .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
+                .map(|ts| ts.as_second());
+            let zombie = fields.next().is_some_and(|state| state.starts_with('Z'));
+            let args: Vec<&str> = fields.collect();
+            let native = classify_grok_process(pid, &args, &executables);
+            processes.insert(
+                pid,
+                Process {
+                    started_at,
+                    zombie,
+                    native,
+                },
+            );
+        }
     }
     Some(processes)
 }
@@ -506,6 +600,7 @@ struct Cursor {
     anchor: Vec<u8>,
     turns: Turns,
     caught_up: bool,
+    last_accessed: std::time::Instant,
 }
 
 struct TurnCache(Mutex<VecDeque<Cursor>>);
@@ -535,7 +630,8 @@ impl TurnCache {
             crate::lru::take_first(&mut entries, |entry| entry.path == path && entry.id == id)
         });
         let mut cursor = match old {
-            Some(cursor) if cursor.stamp == stamp && cursor.caught_up => {
+            Some(mut cursor) if cursor.stamp == stamp && cursor.caught_up => {
+                cursor.last_accessed = std::time::Instant::now();
                 let state = (cursor.turns.phase(), cursor.offset == stamp.len);
                 self.publish(cursor);
                 return Ok(state);
@@ -556,6 +652,7 @@ impl TurnCache {
                 anchor: Vec::new(),
                 turns: Turns::default(),
                 caught_up: false,
+                last_accessed: std::time::Instant::now(),
             },
         };
         file.seek(SeekFrom::Start(cursor.offset))?;
@@ -597,6 +694,7 @@ impl TurnCache {
         cursor.anchor = anchor(&mut file, cursor.offset)?;
         let complete = cursor.caught_up && cursor.offset == stamp.len;
         cursor.stamp = stamp;
+        cursor.last_accessed = std::time::Instant::now();
         self.publish(cursor);
         Ok((phase, complete))
     }

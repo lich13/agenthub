@@ -98,8 +98,8 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         self.store = store
         self.disclosureStore = disclosureStore
         super.init()
-        attachmentViewport.onImageUpdated = { [weak self] _ in
-            self?.tableView?.reloadData()
+        attachmentViewport.onImageUpdated = { [weak self] key in
+            self?.reloadRowForAttachmentKey(key)
         }
         NotificationCenter.default.addObserver(
             self,
@@ -107,6 +107,54 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             name: NSScroller.preferredScrollerStyleDidChangeNotification,
             object: nil
         )
+    }
+
+    public struct LoadedAttachmentState: Equatable, Sendable {
+        public let lowMask: UInt64
+        public let overflowIndices: [Int]
+
+        public init(lowMask: UInt64 = 0, overflowIndices: [Int] = []) {
+            self.lowMask = lowMask
+            self.overflowIndices = overflowIndices
+        }
+    }
+
+    public func loadedAttachmentState(for item: ConversationRowItem) -> LoadedAttachmentState {
+        guard case let .user(msg, _, namesOnly) = item.kind,
+              !namesOnly,
+              let attachments = msg?.attachments
+        else { return LoadedAttachmentState() }
+        var mask: UInt64 = 0
+        var overflow: [Int] = []
+        let msgId = msg?.id ?? item.id
+        for (idx, att) in attachments.enumerated() where att.kind == "image" && att.reason == nil {
+            let key = "\(sessionScopeKey):\(msgId):\(att.id)"
+            if attachmentViewport.image(for: key) != nil {
+                if idx < 64 {
+                    mask |= (1 << UInt64(idx))
+                } else {
+                    overflow.append(idx)
+                }
+            }
+        }
+        return LoadedAttachmentState(lowMask: mask, overflowIndices: overflow)
+    }
+
+    private func reloadRowForAttachmentKey(_ targetKey: String) {
+        guard let tableView else { return }
+        var matchedIndexes = IndexSet()
+        for idx in userAnchorRowIndices where idx < rows.count {
+            let row = rows[idx]
+            if case let .user(msg, _, namesOnly) = row.kind, !namesOnly, let attachments = msg?.attachments {
+                let prefix = "\(sessionScopeKey):\(msg?.id ?? row.id):"
+                if targetKey.hasPrefix(prefix), attachments.contains(where: { "\(prefix)\($0.id)" == targetKey }) {
+                    matchedIndexes.insert(idx)
+                }
+            }
+        }
+        if !matchedIndexes.isEmpty {
+            tableView.reloadData(forRowIndexes: matchedIndexes, columnIndexes: IndexSet(integer: 0))
+        }
     }
 
     deinit {
@@ -232,6 +280,32 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
         )
     }
 
+    @discardableResult
+    public static func runBoundedOlderContinuationLoop(
+        coordinator: @MainActor () -> ConversationTableCoordinator?,
+        currentRowCount: @MainActor () -> Int,
+        upgradeLimitOnSparseRows: Bool,
+        loadStep: @MainActor (_ limitOverride: Int?) async -> Bool
+    ) async -> Bool {
+        var anyLoaded = false
+        for step in 0 ..< 5 {
+            let prevHeight = coordinator()?.renderedContentHeight ?? 0
+            let prevCount = currentRowCount()
+            let limitOverride: Int? = (step > 0 || (upgradeLimitOnSparseRows && prevCount <= 2)) ? 500 : nil
+            let loaded = await loadStep(limitOverride)
+            if !loaded { break }
+            anyLoaded = true
+            guard let coord = coordinator() else { break }
+            let newHeight = coord.renderedContentHeight
+            let newCount = currentRowCount()
+            let needsMore = coord.isViewportUnderfilled
+                || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
+                || (newCount <= prevCount && newCount <= 2)
+            if !needsMore { break }
+        }
+        return anyLoaded
+    }
+
     private func findAnchorRowIndex(for timelineId: String, in list: [ConversationRowItem]) -> Int? {
         if let exact = list.firstIndex(where: { $0.timelineId == timelineId }) {
             return exact
@@ -258,6 +332,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 highlightClearTask?.cancel()
                 highlightClearTask = nil
                 highlightedTimelineId = nil
+                attachmentViewport.resetScope(sessionScopeKey)
             }
             if forceScrollToBottom {
                 upwardScrollIntent = false
@@ -357,13 +432,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 for sid in meta.sourceIds where targetKeys.contains("claude-metadata:\(sid)") {
                     return true
                 }
-                let subItems = meta.entries.map { e -> ClaudeEventRenderItem in
-                    switch e {
-                    case let .item(it, k, sids): .item(item: it, key: k, sourceIds: sids)
-                    case let .group(g): .group(g)
-                    }
-                }
-                if claudeEntriesReferenceDisclosure(subItems, targetKeys: targetKeys) { return true }
+                if claudeEntriesReferenceDisclosure(meta.renderItems, targetKeys: targetKeys) { return true }
             case let .item(_, key, sids):
                 if targetKeys.contains(key) || targetKeys.contains("\(key):thinking") { return true }
                 for sid in sids {
@@ -422,13 +491,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             for sid in meta.sourceIds where targetKeys.contains("claude-metadata:\(sid)") {
                 return true
             }
-            let subItems = meta.entries.map { e -> ClaudeEventRenderItem in
-                switch e {
-                case let .item(it, k, sids): .item(item: it, key: k, sourceIds: sids)
-                case let .group(g): .group(g)
-                }
-            }
-            return claudeEntriesReferenceDisclosure(subItems, targetKeys: targetKeys)
+            return claudeEntriesReferenceDisclosure(meta.renderItems, targetKeys: targetKeys)
         case .thinking:
             if targetKeys.contains(row.id) { return true }
             for alias in row.timelineAliases where targetKeys.contains(alias) {
@@ -626,8 +689,10 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             disclosureStore.setOpen(scope: sessionScopeKey, stateKey: targetRow.id, aliases: targetRow.timelineAliases, isOpen: true)
             didMutateDisclosure = true
         case let .user(msg, rawText, _):
-            let proj = UserContextEngine.projectUserMessage(msg?.text ?? rawText, contextBlocks: msg?.contextBlocks)
-            let segs = UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks)
+            let (proj, segs) = UserContextEngine.projectAndSegmentUserMessage(
+                msg?.text ?? rawText,
+                contextBlocks: msg?.contextBlocks
+            )
             if !proj.contextBlocks.isEmpty && (segs.isEmpty || positionKey.contains("context") || positionKey.contains("instruction")) {
                 let ctxKey = "\(msg?.id ?? targetRow.timelineId):context"
                 disclosureStore.setOpen(
@@ -880,17 +945,22 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             attachmentViewport.evictOutside(visibleKeys: inViewportAttachmentKeys)
         }
 
-        // Compute active user timeline entry using precomputed user row indices
+        // Compute active user timeline entry via O(log U) binary search on precomputed user row indices
         if !userAnchorRowIndices.isEmpty {
-            var userAnchors: [(id: String, top: CGFloat)] = []
-            userAnchors.reserveCapacity(userAnchorRowIndices.count)
-            for idx in userAnchorRowIndices where idx < rows.count {
-                userAnchors.append((id: rows[idx].timelineId, top: tableView.rect(ofRow: idx).minY))
+            let viewportTop = clipView.bounds.origin.y + 28
+            var low = 0
+            var high = userAnchorRowIndices.count
+            while low < high {
+                let mid = (low + high) / 2
+                let rowIdx = userAnchorRowIndices[mid]
+                if rowIdx < rows.count, tableView.rect(ofRow: rowIdx).minY <= viewportTop {
+                    low = mid + 1
+                } else {
+                    high = mid
+                }
             }
-            let activeId = TimelineViewModel.activeUserTimelineId(
-                anchors: userAnchors,
-                viewportTop: clipView.bounds.origin.y + 28
-            )
+            let chosenRowIdx = userAnchorRowIndices[max(0, low - 1)]
+            let activeId: String? = chosenRowIdx < rows.count ? rows[chosenRowIdx].timelineId : nil
             if activeId != lastReportedActiveTimelineId {
                 lastReportedActiveTimelineId = activeId
                 onActiveTimelineChanged?(activeId)
@@ -987,17 +1057,91 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
 
     // MARK: - Deterministic Row Height Calculation
 
+    public struct PositionedUserAttachment {
+        public let attachment: UserAttachment
+        public let size: NSSize
+    }
+
+    public static func measureFileAttachmentCardSize(
+        att: UserAttachment,
+        namesOnly: Bool,
+        maxWidth: CGFloat
+    ) -> NSSize {
+        let nameW = ceil(NSAttributedString(
+            string: att.name,
+            attributes: [.font: DesignFonts.nsBodyFont(size: 14)]
+        ).size().width)
+        let reasonW: CGFloat = if let reason = att.reason, !reason.isEmpty {
+            ceil(NSAttributedString(
+                string: reason,
+                attributes: [.font: DesignFonts.nsBodyFont(size: 11)]
+            ).size().width)
+        } else {
+            0
+        }
+        let hasCopy = !namesOnly && (att.path?.isEmpty == false)
+        let naturalW = 12 + 18 + 8 + max(nameW, reasonW) + (hasCopy ? (8 + 28) : 0) + 10 + 6
+        let clampedMax = max(120, min(maxWidth, 340))
+        let w = min(maxWidth, max(min(120, maxWidth), min(clampedMax, naturalW)))
+        let h: CGFloat = (att.reason?.isEmpty == false) ? 52 : 40
+        return NSSize(width: w, height: h)
+    }
+
+    public static func layoutUserAttachmentRows(
+        attachments: [UserAttachment],
+        namesOnly: Bool,
+        maxWidth: CGFloat
+    ) -> [[PositionedUserAttachment]] {
+        guard !attachments.isEmpty else { return [] }
+        let usableWidth = max(120, maxWidth)
+        var rows: [[PositionedUserAttachment]] = []
+        var currentRow: [PositionedUserAttachment] = []
+        var currentWidth: CGFloat = 0
+
+        for att in attachments {
+            let itemSize: NSSize = (!namesOnly && att.kind == "image")
+                ? NSSize(width: 96, height: 96)
+                : measureFileAttachmentCardSize(att: att, namesOnly: namesOnly, maxWidth: usableWidth)
+            let needed = currentRow.isEmpty ? itemSize.width : (currentWidth + 8 + itemSize.width)
+            if !currentRow.isEmpty && needed > usableWidth + 0.5 {
+                rows.append(currentRow)
+                currentRow = [PositionedUserAttachment(attachment: att, size: itemSize)]
+                currentWidth = itemSize.width
+            } else {
+                currentRow.append(PositionedUserAttachment(attachment: att, size: itemSize))
+                currentWidth = needed
+            }
+        }
+        if !currentRow.isEmpty {
+            rows.append(currentRow)
+        }
+        return rows
+    }
+
+    public static func measureUserAttachmentsHeight(
+        attachments: [UserAttachment],
+        namesOnly: Bool,
+        maxWidth: CGFloat
+    ) -> CGFloat {
+        let rows = layoutUserAttachmentRows(attachments: attachments, namesOnly: namesOnly, maxWidth: maxWidth)
+        guard !rows.isEmpty else { return 0 }
+        var total: CGFloat = 0
+        for (idx, row) in rows.enumerated() {
+            if idx > 0 { total += 8 }
+            total += row.map(\.size.height).max() ?? 40
+        }
+        return total
+    }
+
     public func measureRowHeight(_ row: ConversationRowItem, width: CGFloat) -> CGFloat {
         switch row.kind {
         case let .user(msg, rawText, namesOnly):
             let body = msg?.text ?? rawText
-            let proj = UserContextEngine.projectUserMessage(body, contextBlocks: msg?.contextBlocks)
-            let segs = UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks)
+            let (proj, segs) = UserContextEngine.projectAndSegmentUserMessage(body, contextBlocks: msg?.contextBlocks)
             var h: CGFloat = 8
             var blockCount = 0
             if let atts = msg?.attachments, !atts.isEmpty {
-                let hasImage = !namesOnly && atts.contains(where: { $0.kind == "image" && $0.reason == nil })
-                h += hasImage ? 100 : 42
+                h += Self.measureUserAttachmentsHeight(attachments: atts, namesOnly: namesOnly, maxWidth: width) + 4
                 blockCount += 1
             }
             let maxCardW = max(140, min(width * 0.85, 640))
@@ -1030,12 +1174,14 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 switch seg {
                 case let .text(_, t):
                     let attr = NSAttributedString(string: t, attributes: attrs)
-                    let textW = min(maxCardW - bubbleHPad * 2, max(64, ceil(attr.size().width) + 8))
+                    let textW = min(maxCardW - bubbleHPad * 2, max(36, ceil(attr.size().width) + 4))
                     let textH = max(24, ReaderSelectableTextView.measureHeight(attributed: attr, width: textW))
                     h += textH + 24
                 case let .reply(segId, q, a):
                     let trimmedQ = q.trimmingCharacters(in: .whitespacesAndNewlines)
                     let availW = max(80, maxCardW - bubbleHPad * 2 - 38)
+                    let aAttr = NSAttributedString(string: a, attributes: attrs)
+                    var computedAnsW = min(availW, max(64, ceil(aAttr.size().width) + 4))
                     var qExtra: CGFloat = 0
                     if !trimmedQ.isEmpty {
                         let qKey = "\(msg?.id ?? row.timelineId):\(segId):question"
@@ -1045,21 +1191,24 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                             aliases: ["\(row.timelineId):\(segId):question"],
                             initiallyOpen: false
                         )
+                        let qSingleWidth = ceil(NSAttributedString(
+                            string: trimmedQ,
+                            attributes: [.font: DesignFonts.nsBodyFont(size: 13)]
+                        ).size().width) + 26
+                        let targetInnerW = min(availW, max(computedAnsW, qSingleWidth))
+                        computedAnsW = max(computedAnsW, targetInnerW)
                         if qOpen {
                             let qAttr = NSAttributedString(
                                 string: trimmedQ,
                                 attributes: [.font: DesignFonts.nsBodyFont(size: 13)]
                             )
-                            let qW = min(availW, max(80, ceil(qAttr.size().width) + 8))
-                            qExtra = 28 + max(20, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: qW)) + 6
+                            qExtra = 28 + max(20, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: targetInnerW)) + 6
                         } else {
                             qExtra = 28
                         }
                     }
-                    let aAttr = NSAttributedString(string: a, attributes: attrs)
-                    let aW = min(availW, max(64, ceil(aAttr.size().width) + 8))
-                    let aH = max(24, ReaderSelectableTextView.measureHeight(attributed: aAttr, width: aW))
-                    h += qExtra + aH + 24
+                    let aH = max(24, ReaderSelectableTextView.measureHeight(attributed: aAttr, width: computedAnsW))
+                    h += max(30, qExtra + aH + 24)
                 }
             }
             if blockCount > 1 {
@@ -1149,13 +1298,7 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
             let isOpen = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
             if !isOpen { return 34 }
             let bodyW = max(100, width - 22)
-            let items = meta.entries.map { entry -> ClaudeEventRenderItem in
-                switch entry {
-                case let .item(it, key, sids): .item(item: it, key: key, sourceIds: sids)
-                case let .group(g): .group(g)
-                }
-            }
-            return 34 + 14 + measureClaudeEntriesHeight(entries: items, width: bodyW, wrapThinkingDisclosures: false)
+            return 34 + 14 + measureClaudeEntriesHeight(entries: meta.renderItems, width: bodyW, wrapThinkingDisclosures: false)
 
         case let .thinking(_, text, _):
             let open = disclosureStore.isOpen(
@@ -1247,15 +1390,9 @@ public final class ConversationTableCoordinator: NSObject, NSTableViewDataSource
                 let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
                 if open {
-                    let subItems = meta.entries.map { e -> ClaudeEventRenderItem in
-                        switch e {
-                        case let .item(it, k, sids): .item(item: it, key: k, sourceIds: sids)
-                        case let .group(g): .group(g)
-                        }
-                    }
                     appendRenderedHeight(
                         46 + measureClaudeEntriesHeight(
-                            entries: subItems,
+                            entries: meta.renderItems,
                             width: max(100, width - 22),
                             wrapThinkingDisclosures: false
                         )

@@ -449,6 +449,20 @@ pub(crate) fn grok_session_detail_without_storage(
     grok_session_page_with_storage(paths, id, None, None, None, None, false)
 }
 
+pub(crate) fn visit_search_events(
+    directory: &Path,
+    mut visit: impl FnMut(usize, &GrokHistoryEvent) -> bool,
+) -> Result<()> {
+    with_session_history(directory, |state, _| {
+        for (index, event) in state.events.events.iter().enumerate() {
+            if !visit(index, event) {
+                break;
+            }
+        }
+        Ok(())
+    })
+}
+
 pub fn grok_session_page(
     paths: &GrokPaths,
     id: &str,
@@ -551,6 +565,7 @@ pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
     GROK_LAST_MESSAGE_CACHE.evict_idle(max_idle);
     activity::evict_idle_cache(max_idle);
     if let Ok(mut cache) = GROK_PROBE_CACHE.lock() {
+        let before = cache.entries.len();
         let now = std::time::Instant::now();
         let mut removed = 0;
         cache.entries.retain(|entry| {
@@ -560,7 +575,13 @@ pub(crate) fn evict_idle_detail_cache(max_idle: Duration) {
             }
             keep
         });
-        cache.bytes -= removed;
+        cache.bytes = cache.bytes.saturating_sub(removed);
+        if cache.entries.len() < before {
+            if cache.entries.capacity() > cache.entries.len().saturating_mul(4).max(16) {
+                cache.entries.shrink_to_fit();
+            }
+            crate::note_cache_eviction();
+        }
     }
 }
 
@@ -628,14 +649,30 @@ fn with_session_history<R>(
                     .events
                     .iter()
                     .map(|event| {
-                        256 + event
-                            .user_message
-                            .as_ref()
-                            .map_or(0, crate::user_message::UserMessage::weight)
-                            + event.text.as_ref().map_or(0, String::len) as u64
-                            + event.detail.as_ref().map_or(0, String::len) as u64
+                        (256 + event.id.capacity()
+                            + event.kind.capacity()
+                            + event.timestamp.as_ref().map_or(0, String::capacity)
+                            + event.text.as_ref().map_or(0, String::capacity)
+                            + event.method.as_ref().map_or(0, String::capacity)
+                            + event.call_id.as_ref().map_or(0, String::capacity)
+                            + event.status.as_ref().map_or(0, String::capacity)
+                            + event.detail.as_ref().map_or(0, String::capacity))
+                            as u64
+                            + event
+                                .user_message
+                                .as_ref()
+                                .map_or(0, crate::user_message::UserMessage::weight)
                     })
                     .sum::<u64>()
+                    + (state.events.events.capacity()
+                        * std::mem::size_of::<Arc<GrokHistoryEvent>>())
+                        as u64
+                    + state
+                        .events
+                        .tool_indices
+                        .keys()
+                        .map(|k| (k.capacity() + 32) as u64)
+                        .sum::<u64>()
                     + crate::history_navigation::weight(&state.timeline);
             }
             project(state, true)
@@ -1080,7 +1117,7 @@ fn scan_grok_last_message_at(
     path: &Path,
     native: bool,
 ) -> Result<Option<String>> {
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Read};
     let meta = fs::symlink_metadata(path)?;
     ensure!(
         meta.is_file() && !meta.file_type().is_symlink(),
@@ -1095,28 +1132,220 @@ fn scan_grok_last_message_at(
     }
     let mut reader = BufReader::new(options.open(path)?);
     let mut line = Vec::new();
-    let mut offset = 0u64;
-    let mut state = GrokReader::default();
+    let mut last_message_at: Option<String> = None;
+    if native {
+        loop {
+            line.clear();
+            if reader.read_until(b'\n', &mut line)? == 0 {
+                break;
+            }
+            let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+                continue;
+            };
+            if value.get("synthetic_reason").and_then(Value::as_str) == Some("system_reminder") {
+                continue;
+            }
+            match value.get("type").and_then(Value::as_str).unwrap_or("") {
+                "user" => {
+                    let raw_content = value.get("content").cloned().unwrap_or(Value::Null);
+                    let parts = match raw_content {
+                        Value::String(text) => serde_json::json!([{"type": "text", "text": text}]),
+                        Value::Array(arr) => Value::Array(arr),
+                        other => Value::Array(vec![other]),
+                    };
+                    let msg = crate::user_message::parse_user_message("grok:ts", &parts);
+                    if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+                        last_message_at = value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                }
+                "assistant" => {
+                    let has_text = match value.get("content") {
+                        Some(Value::String(t)) => !t.trim().is_empty(),
+                        Some(Value::Array(parts)) => parts.iter().any(|p| {
+                            p.get("type")
+                                .and_then(Value::as_str)
+                                .is_none_or(|k| k == "text")
+                                && p.get("text")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|t| !t.trim().is_empty())
+                        }),
+                        _ => false,
+                    };
+                    if has_text {
+                        last_message_at = value
+                            .get("timestamp")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Ok(last_message_at);
+    }
+
+    let mut seen_user_updates: HashSet<String> = HashSet::new();
+    let mut user_parts: Vec<Value> = Vec::new();
+    let mut user_native_key: Option<String> = None;
+    let mut last_event_was_user = false;
+    let mut has_events = false;
+    let mut first_event_is_user = false;
     loop {
         line.clear();
-        let read_bytes = reader.read_until(b'\n', &mut line)?;
-        if read_bytes == 0 {
+        if reader.read_until(b'\n', &mut line)? == 0 {
             break;
         }
-        let start = offset;
-        offset += read_bytes as u64;
-        if let Ok(value) = serde_json::from_slice::<Value>(&line) {
-            if native {
-                state.push_native(value, start);
-            } else {
-                state.push(value, start);
+        let Ok(value) = serde_json::from_slice::<Value>(&line) else {
+            continue;
+        };
+        let params = value.get("params").unwrap_or(&value);
+        let update = params.get("update").unwrap_or(params);
+        let kind = update
+            .get("sessionUpdate")
+            .and_then(Value::as_str)
+            .unwrap_or("event");
+        if kind != "user_message_chunk" {
+            user_parts.clear();
+        }
+        if !matches!(
+            kind,
+            "user_message_chunk"
+                | "agent_message_chunk"
+                | "thinking"
+                | "tool_call"
+                | "tool_call_update"
+                | "plan"
+        ) {
+            continue;
+        }
+        if kind == "user_message_chunk" {
+            if let Some(id) = update.get("updateId").and_then(Value::as_str) {
+                if !seen_user_updates.insert(id.to_owned()) {
+                    continue;
+                }
+            }
+            if !has_events {
+                first_event_is_user = true;
+                has_events = true;
+            }
+            let native_key = update
+                .get("messageId")
+                .or_else(|| update.get("promptId"))
+                .or_else(|| params.get("prompt_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let same =
+                !user_parts.is_empty() && last_event_was_user && user_native_key == native_key;
+            if !same {
+                user_parts.clear();
+                user_native_key = native_key;
+            }
+            let fallback_text = update
+                .get("content")
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str)
+                .or_else(|| update.get("text").and_then(Value::as_str))
+                .or_else(|| update.get("title").and_then(Value::as_str))
+                .unwrap_or_default();
+            let content = update
+                .get("content")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({"type": "text", "text": fallback_text}));
+            match content {
+                Value::Array(parts) => user_parts.extend(parts),
+                other => user_parts.push(other),
+            }
+            let msg = crate::user_message::parse_user_message(
+                "grok:ts",
+                &Value::Array(user_parts.clone()),
+            );
+            if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+                last_message_at = value
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+            }
+            last_event_was_user = true;
+            continue;
+        }
+        has_events = true;
+        last_event_was_user = false;
+        if matches!(kind, "agent_message_chunk" | "thinking") {
+            let text = update
+                .get("content")
+                .and_then(|v| v.get("text"))
+                .and_then(Value::as_str)
+                .or_else(|| update.get("text").and_then(Value::as_str))
+                .or_else(|| update.get("title").and_then(Value::as_str));
+            if text.is_some_and(|t| !t.trim().is_empty()) {
+                last_message_at = value
+                    .get("timestamp")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
             }
         }
     }
-    if !native && !state.events.events.is_empty() {
-        state.prepend_missing_initial_native_users(directory);
+    if has_events && !first_event_is_user && last_message_at.is_none() {
+        let chat_path = directory.join("chat_history.jsonl");
+        if let Ok(cmeta) = fs::symlink_metadata(&chat_path) {
+            if cmeta.is_file() && !cmeta.file_type().is_symlink() {
+                let mut c_opts = OpenOptions::new();
+                c_opts.read(true);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::OpenOptionsExt;
+                    c_opts.custom_flags(libc::O_NOFOLLOW);
+                }
+                if let Ok(cfile) = c_opts.open(&chat_path) {
+                    let mut creader = BufReader::new(cfile.take(1024 * 1024));
+                    for _ in 0..64 {
+                        line.clear();
+                        let Ok(n) = creader.read_until(b'\n', &mut line) else {
+                            break;
+                        };
+                        if n == 0 {
+                            break;
+                        }
+                        let Ok(val) = serde_json::from_slice::<Value>(&line) else {
+                            continue;
+                        };
+                        if val.get("synthetic_reason").and_then(Value::as_str)
+                            == Some("system_reminder")
+                        {
+                            continue;
+                        }
+                        match val.get("type").and_then(Value::as_str).unwrap_or("") {
+                            "system" => continue,
+                            "user" => {
+                                let raw_c = val.get("content").cloned().unwrap_or(Value::Null);
+                                let parts = match raw_c {
+                                    Value::String(t) => {
+                                        serde_json::json!([{"type": "text", "text": t}])
+                                    }
+                                    Value::Array(arr) => Value::Array(arr),
+                                    other => Value::Array(vec![other]),
+                                };
+                                let msg =
+                                    crate::user_message::parse_user_message("grok:init", &parts);
+                                if !msg.text.trim().is_empty() || !msg.attachments.is_empty() {
+                                    last_message_at = val
+                                        .get("timestamp")
+                                        .and_then(Value::as_str)
+                                        .map(str::to_owned);
+                                    break;
+                                }
+                            }
+                            _ => break,
+                        }
+                    }
+                }
+            }
+        }
     }
-    Ok(state.last_message_at)
+    Ok(last_message_at)
 }
 
 fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
@@ -1127,9 +1356,29 @@ fn read_summary(path: &Path) -> Result<Option<GrokSessionSummary>> {
     Ok(summary)
 }
 
-static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Value> =
+struct CachedGrokSummary {
+    id: String,
+    title: String,
+    cwd: String,
+    workspace_root: Option<String>,
+    message_count: usize,
+    last_message: Option<String>,
+}
+
+impl CachedGrokSummary {
+    fn weight(&self) -> u64 {
+        (192 + self.id.capacity()
+            + self.title.capacity()
+            + self.cwd.capacity()
+            + self.workspace_root.as_ref().map_or(0, String::capacity)
+            + self.last_message.as_ref().map_or(0, String::capacity)) as u64
+    }
+}
+
+static GROK_SUMMARY_CACHE: crate::read_cache::ReadCache<Option<Arc<CachedGrokSummary>>> =
     crate::read_cache::ReadCache::new(crate::resource_limits::GROK_ACTIVITY_CACHE_BYTES)
-        .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES);
+        .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
+        .with_native_metadata();
 
 fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
     let file = path.join("summary.json");
@@ -1144,66 +1393,81 @@ fn read_summary_metadata(path: &Path) -> Result<Option<GrokSessionSummary>> {
         fs::metadata(&file)?.len() <= 1024 * 1024,
         "Grok summary exceeds size limit"
     );
-    let value = GROK_SUMMARY_CACHE.read(
-        &file,
-        |_, size| size.saturating_mul(4),
-        || Ok(serde_json::from_str::<Value>(&fs::read_to_string(&file)?)?),
-    )?;
-    let id = path
+    let expected_id = path
         .file_name()
         .and_then(|v| v.to_str())
         .unwrap_or_default()
         .to_string();
-    let info = value.get("info").unwrap_or(&Value::Null);
-    ensure!(
-        info.get("id").and_then(Value::as_str) == Some(&id),
-        "Grok session identity mismatch"
-    );
-    let relationship = value
-        .get("session_relationship")
-        .or_else(|| info.get("session_relationship"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
-    if relationship.is_some_and(|rel| rel != "primary") {
+    let cached = GROK_SUMMARY_CACHE.read(
+        &file,
+        |entry, _| entry.as_ref().map_or(64, |item| item.weight()),
+        || {
+            let value: Value = serde_json::from_str(&fs::read_to_string(&file)?)?;
+            let info = value.get("info").unwrap_or(&Value::Null);
+            ensure!(
+                info.get("id").and_then(Value::as_str) == Some(&expected_id),
+                "Grok session identity mismatch"
+            );
+            let relationship = value
+                .get("session_relationship")
+                .or_else(|| info.get("session_relationship"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if relationship.is_some_and(|rel| rel != "primary") {
+                return Ok(None);
+            }
+            let cwd = info
+                .get("cwd")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            ensure!(
+                Path::new(&cwd).is_absolute(),
+                "Grok session has no absolute workspace"
+            );
+            let title = value
+                .get("generated_title")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("last_turn_summary").and_then(Value::as_str))
+                .unwrap_or("未命名会话")
+                .trim()
+                .to_string();
+            let message_count = value
+                .get("num_messages")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let workspace_root = crate::workspace_root::resolve_workspace_root(&cwd);
+            let last_message = value
+                .get("last_turn_summary")
+                .and_then(Value::as_str)
+                .map(ToString::to_string);
+            Ok(Some(Arc::new(CachedGrokSummary {
+                id: expected_id.clone(),
+                title,
+                cwd,
+                workspace_root,
+                message_count,
+                last_message,
+            })))
+        },
+    )?;
+    let Some(cached) = cached else {
         return Ok(None);
-    }
-    let cwd = info
-        .get("cwd")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    ensure!(
-        Path::new(&cwd).is_absolute(),
-        "Grok session has no absolute workspace"
-    );
-    let title = value
-        .get("generated_title")
-        .and_then(Value::as_str)
-        .or_else(|| value.get("last_turn_summary").and_then(Value::as_str))
-        .unwrap_or("未命名会话")
-        .trim()
-        .to_string();
-    let message_count = value
-        .get("num_messages")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
-    let workspace_root = crate::workspace_root::resolve_workspace_root(&cwd);
+    };
+    ensure!(cached.id == expected_id, "Grok session identity mismatch");
     Ok(Some(GrokSessionSummary {
         deletion_eligibility: None,
         storage_size: None,
         handoff_path: Some(grok_handoff_path(path)),
-        id,
-        title,
-        cwd,
-        workspace_root,
+        id: cached.id.clone(),
+        title: cached.title.clone(),
+        cwd: cached.cwd.clone(),
+        workspace_root: cached.workspace_root.clone(),
         path: path.to_path_buf(),
         updated_at: None,
-        message_count,
-        last_message: value
-            .get("last_turn_summary")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        message_count: cached.message_count,
+        last_message: cached.last_message.clone(),
         status: "recent".to_string(),
     }))
 }
@@ -1580,35 +1844,54 @@ pub(crate) fn execute_grok_delete_batch(
     paths: &GrokPaths,
     requests: Vec<GrokDeleteRequest>,
 ) -> Vec<Result<GrokDeleteResult>> {
-    let workspaces = session_workspaces(paths);
+    execute_grok_delete_batch_with_mode(paths, requests, false)
+}
+
+pub(crate) fn execute_grok_empty_cleanup_batch(
+    paths: &GrokPaths,
+    requests: Vec<GrokDeleteRequest>,
+) -> Vec<Result<GrokDeleteResult>> {
+    execute_grok_delete_batch_with_mode(paths, requests, true)
+}
+
+fn execute_grok_delete_batch_with_mode(
+    paths: &GrokPaths,
+    requests: Vec<GrokDeleteRequest>,
+    enforce_empty_cleanup_guards: bool,
+) -> Vec<Result<GrokDeleteResult>> {
+    let batch_workspaces = (!enforce_empty_cleanup_guards).then(|| session_workspaces(paths));
     let sessions_root = paths.sessions();
     let mut pending: Vec<_> = requests
         .into_iter()
         .map(|request| -> Result<_> {
             ensure!(request.confirmed, "Grok deletion requires confirmation");
             crate::session_delete::valid_id(&request.id)?;
-            let workspaces = workspaces.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
-            let located = locate_in_workspaces(workspaces, &request.id)?;
+            let located = if let Some(workspaces) = &batch_workspaces {
+                let workspaces = workspaces.as_ref().map_err(|e| anyhow::anyhow!("{e:#}"))?;
+                locate_in_workspaces(workspaces, &request.id)?
+            } else {
+                locate_sessions(paths, &request.id)?
+            };
             for path in &located {
                 ensure!(
                     crate::session_delete::within(&sessions_root, path),
                     "Grok 会话路径越界，拒绝删除"
                 );
             }
-            let expected_fp = request.fingerprint.trim();
-            if !expected_fp.is_empty() {
+            if enforce_empty_cleanup_guards {
+                let expected_fp = request.fingerprint.trim();
+                ensure!(!expected_fp.is_empty(), "Grok 清理缺少预览指纹，请重新预览");
+                ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");
                 let snapshot = activity::Snapshot::capture(paths);
                 for path in &located {
                     let summary = read_summary(path)
-                        .ok()
-                        .flatten()
+                        .context("Grok 会话正在运行或占用状态无法确认，请退出后重试")?
                         .unwrap_or_else(|| fallback_summary(path));
                     ensure!(
                         snapshot.ownership(&summary) == activity::Ownership::Inactive,
                         "Grok 会话正在运行或占用状态无法确认，请退出后重试"
                     );
                 }
-                ensure!(!located.is_empty(), "Grok 会话目录已不存在，请重新预览");
                 ensure!(
                     grok_fingerprint(&located)? == expected_fp,
                     "Grok 会话已变化，请重新预览"

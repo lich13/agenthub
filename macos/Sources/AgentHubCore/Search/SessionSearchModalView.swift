@@ -85,11 +85,11 @@ public struct SessionSearchModalView: View {
     @State private var results: [SessionSearchResult] = []
     @State private var nextCursor: String?
     @State private var truncated: Bool = false
-    @State private var warnings: [String] = []
     @State private var loading: Bool = false
     @State private var errorText: String?
     @State private var selectedIndex: Int = 0
     @State private var searchTask: Task<Void, Never>?
+    @State private var searchEpoch: UInt64 = 0
 
     public init(
         store: RuntimeConnectionStore,
@@ -108,11 +108,15 @@ public struct SessionSearchModalView: View {
 
     public var body: some View {
         GeometryReader { geo in
+            let topInset = min(64, max(16, floor(geo.size.height * 0.06)))
+            let bottomMargin: CGFloat = 20
             let modalWidth = min(680, max(300, geo.size.width - 32))
-            let modalHeight = min(720, max(280, geo.size.height - 80))
+            let modalHeight = min(680, max(240, geo.size.height - topInset - bottomMargin))
 
             ZStack(alignment: .top) {
                 ModalScopePresenceView()
+                    .frame(width: 0, height: 0)
+                SearchModalEscapeMonitorView(onEscape: onClose)
                     .frame(width: 0, height: 0)
 
                 Color.black.opacity(0.46)
@@ -186,53 +190,61 @@ public struct SessionSearchModalView: View {
                             .foregroundStyle(palette.errFg.color)
                     }
 
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 6) {
-                            if !loading && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && results.isEmpty && errorText == nil {
-                                Text("未找到匹配内容")
-                                    .font(DesignFonts.body(13))
-                                    .foregroundStyle(palette.textMuted.color)
-                                    .padding(.vertical, 20)
-                            }
-                            ForEach(Array(results.enumerated()), id: \.element.resultId) { index, item in
-                                let active = (index == selectedIndex)
-                                Button {
-                                    selectedIndex = index
-                                    onSelectResult(item)
-                                    onClose()
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            StatusChip(SessionSearchMatchKind.label(for: item.matchKind), tone: .info)
-                                            Text(item.title)
-                                                .font(DesignFonts.body(13, weight: .semibold))
-                                                .foregroundStyle(palette.textPrimary.color)
-                                                .lineLimit(1)
-                                            Spacer()
+                    ScrollViewReader { scrollProxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 6) {
+                                if !loading && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && results.isEmpty && errorText == nil {
+                                    Text("未找到匹配内容")
+                                        .font(DesignFonts.body(13))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .padding(.vertical, 20)
+                                }
+                                ForEach(Array(results.enumerated()), id: \.element.resultId) { index, item in
+                                    let active = (index == selectedIndex)
+                                    Button {
+                                        selectedIndex = index
+                                        onSelectResult(item)
+                                        onClose()
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            HStack(spacing: 6) {
+                                                StatusChip(SessionSearchMatchKind.label(for: item.matchKind), tone: .info)
+                                                Text(item.title)
+                                                    .font(DesignFonts.body(13, weight: .semibold))
+                                                    .foregroundStyle(palette.textPrimary.color)
+                                                    .lineLimit(1)
+                                                Spacer()
+                                            }
+                                            Text(item.snippet)
+                                                .font(DesignFonts.body(12))
+                                                .foregroundStyle(palette.textSecondary.color)
+                                                .lineLimit(2)
                                         }
-                                        Text(item.snippet)
-                                            .font(DesignFonts.body(12))
-                                            .foregroundStyle(palette.textSecondary.color)
-                                            .lineLimit(2)
+                                        .padding(10)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                .fill((active ? palette.selected : palette.surface).color)
+                                        )
+                                        .contentShape(Rectangle())
                                     }
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .fill((active ? palette.selected : palette.surface).color)
-                                    )
-                                    .contentShape(Rectangle())
+                                    .buttonStyle(PlainHitButtonStyle())
+                                    .id(item.resultId)
                                 }
-                                .buttonStyle(PlainHitButtonStyle())
-                            }
 
-                            if nextCursor != nil && results.count < 200 {
-                                Button("加载更多") {
-                                    loadMore()
+                                if nextCursor != nil && results.count < 200 {
+                                    Button("加载更多") {
+                                        loadMore()
+                                    }
+                                    .buttonStyle(SecondaryButtonStyle())
+                                    .disabled(loading)
+                                    .padding(.top, 4)
                                 }
-                                .buttonStyle(SecondaryButtonStyle())
-                                .disabled(loading)
-                                .padding(.top, 4)
+                            }
+                        }
+                        .onChange(of: selectedIndex) { nextIdx in
+                            if results.indices.contains(nextIdx) {
+                                scrollProxy.scrollTo(results[nextIdx].resultId)
                             }
                         }
                     }
@@ -276,12 +288,36 @@ public struct SessionSearchModalView: View {
                         .strokeBorder(palette.borderStrong.color, lineWidth: 1)
                 )
                 .shadow(color: Color.black.opacity(0.24), radius: 16, x: 0, y: 6)
-                .padding(.top, max(24, geo.size.height * 0.12))
+                .padding(.top, topInset)
+            }
+        }
+        .onExitCommand {
+            if !AppInputCompositionGuard.responderHasMarkedText() {
+                onClose()
+            }
+        }
+        .task(id: store.machineScope) {
+            searchTask?.cancel()
+            searchEpoch &+= 1
+            results = []
+            nextCursor = nil
+            truncated = false
+            errorText = nil
+            selectedIndex = 0
+            loading = false
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                scheduleDebouncedSearch()
             }
         }
         .onChange(of: query) { _ in scheduleDebouncedSearch() }
         .onChange(of: scope) { _ in scheduleDebouncedSearch() }
-        .onChange(of: currentSessionKey) { _ in scheduleDebouncedSearch() }
+        .onChange(of: currentSessionKey) { nextKey in
+            if nextKey == nil && scope == .thread {
+                scope = .provider
+            } else if scope == .thread {
+                scheduleDebouncedSearch()
+            }
+        }
         .onDisappear { searchTask?.cancel() }
     }
 
@@ -312,19 +348,20 @@ public struct SessionSearchModalView: View {
 
     private func scheduleDebouncedSearch() {
         searchTask?.cancel()
+        searchEpoch &+= 1
+        let epoch = searchEpoch
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         results = []
         nextCursor = nil
         truncated = false
-        warnings = []
         errorText = nil
         selectedIndex = 0
         loading = !trimmed.isEmpty
         guard !trimmed.isEmpty else { return }
         searchTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 200_000_000)
-            guard !Task.isCancelled else { return }
-            await runSearch(trimmed: trimmed, cursor: nil, append: false)
+            guard !Task.isCancelled, searchEpoch == epoch else { return }
+            await runSearch(trimmed: trimmed, cursor: nil, append: false, epoch: epoch)
         }
     }
 
@@ -332,14 +369,21 @@ public struct SessionSearchModalView: View {
         guard !loading, let cursor = nextCursor, results.count < 200 else { return }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        searchEpoch &+= 1
+        let epoch = searchEpoch
         loading = true
-        searchTask = Task { await runSearch(trimmed: trimmed, cursor: cursor, append: true) }
+        searchTask = Task { await runSearch(trimmed: trimmed, cursor: cursor, append: true, epoch: epoch) }
     }
 
-    private func runSearch(trimmed: String, cursor: String?, append: Bool) async {
+    private func runSearch(trimmed: String, cursor: String?, append: Bool, epoch: UInt64) async {
+        let rev = store.revision
         loading = true
         errorText = nil
-        defer { if !Task.isCancelled { loading = false } }
+        defer {
+            if searchEpoch == epoch {
+                loading = false
+            }
+        }
         struct ReqWrap: Encodable { let request: SessionSearchRequest }
         let req = SessionSearchRequest(
             provider: provider,
@@ -350,8 +394,13 @@ public struct SessionSearchModalView: View {
             limit: min(50, max(1, 200 - (append ? results.count : 0)))
         )
         do {
-            let resp: SessionSearchResponse = try await store.rpc("sessions.search", args: ReqWrap(request: req))
-            guard !Task.isCancelled, req.query == query.trimmingCharacters(in: .whitespacesAndNewlines), req.scope == scope else { return }
+            let resp: SessionSearchResponse = try await store.rpc("sessions.search", args: ReqWrap(request: req), at: rev)
+            guard !Task.isCancelled,
+                  searchEpoch == epoch,
+                  store.revision == rev,
+                  req.query == query.trimmingCharacters(in: .whitespacesAndNewlines),
+                  req.scope == scope
+            else { return }
             if append {
                 let existingIds = Set(results.map(\.resultId))
                 let added = resp.results.filter { !existingIds.contains($0.resultId) }
@@ -362,10 +411,70 @@ public struct SessionSearchModalView: View {
             }
             nextCursor = results.count >= 200 ? nil : resp.nextCursor
             truncated = resp.truncated || results.count >= 200
-            warnings = resp.warnings ?? []
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, searchEpoch == epoch, store.revision == rev else { return }
             errorText = error.localizedDescription
+        }
+    }
+}
+
+private struct SearchModalEscapeMonitorView: NSViewRepresentable {
+    var onEscape: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onEscape: onEscape)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(anchor: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.onEscape = onEscape
+        context.coordinator.attach(anchor: nsView)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
+    @MainActor
+    final class Coordinator {
+        weak var anchorView: NSView?
+        var onEscape: () -> Void
+        private var monitor: Any?
+
+        init(onEscape: @escaping () -> Void) {
+            self.onEscape = onEscape
+        }
+
+        func attach(anchor: NSView) {
+            anchorView = anchor
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self,
+                      let win = self.anchorView?.window,
+                      event.window === win
+                else { return event }
+                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if event.keyCode == 53 && flags.isEmpty {
+                    guard !AppInputCompositionGuard.responderHasMarkedText(win.firstResponder) else {
+                        return event
+                    }
+                    self.onEscape()
+                    return nil
+                }
+                return event
+            }
+        }
+
+        func detach() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+                self.monitor = nil
+            }
         }
     }
 }

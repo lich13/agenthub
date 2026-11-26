@@ -98,6 +98,8 @@ impl Assessment {
 pub(super) struct Snapshot {
     processes: Option<Vec<Process>>,
     registrations: Vec<Registration>,
+    registrations_by_pid: HashMap<u32, Vec<usize>>,
+    domain: Option<String>,
 }
 
 #[cfg(test)]
@@ -111,26 +113,31 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
     let date = "Tue Oct 20 08:00:00 2026";
     invalidate_readonly_snapshot_cache();
     TEST_SNAPSHOT.with(|slot| {
-        *slot.borrow_mut() = id.map(|id| Snapshot {
-            processes: Some(vec![Process {
-                pid: 42,
-                started_ms: started_ms(date),
-                cwd: Some(cwd.into()),
-                args: vec!["claude".into()],
-                files: HashSet::new(),
-                role: ProcessRole::Session,
-            }]),
-            registrations: vec![Registration {
-                pid: 42,
-                session_id: id.into(),
-                cwd: cwd.into(),
-                proc_start: date.into(),
-                started_at: started_ms(date).unwrap() + 500,
-                pid_domain: pid_domain().unwrap(),
-                status: status.map(str::to_owned),
-                status_updated_at: None,
-                updated_at: None,
-            }],
+        *slot.borrow_mut() = id.map(|id| {
+            let domain = pid_domain();
+            Snapshot {
+                processes: Some(vec![Process {
+                    pid: 42,
+                    started_ms: started_ms(date),
+                    cwd: Some(cwd.into()),
+                    args: vec!["claude".into()],
+                    files: HashSet::new(),
+                    role: ProcessRole::Session,
+                }]),
+                registrations: vec![Registration {
+                    pid: 42,
+                    session_id: id.into(),
+                    cwd: cwd.into(),
+                    proc_start: date.into(),
+                    started_at: started_ms(date).unwrap() + 500,
+                    pid_domain: domain.clone().unwrap(),
+                    status: status.map(str::to_owned),
+                    status_updated_at: None,
+                    updated_at: None,
+                }],
+                registrations_by_pid: HashMap::from([(42, vec![0])]),
+                domain,
+            }
         })
     });
 }
@@ -279,9 +286,18 @@ impl Snapshot {
             }
             Ok(())
         })();
+        Self::new(collect(), registrations)
+    }
+    fn new(processes: Option<Vec<Process>>, registrations: Vec<Registration>) -> Self {
+        let mut registrations_by_pid: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (idx, reg) in registrations.iter().enumerate() {
+            registrations_by_pid.entry(reg.pid).or_default().push(idx);
+        }
         Self {
-            processes: collect(),
+            processes,
             registrations,
+            registrations_by_pid,
+            domain: pid_domain(),
         }
     }
     #[cfg(test)]
@@ -310,7 +326,7 @@ impl Snapshot {
             return result;
         };
         let target_id = |id: &str| id == parsed.id || children.contains(id);
-        let domain = pid_domain();
+        let domain = &self.domain;
         let domain_matches = |r: &Registration| {
             if r.pid_domain.is_empty() {
                 domain.is_some()
@@ -349,9 +365,12 @@ impl Snapshot {
                 continue;
             }
             let registrations: Vec<_> = self
-                .registrations
-                .iter()
-                .filter(|r| r.pid == p.pid && domain_matches(r))
+                .registrations_by_pid
+                .get(&p.pid)
+                .into_iter()
+                .flatten()
+                .map(|&idx| &self.registrations[idx])
+                .filter(|r| domain_matches(r))
                 .collect();
             let proc_start_verified = |r: &Registration| {
                 if r.proc_start.is_empty() {
@@ -733,6 +752,13 @@ fn collect() -> Option<Vec<Process>> {
             }
         }
     }
+    #[cfg(unix)]
+    processes.retain(|p| {
+        p.cwd.is_some()
+            || !p.files.is_empty()
+            || unsafe { libc::kill(p.pid as libc::pid_t, 0) == 0 }
+            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    });
     Some(processes)
 }
 
@@ -743,15 +769,42 @@ fn parse_process_table(output: &[u8]) -> Option<Vec<Process>> {
         if fields.len() < 9 || fields[1].contains('Z') {
             continue;
         }
+        let Ok(pid) = fields[0].parse::<u32>() else {
+            continue;
+        };
+        let Some(started) =
+            jiff::civil::DateTime::strptime("%a %b %e %T %Y", fields[2..7].join(" "))
+                .ok()
+                .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
+                .map(|ts| ts.as_millisecond())
+        else {
+            continue;
+        };
         let mut args = fields[8..]
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<_>>();
-        let named = native(fields[7], &args);
-        if !named && !version_named(fields[7]) {
+        let direct_named = native(fields[7], &args);
+        let mut candidate = version_named(fields[7]);
+        // Process names (`ucomm`/`comm`) or wrapper directories can contain spaces (e.g.
+        // `/opt/Application Support/@anthropic-ai/claude-code/cli.js`).
+        // Space-split nominations are only candidates and must pass kernel `process_identity`.
+        if !direct_named && !candidate && fields.len() > 9 {
+            for split_end in 8..fields.len().min(12) {
+                let joined_comm = fields[7..=split_end].join(" ");
+                let rem_args: Vec<String> = fields[split_end + 1..]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect();
+                if native(&joined_comm, &rem_args) || version_named(fields[split_end]) {
+                    candidate = true;
+                    break;
+                }
+            }
+        }
+        if !direct_named && !candidate {
             continue;
         }
-        let pid = fields[0].parse().ok()?;
         let role = if let Some((executable, native_args)) = process_identity(pid) {
             let role = process_role(&executable, &native_args);
             args = native_args;
@@ -759,18 +812,14 @@ fn parse_process_table(output: &[u8]) -> Option<Vec<Process>> {
         } else {
             ProcessRole::Unknown
         };
-        // A native installation runs as its version file, so the process name
-        // is that version. Only the kernel-verified executable admits it.
-        if !named && role == ProcessRole::Unknown {
+        // A native installation runs as its version file (or space-split wrapper path),
+        // so only the kernel-verified executable admits non-direct candidates.
+        if !direct_named && role == ProcessRole::Unknown {
             continue;
         }
-        let started = jiff::civil::DateTime::strptime("%a %b %e %T %Y", fields[2..7].join(" "))
-            .ok()
-            .and_then(|dt| jiff::tz::Offset::UTC.to_timestamp(dt).ok())
-            .map(|ts| ts.as_millisecond());
         processes.push(Process {
             pid,
-            started_ms: started,
+            started_ms: Some(started),
             cwd: None,
             args,
             files: HashSet::new(),
@@ -826,20 +875,10 @@ mod tests {
         let file = paths.projects.join("fixture/empty.jsonl");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "").unwrap();
-        TEST_SNAPSHOT.with(|slot| {
-            *slot.borrow_mut() = Some(Snapshot {
-                processes: Some(vec![]),
-                registrations: vec![],
-            })
-        });
+        TEST_SNAPSHOT.with(|slot| *slot.borrow_mut() = Some(Snapshot::new(Some(vec![]), vec![])));
         let candidates = super::super::mutations::find_empty_inactive_sessions(&paths).unwrap();
         assert_eq!(candidates.len(), 1);
-        TEST_SNAPSHOT.with(|slot| {
-            *slot.borrow_mut() = Some(Snapshot {
-                processes: None,
-                registrations: vec![],
-            })
-        });
+        TEST_SNAPSHOT.with(|slot| *slot.borrow_mut() = Some(Snapshot::new(None, vec![])));
         let (summary, fingerprint, _) = &candidates[0];
         let result = super::super::mutations::execute_claude_delete(
             &paths,
@@ -987,8 +1026,8 @@ mod tests {
             files: HashSet::new(),
             role: ProcessRole::PtyHost,
         };
-        let mut snapshot = Snapshot {
-            processes: Some(vec![
+        let mut snapshot = Snapshot::new(
+            Some(vec![
                 host.clone(),
                 Process {
                     pid: 41,
@@ -996,8 +1035,8 @@ mod tests {
                     ..host.clone()
                 },
             ]),
-            registrations: vec![],
-        };
+            vec![],
+        );
         assert_eq!(snapshot.ownership(&parsed, file), Ownership::Inactive);
         snapshot.processes.as_mut().unwrap().push(Process {
             pid: 42,
@@ -1112,10 +1151,7 @@ mod tests {
             status_updated_at: None,
             updated_at: None,
         };
-        let snapshot = Snapshot {
-            processes: Some(vec![process.clone()]),
-            registrations: vec![registration.clone()],
-        };
+        let snapshot = Snapshot::new(Some(vec![process.clone()]), vec![registration.clone()]);
         assert_eq!(
             snapshot.ownership(&parsed, Path::new("/fixture/history.jsonl")),
             Ownership::Inactive
@@ -1140,10 +1176,7 @@ mod tests {
                 ..registration
             },
         ] {
-            let snapshot = Snapshot {
-                processes: Some(vec![process.clone()]),
-                registrations: vec![registration],
-            };
+            let snapshot = Snapshot::new(Some(vec![process.clone()]), vec![registration]);
             assert_eq!(
                 snapshot.ownership(&parsed, Path::new("/fixture/history.jsonl")),
                 Ownership::Unknown
@@ -1166,10 +1199,7 @@ mod tests {
             files: HashSet::new(),
             role: ProcessRole::Session,
         };
-        let mut snapshot = Snapshot {
-            processes: Some(vec![process]),
-            registrations: vec![],
-        };
+        let mut snapshot = Snapshot::new(Some(vec![process]), vec![]);
         assert_eq!(
             snapshot.ownership(&parsed, Path::new("/fixture/history.jsonl")),
             Ownership::Inactive
@@ -1190,11 +1220,7 @@ mod tests {
         };
         let file = Path::new("/tmp/example.jsonl");
         assert_eq!(
-            Snapshot {
-                registrations: vec![],
-                processes: Some(vec![])
-            }
-            .ownership(&p, file),
+            Snapshot::new(Some(vec![]), vec![]).ownership(&p, file),
             Ownership::Inactive
         );
         let owner = Process {
@@ -1206,41 +1232,33 @@ mod tests {
             role: ProcessRole::Session,
         };
         assert_eq!(
-            Snapshot {
-                registrations: vec![],
-                processes: Some(vec![owner.clone()])
-            }
-            .ownership(&p, file),
+            Snapshot::new(Some(vec![owner.clone()]), vec![]).ownership(&p, file),
             Ownership::Open
         );
         assert_eq!(
-            Snapshot {
-                registrations: vec![],
-                processes: Some(vec![Process {
+            Snapshot::new(
+                Some(vec![Process {
                     started_ms: Some(3000),
                     ..owner.clone()
-                }])
-            }
+                }]),
+                vec![],
+            )
             .ownership(&p, file),
             Ownership::Unknown
         );
         assert_eq!(
-            Snapshot {
-                registrations: vec![],
-                processes: Some(vec![Process {
+            Snapshot::new(
+                Some(vec![Process {
                     args: vec!["claude".into()],
                     ..owner
-                }])
-            }
+                }]),
+                vec![],
+            )
             .ownership(&p, file),
             Ownership::Unknown
         );
         assert_eq!(
-            Snapshot {
-                registrations: vec![],
-                processes: None
-            }
-            .ownership(&p, file),
+            Snapshot::new(None, vec![]).ownership(&p, file),
             Ownership::Unknown
         );
         assert!(!native("zsh", &["claude".into()]));

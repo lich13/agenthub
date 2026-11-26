@@ -58,6 +58,39 @@ impl PanelDb {
             None
         };
         let mut conn = self.conn.lock().expect("db mutex");
+        {
+            let config = load_config()?;
+            if !provider.enabled(&config) {
+                let row: Option<(bool, usize, usize)> = conn
+                    .prepare_cached(
+                        "SELECT enabled, stream_count, error_count FROM native_probe_providers WHERE provider=?1",
+                    )?
+                    .query_row([provider.as_str()], |r| {
+                        Ok((
+                            r.get::<_, bool>(0)?,
+                            r.get::<_, i64>(1)?.max(0) as usize,
+                            r.get::<_, i64>(2)?.max(0) as usize,
+                        ))
+                    })
+                    .optional()?;
+                let provider_synced = match row {
+                    Some((false, sc, ec)) => {
+                        !full_scan || (sc == scan.streams.len() && ec == scan.errors)
+                    }
+                    _ => false,
+                };
+                if provider_synced {
+                    let has_residual: bool = conn
+                        .prepare_cached(
+                            "SELECT EXISTS(SELECT 1 FROM native_probe_deliveries WHERE provider=?1 AND (status='pending' OR ciphertext IS NOT NULL))",
+                        )?
+                        .query_row([provider.as_str()], |r| r.get(0))?;
+                    if !has_residual {
+                        return Ok(0);
+                    }
+                }
+            }
+        }
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let config = &load_config()?;
         let enabled = provider.enabled(config);
@@ -90,6 +123,7 @@ impl PanelDb {
         }
         if !enabled {
             tx.execute("UPDATE native_probe_deliveries SET status='skipped',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE provider=?1 AND status='pending'", params![provider.as_str(),Self::now()])?;
+            tx.execute("UPDATE native_probe_deliveries SET ciphertext=NULL,nonce=NULL WHERE provider=?1 AND status!='delivering' AND ciphertext IS NOT NULL", [provider.as_str()])?;
             tx.commit()?;
             return Ok(0);
         }
@@ -149,13 +183,13 @@ impl PanelDb {
         };
         let mut queued = 0;
         if !scan.streams.is_empty() {
-            let mut read_cursor = tx.prepare("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2")?;
-            let mut insert_delivery = tx.prepare("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)")?;
-            let mut encrypt_delivery = tx.prepare(
+            let mut read_cursor = tx.prepare_cached("SELECT identity,cursor FROM native_probe_streams WHERE provider=?1 AND session_key=?2")?;
+            let mut insert_delivery = tx.prepare_cached("INSERT OR IGNORE INTO native_probe_deliveries(event_key,provider,event_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?5)")?;
+            let mut encrypt_delivery = tx.prepare_cached(
                 "UPDATE native_probe_deliveries SET ciphertext=?2,nonce=?3 WHERE event_key=?1",
             )?;
-            let mut touch_delivery = tx.prepare("UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped','unknown') AND updated_at<?3")?;
-            let mut write_cursor = tx.prepare("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at WHERE identity!=excluded.identity OR cursor!=excluded.cursor")?;
+            let mut touch_delivery = tx.prepare_cached("UPDATE native_probe_deliveries SET updated_at=?2 WHERE event_key=?1 AND status IN ('sent','failed','skipped','unknown') AND updated_at<?3")?;
+            let mut write_cursor = tx.prepare_cached("INSERT INTO native_probe_streams(provider,session_key,identity,cursor,updated_at) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(provider,session_key) DO UPDATE SET identity=excluded.identity,cursor=excluded.cursor,updated_at=excluded.updated_at WHERE identity!=excluded.identity OR cursor!=excluded.cursor")?;
             for stream in &scan.streams {
                 let old = read_cursor
                     .query_row(params![provider.as_str(), stream.session_key], |r| {
@@ -511,11 +545,30 @@ impl PanelDb {
     }
     pub fn maintain_notification_history_if_due(&self, retention_days: u32) -> Result<()> {
         let now = Self::now();
-        let last = self
-            .get_setting_with_updated_at("probe_event_retention_last_run")?
-            .map(|(_, at)| at)
-            .unwrap_or(0);
+        let state = self.get_setting_with_updated_at("probe_event_retention_last_run")?;
+        let last = state.as_ref().map(|(_, at)| *at).unwrap_or(0);
+        let checkpoint_retry = state.as_ref().is_some_and(|(v, _)| v == "checkpoint_busy");
         if now.saturating_sub(last) < 3600 {
+            if checkpoint_retry {
+                let busy = {
+                    let conn = self.conn.lock().expect("db mutex");
+                    conn.execute(
+                        "UPDATE settings SET value='ok' WHERE key='probe_event_retention_last_run' AND value='checkpoint_busy'",
+                        [],
+                    )?;
+                    conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap_or(1)
+                };
+                if busy != 0 {
+                    let conn = self.conn.lock().expect("db mutex");
+                    conn.execute(
+                        "UPDATE settings SET value='checkpoint_busy' WHERE key='probe_event_retention_last_run'",
+                        [],
+                    )?;
+                }
+            }
             return Ok(());
         }
         self.maintain_probe_events(retention_days, 100_000)?;
@@ -537,9 +590,17 @@ impl PanelDb {
             )?;
         }
         self.set_setting("probe_event_retention_last_run", "ok")?;
-        let conn = self.conn.lock().expect("db mutex");
-        let _ = conn.execute_batch("PRAGMA optimize;");
-        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()));
+        let busy = {
+            let conn = self.conn.lock().expect("db mutex");
+            let _ = conn.execute_batch("PRAGMA optimize;");
+            conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                r.get::<_, i64>(0)
+            })
+            .unwrap_or(1)
+        };
+        if busy != 0 {
+            self.set_setting("probe_event_retention_last_run", "checkpoint_busy")?;
+        }
         Ok(())
     }
 
@@ -684,7 +745,7 @@ mod tests {
                     &db,
                     ProbeSettingsSavePlan {
                         config_patch: serde_json::from_value(patch).unwrap(),
-                        secret_writes: vec![],
+                        secret_write: None,
                     },
                 )
                 .unwrap();
@@ -842,7 +903,7 @@ mod tests {
                             json!({"probe":{"notifications":{"enabled":enabled}}}),
                         )
                         .unwrap(),
-                        secret_writes: vec![],
+                        secret_write: None,
                     },
                 )
                 .unwrap()

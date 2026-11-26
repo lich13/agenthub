@@ -708,10 +708,7 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
     func testPorted_claudeApi() throws {
         try runAsyncParityCheck {
             let p1 = ClaudeDeletePreview(sessionKey: "sk-1", id: "id-1", title: "T", path: "/tmp/a.jsonl", paths: ["/tmp/a.jsonl", "/tmp/a/sub"], fingerprint: "fp", fileCount: 2, bytes: 2048, warnings: ["warn-1"])
-            XCTAssertEqual(p1.resolvedPaths, ["/tmp/a.jsonl", "/tmp/a/sub"])
-
-            let p2 = ClaudeDeletePreview(sessionKey: "sk-2", id: "id-2", title: "T2", path: "/tmp/single.jsonl", paths: nil, fingerprint: "fp2", fileCount: 1, bytes: 512)
-            XCTAssertEqual(p2.resolvedPaths, ["/tmp/single.jsonl"])
+            XCTAssertEqual(p1.paths, ["/tmp/a.jsonl", "/tmp/a/sub"])
 
             let diagData = Data("""
             {"ownership":"verified","reasonCodes":[],"processes":[{"pid":42,"role":"cli","registrationVerified":true,"mismatchedFields":[]}]}
@@ -932,7 +929,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 rowMenuActions: rowActions,
                 batchMenuActions: [],
                 onRowClick: { _ in },
-                onToggleCheckbox: {},
                 onRename: { _ in }
             ).environment(\.agentHubPalette, palette)
 
@@ -952,7 +948,6 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
                 rowMenuActions: rowActions,
                 batchMenuActions: ProviderMenuMatrixBuilder.buildBatchContextMenuActions(selectedCount: 2, operations: [.archive, .delete], busy: false, onPrepare: { _ in }, onClear: {}),
                 onRowClick: { _ in },
-                onToggleCheckbox: {},
                 onRename: { _ in }
             ).environment(\.agentHubPalette, palette)
 
@@ -1233,5 +1228,138 @@ final class ReaderSubagentAndSessionParitySuiteTests: XCTestCase {
             XCTAssertEqual(allBlockedOutcome.result?.items.count, 0)
             XCTAssertTrue(allBlockedOutcome.confirmedSucceededKeys.isEmpty)
         }
+    }
+
+    @MainActor
+    func testThreadMessageStoreResetTimelineEpochAndGfmNonCachingOnParseFailure() async throws {
+        // 1. ThreadMessageStore clears prepended blocks when changes[].reset == true or totalBlocks shrinks
+        let ts = ThreadMessageStore()
+        let summary = ThreadSummary(id: "th-reset", title: "Reset", status: "Recent", messageCount: 4)
+        let initialDetail = ThreadDetail(
+            summary: summary,
+            blocks: [
+                MessageBlock(id: "b3", role: "user", kind: "userMessage", text: "Q3"),
+                MessageBlock(id: "b4", role: "assistant", kind: "agentMessage", text: "A4"),
+            ],
+            history: HistoryMetadata(epoch: "e1", revision: "r1"),
+            totalBlocks: 4,
+            hasMoreBlocks: true,
+            beforeCursor: "c-b3"
+        )
+        _ = ts.applyDetail(initialDetail)
+        _ = ts.applyBlockPage(
+            ThreadBlockPage(
+                threadId: "th-reset",
+                blocks: [
+                    MessageBlock(id: "b1", role: "user", kind: "userMessage", text: "Q1"),
+                    MessageBlock(id: "b2", role: "assistant", kind: "agentMessage", text: "A2"),
+                ],
+                totalBlocks: 4,
+                hasMoreBlocks: false,
+                beforeCursor: nil,
+                history: HistoryMetadata(epoch: "e1", revision: "r1")
+            ),
+            expectedCursor: "c-b3"
+        )
+        XCTAssertEqual(ts.slot(for: "th-reset").blocks.map(\.id), ["b1", "b2", "b3", "b4"])
+
+        // Shrinking totalBlocks (e.g. truncated/rewritten rollout with same epoch) drops stale older blocks
+        let shrunkDetail = ThreadDetail(
+            summary: summary,
+            blocks: [MessageBlock(id: "b-new", role: "user", kind: "userMessage", text: "Fresh")],
+            history: HistoryMetadata(epoch: "e1", revision: "r2"),
+            totalBlocks: 1,
+            hasMoreBlocks: false,
+            beforeCursor: nil
+        )
+        let afterShrink = ts.applyDetail(shrunkDetail)
+        XCTAssertEqual(afterShrink.blocks.map { $0.id }, ["b-new"])
+
+        // Stalled older cursor halts hasMoreBlocks to prevent infinite 200pt scroll loops
+        _ = ts.applyDetail(initialDetail)
+        let stalledSlot = ts.applyBlockPage(
+            ThreadBlockPage(
+                threadId: "th-reset",
+                blocks: [MessageBlock(id: "b3", role: "user", kind: "userMessage", text: "Q3")],
+                totalBlocks: 4,
+                hasMoreBlocks: true,
+                beforeCursor: "c-b3",
+                history: HistoryMetadata(epoch: "e1", revision: "r1")
+            ),
+            expectedCursor: "c-b3"
+        )
+        XCTAssertFalse(stalledSlot.hasMoreBlocks)
+        XCTAssertNil(stalledSlot.beforeCursor)
+
+        // 2. TimelineWindowController halts stalled older cursor & discards mismatched epoch pages
+        let tw = TimelineWindowController<MessageBlock>(idOf: \.id)
+        await tw.jump(
+            to: "b3",
+            in: "local:codex:th-reset",
+            currentHistory: HistoryMetadata(epoch: "e1", revision: "r1"),
+            matchesTarget: { $0.id == $1 }
+        ) { _ in
+            TimelineWindowPage(
+                items: [MessageBlock(id: "b3", role: "user", kind: "userMessage", text: "Q3")],
+                before: "w:b3",
+                after: "n:b3",
+                hasMore: true,
+                history: HistoryMetadata(epoch: "e1", revision: "r1"),
+                firstNativeId: "b3",
+                lastNativeId: "b3",
+                nativeIds: ["b3"]
+            )
+        }
+        XCTAssertTrue(tw.hasMoreOlder)
+        await tw.loadOlder { _ in
+            TimelineWindowPage(
+                items: [],
+                before: "w:b3",
+                after: nil,
+                hasMore: true,
+                history: HistoryMetadata(epoch: "e1", revision: "r1"),
+                firstNativeId: nil,
+                lastNativeId: nil,
+                nativeIds: []
+            )
+        }
+        XCTAssertFalse(tw.hasMoreOlder, "Empty older window page must clear hasMoreOlder")
+
+        // 3. GfmLayoutCache falls back to plain paragraph on empty FFI Data() without poisoning cache
+        final class ToggleMarkdownTransport: RuntimeTransport, @unchecked Sendable {
+            var failParse = true
+            func invokeRawJSON(command: String, argsJSON: String) async throws -> Data { Data("{}".utf8) }
+            func parseGfmMarkdown(_ markdown: String) -> Data {
+                if failParse { return Data() }
+                return NativeMarkdown.parse(markdown)
+            }
+            func shutdown() {}
+        }
+        let toggleTransport = ToggleMarkdownTransport()
+        let cache = GfmLayoutCache()
+        let mdSample = "## Uncached Fallback Heading \(UUID().uuidString)\n\nWith `inline` code."
+        let fallbackSegs = cache.getOrRender(
+            markdown: mdSample,
+            foldInstructions: false,
+            scheme: .light,
+            workspace: .codex,
+            transport: toggleTransport
+        )
+        XCTAssertEqual(fallbackSegs.count, 1, "Failed parse must still render visible plain paragraph fallback")
+        XCTAssertEqual(cache.totalBytes, 0, "Failed parse fallback must not be cached")
+        toggleTransport.failParse = false
+        let recoveredSegs = cache.getOrRender(
+            markdown: mdSample,
+            foldInstructions: false,
+            scheme: .light,
+            workspace: .codex,
+            transport: toggleTransport
+        )
+        if case let .prose(attr) = recoveredSegs[0] {
+            XCTAssertFalse(attr.string.contains("## "), "Recovered parse must not be poisoned by cached fallback")
+        } else {
+            XCTFail("Expected prose segment after recovery")
+        }
+        XCTAssertGreaterThan(cache.totalBytes, 0, "Recovered parse must populate GfmLayoutCache")
     }
 }

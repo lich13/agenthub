@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn handle_grok_list(state: AppState, args: Value) -> ApiResponse {
     let query = if args.is_null() {
-        GrokListQuery::default()
+        QueryLimitRequest::default()
     } else {
         rpc_payload(&args)?
     };
@@ -29,7 +29,7 @@ pub(super) async fn handle_grok_delete_execute(state: AppState, args: Value) -> 
 
 pub(super) async fn handle_claude_list(state: AppState, args: Value) -> ApiResponse {
     let query = if args.is_null() {
-        ClaudeListQuery::default()
+        QueryLimitRequest::default()
     } else {
         rpc_payload(&args)?
     };

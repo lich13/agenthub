@@ -621,7 +621,9 @@ fn execute_grok_empty_scope(
         .collect();
     for (target, result) in targets
         .iter()
-        .zip(crate::grok::execute_grok_delete_batch(paths, requests))
+        .zip(crate::grok::execute_grok_empty_cleanup_batch(
+            paths, requests,
+        ))
     {
         record_target_result(
             scope,

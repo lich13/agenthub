@@ -214,6 +214,13 @@ impl<S: Default> JsonlCache<S> {
         self
     }
 
+    pub fn has_entry(&self, path: &Path, scope: &str) -> bool {
+        self.entries
+            .lock()
+            .ok()
+            .is_some_and(|entries| entries.iter().any(|e| e.path == path && e.scope == scope))
+    }
+
     /// The per-file lock coalesces readers. No global lock is held during I/O,
     /// parsing, or page construction, and only the requested result is copied.
     pub fn read<R>(
@@ -601,10 +608,69 @@ impl<S: Default> JsonlCache<S> {
         });
         let evicted = before - entries.len();
         if evicted > 0 {
+            if entries.capacity() > entries.len().saturating_mul(4).max(16) {
+                entries.shrink_to_fit();
+            }
+            if let Ok(mut lineage) = self.lineage.lock() {
+                if lineage.capacity() > lineage.len().saturating_mul(4).max(32) {
+                    lineage.shrink_to_fit();
+                }
+            }
             crate::note_cache_eviction();
         }
         evicted
     }
+}
+
+pub(crate) fn scan_once(
+    path: &Path,
+    max_bytes: u64,
+    max_line_bytes: Option<u64>,
+    accept_complete_tail: bool,
+    mut consume: impl FnMut(&[u8], usize, u64) -> Result<()>,
+) -> Result<(u64, bool)> {
+    let before = Stamp::read(path).context("无法读取会话文件")?;
+    ensure!(before.size <= max_bytes, "Claude 会话超出 512 MiB 读取上限");
+    let file = open(path)?;
+    ensure!(
+        Stamp::from_metadata(&file.metadata()?)? == before,
+        "会话文件身份已变化，请重试"
+    );
+    let mut input = BufReader::with_capacity(64 * 1024, file.take(before.size));
+    let mut line = Vec::new();
+    let mut offset = 0u64;
+    let mut lines = 0usize;
+    let mut partial = false;
+    loop {
+        line.clear();
+        let length = if let Some(limit) = max_line_bytes {
+            let n = input
+                .by_ref()
+                .take(limit + 1)
+                .read_until(b'\n', &mut line)?;
+            ensure!(n as u64 <= limit, "会话记录超出读取上限");
+            n
+        } else {
+            input.read_until(b'\n', &mut line)?
+        };
+        if length == 0 {
+            break;
+        }
+        if !(line.ends_with(b"\n")
+            || accept_complete_tail && serde_json::from_slice::<serde_json::Value>(&line).is_ok())
+        {
+            partial = true;
+            break;
+        }
+        lines += 1;
+        consume(&line, lines, offset)?;
+        offset += length as u64;
+    }
+    ensure!(
+        Stamp::read(path).ok().as_ref() == Some(&before),
+        "会话正在写入，请重试"
+    );
+    Ok((offset, partial))
 }
 
 /// A bounded revision journal lets clients refresh only historical rows which

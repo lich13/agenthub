@@ -6,8 +6,23 @@ import SwiftUI
 final class ProviderWorkspaceStore: ObservableObject {
     let store: RuntimeConnectionStore
     let workspace: WorkspaceId
+    let tableCoordinator: ConversationTableCoordinator
     weak var coordinatorRef: ConversationTableCoordinator?
     private var observations = Set<AnyCancellable>()
+    private var listFetchSeq: UInt64 = 0
+    private var sidebarCacheRevision: UInt64 = 0
+
+    private struct SidebarDerivedCache {
+        var revision: UInt64 = .max
+        var filteredActiveItems: [UnifiedSessionSummaryItem] = []
+        var filteredArchivedItems: [UnifiedSessionSummaryItem] = []
+        var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
+        var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
+        var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] = []
+        var visualOrderedActiveKeys: [String] = []
+        var visualOrderedArchivedKeys: [String] = []
+    }
+    private var sidebarCache = SidebarDerivedCache()
 
     let sourceRevision: UInt64
     let threadStore = ThreadMessageStore()
@@ -22,27 +37,45 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var query: String = ""
     @Published var groupingMode: ProjectWorkspaceGroupingMode = .flat {
         didSet {
-            if oldValue != groupingMode { syncPartitionedSelection() }
+            if oldValue != groupingMode {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
     @Published var workspaceFilter: ProjectWorkspaceFilter = .all {
         didSet {
-            if oldValue != workspaceFilter { syncPartitionedSelection() }
+            if oldValue != workspaceFilter {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
     @Published var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
-            if oldValue != collapsedWorkspaceKeys { syncPartitionedSelection() }
+            if oldValue != collapsedWorkspaceKeys {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
     @Published var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
-            if oldValue != collapsedArchivedWorkspaceKeys { syncPartitionedSelection() }
+            if oldValue != collapsedArchivedWorkspaceKeys {
+                sidebarCacheRevision &+= 1
+                syncPartitionedSelection()
+            }
         }
     }
-    @Published var activeItems: [UnifiedSessionSummaryItem] = []
-    @Published var archivedItems: [UnifiedSessionSummaryItem] = []
-    @Published var archivedOpen: Bool = false
+    @Published var activeItems: [UnifiedSessionSummaryItem] = [] {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
+    @Published var archivedItems: [UnifiedSessionSummaryItem] = [] {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
+    @Published var archivedOpen: Bool = false {
+        didSet { sidebarCacheRevision &+= 1 }
+    }
     @Published var selectedKey: String?
     @Published var externalSeedItem: UnifiedSessionSummaryItem?
     var skipSidebarListFetch: Bool = false
@@ -99,14 +132,67 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var errorMessage: String?
 
     init(store: RuntimeConnectionStore, workspace: WorkspaceId) {
+        let coord = ConversationTableCoordinator(store: store)
         self.store = store
         self.workspace = workspace
+        self.tableCoordinator = coord
+        self.coordinatorRef = coord
         self.sourceRevision = store.revision
-        for changes in [threadStore.objectWillChange, claudeHistoryStore.objectWillChange,
-                        grokHistoryStore.objectWillChange, providerHistoryStore.objectWillChange,
-                        timelineWindow.objectWillChange, motionObserver.objectWillChange] {
-            changes.sink { [weak self] in self?.objectWillChange.send() }.store(in: &observations)
+        timelineWindow.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &observations)
+
+        coord.onLoadOlderRequested = { [weak self] in
+            guard let self,
+                  self.loadOlderError == nil,
+                  !self.timelineWindow.isActive || self.timelineWindow.error == nil
+            else { return }
+            Task { await self.loadOlderPageIfNeeded() }
         }
+        coord.onShowAllHistory = { [weak self] in
+            guard let self else { return }
+            self.showAllHistory = true
+            if let item = self.selectedItem, self.provider == .codex {
+                self.threadStore.setHistoryExpanded(threadId: item.sessionKey, expanded: true)
+            }
+        }
+        coord.onCopyFeedback = { [weak self] text in
+            self?.feedbackMessage = text
+        }
+    }
+
+    private func refreshedSidebarCache() -> SidebarDerivedCache {
+        if sidebarCache.revision == sidebarCacheRevision {
+            return sidebarCache
+        }
+        let supportsGrp = supportsWorkspaceGrouping
+        let filtActive = ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter, enabled: supportsGrp)
+        let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsGrp)
+        let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
+        let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
+        let availGrps = ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        let orderedActive: [String] = if supportsGrp && groupingMode == .byWorkspace {
+            ProjectWorkspaceEngine.visualOrderedKeys(groups: activeGrps, collapsedKeys: collapsedWorkspaceKeys)
+        } else {
+            filtActive.map(\.sessionKey)
+        }
+        let orderedArch: [String] = if supportsGrp && groupingMode == .byWorkspace {
+            ProjectWorkspaceEngine.visualOrderedKeys(groups: archGrps, collapsedKeys: collapsedArchivedWorkspaceKeys)
+        } else {
+            filtArch.map(\.sessionKey)
+        }
+        let built = SidebarDerivedCache(
+            revision: sidebarCacheRevision,
+            filteredActiveItems: filtActive,
+            filteredArchivedItems: filtArch,
+            activeWorkspaceGroups: activeGrps,
+            archivedWorkspaceGroups: archGrps,
+            availableWorkspaceGroups: availGrps,
+            visualOrderedActiveKeys: orderedActive,
+            visualOrderedArchivedKeys: orderedArch
+        )
+        sidebarCache = built
+        return built
     }
 
     var supportsWorkspaceGrouping: Bool {
@@ -145,47 +231,36 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     var filteredActiveItems: [UnifiedSessionSummaryItem] {
-        ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter, enabled: supportsWorkspaceGrouping)
+        refreshedSidebarCache().filteredActiveItems
     }
 
     var filteredArchivedItems: [UnifiedSessionSummaryItem] {
-        ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsWorkspaceGrouping)
+        refreshedSidebarCache().filteredArchivedItems
     }
 
     var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: filteredActiveItems)
+        refreshedSidebarCache().activeWorkspaceGroups
     }
 
     var archivedWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: filteredArchivedItems)
+        refreshedSidebarCache().archivedWorkspaceGroups
     }
 
     var availableWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>] {
-        ProjectWorkspaceEngine.buildGroups(items: activeItems + (archivedOpen ? archivedItems : []))
+        refreshedSidebarCache().availableWorkspaceGroups
     }
 
     var visualOrderedActiveKeys: [String] {
-        if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
-            return ProjectWorkspaceEngine.visualOrderedKeys(
-                groups: activeWorkspaceGroups,
-                collapsedKeys: collapsedWorkspaceKeys
-            )
-        }
-        return filteredActiveItems.map(\.sessionKey)
+        refreshedSidebarCache().visualOrderedActiveKeys
     }
 
     var visualOrderedArchivedKeys: [String] {
-        if supportsWorkspaceGrouping && groupingMode == .byWorkspace {
-            return ProjectWorkspaceEngine.visualOrderedKeys(
-                groups: archivedWorkspaceGroups,
-                collapsedKeys: collapsedArchivedWorkspaceKeys
-            )
-        }
-        return filteredArchivedItems.map(\.sessionKey)
+        refreshedSidebarCache().visualOrderedArchivedKeys
     }
 
     var allVisibleItems: [UnifiedSessionSummaryItem] {
-        filteredActiveItems + (archivedOpen ? filteredArchivedItems : [])
+        let cached = refreshedSidebarCache()
+        return cached.filteredActiveItems + (archivedOpen ? cached.filteredArchivedItems : [])
     }
 
     var isRemoteProviderUnsupported: Bool {
@@ -199,19 +274,22 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     var selectedItem: UnifiedSessionSummaryItem? {
         if let key = selectedKey {
-            if let match = (activeItems + archivedItems).first(where: { $0.sessionKey == key }) {
+            if let match = activeItems.first(where: { $0.sessionKey == key })
+                ?? archivedItems.first(where: { $0.sessionKey == key })
+            {
                 return match
             }
             if let searchSelection, searchSelection.sessionKey == key { return searchSelection }
             if let externalSeedItem, externalSeedItem.sessionKey == key { return externalSeedItem }
         }
+        let filtActive = filteredActiveItems
         if supportsWorkspaceGrouping && workspaceFilter != .all {
-            return filteredActiveItems.first
+            return filtActive.first
         }
         if !query.isEmpty {
-            return filteredActiveItems.first
+            return filtActive.first
         }
-        return filteredActiveItems.first ?? activeItems.first
+        return filtActive.first ?? activeItems.first
     }
 
     var displayedRows: [ConversationRowItem] {
@@ -220,13 +298,18 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     func syncPartitionedSelection() {
         let baseScope = "\(store.revision):\(workspace.rawValue):\(query):\(workspaceFilter.scopeToken)"
-        partitionedSelection.sync(
+        let cached = refreshedSidebarCache()
+        var next = partitionedSelection
+        next.sync(
             activeScope: "\(baseScope)#active",
-            activeVisible: visualOrderedActiveKeys,
+            activeVisible: cached.visualOrderedActiveKeys,
             archivedScope: "\(baseScope)#archived",
-            archivedVisible: visualOrderedArchivedKeys,
+            archivedVisible: cached.visualOrderedArchivedKeys,
             archivedOpen: supportsArchive && archivedOpen
         )
+        if next != partitionedSelection {
+            partitionedSelection = next
+        }
     }
 
     func selectAllVisible() {
@@ -255,20 +338,26 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func fetchSessionList() async {
+        listFetchSeq &+= 1
+        let fetchSeq = listFetchSeq
         let requestedQuery = query
         let requestedArchived = archivedOpen
         func isCurrent() -> Bool {
-            !Task.isCancelled && store.revision == sourceRevision && query == requestedQuery && archivedOpen == requestedArchived
+            !Task.isCancelled
+                && listFetchSeq == fetchSeq
+                && store.revision == sourceRevision
+                && query == requestedQuery
+                && archivedOpen == requestedArchived
         }
         guard isCurrent() else { return }
         do {
             switch provider {
             case .codex, .claudeCode, .grok, .antigravity, .dsh:
                 if isRemoteProviderUnsupported {
-                    activeItems = []
-                    archivedItems = []
+                    if !activeItems.isEmpty { activeItems = [] }
+                    if !archivedItems.isEmpty { archivedItems = [] }
                     syncPartitionedSelection()
-                    errorMessage = nil
+                    if errorMessage != nil { errorMessage = nil }
                     return
                 }
                 let active = try await Self.fetchProviderSummaries(
@@ -280,7 +369,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     threadStore: threadStore
                 )
                 guard isCurrent() else { return }
-                activeItems = active
+                if activeItems != active { activeItems = active }
                 if supportsArchive && archivedOpen {
                     let arch = try await Self.fetchProviderSummaries(
                         store: store,
@@ -291,11 +380,14 @@ final class ProviderWorkspaceStore: ObservableObject {
                         threadStore: threadStore
                     )
                     guard isCurrent() else { return }
-                    archivedItems = arch
+                    if archivedItems != arch { archivedItems = arch }
                 }
 
             case .grokbot:
-                guard store.target == .local else { activeItems = []; return }
+                guard store.target == .local else {
+                    if !activeItems.isEmpty { activeItems = [] }
+                    return
+                }
                 struct GBWrap: Encodable {
                     struct Inner: Encodable { let q: String?; let limit: Int }
                     let request: Inner
@@ -306,13 +398,15 @@ final class ProviderWorkspaceStore: ObservableObject {
                     localOnly: true
                 )
                 guard isCurrent() else { return }
-                activeItems = list.map(Self.mapGrokBotSummary)
+                let mapped = list.map(Self.mapGrokBotSummary)
+                if activeItems != mapped { activeItems = mapped }
             }
             syncPartitionedSelection()
-            errorMessage = nil
+            if errorMessage != nil { errorMessage = nil }
         } catch {
             guard isCurrent() else { return }
-            errorMessage = error.localizedDescription
+            let nextErr = error.localizedDescription
+            if errorMessage != nextErr { errorMessage = nextErr }
         }
     }
 
@@ -408,6 +502,10 @@ final class ProviderWorkspaceStore: ObservableObject {
         feedbackMessage = nil
         currentDetailHistory = nil
         headerInlineRename = false
+        claudeOwnershipKey = nil
+        claudeOwnershipData = nil
+        claudeOwnershipError = nil
+        claudeOwnershipLoading = false
         detailLoading = false
         loadingOlder = false
         hasMoreOlder = false
@@ -790,50 +888,41 @@ final class ProviderWorkspaceStore: ObservableObject {
         guard let item = selectedItem, isCurrentDetail(item, generation: generation) else { return false }
         coordinatorRef?.markUpwardNavigationIntent()
         if timelineWindow.isActive {
-            var anyLoaded = false
-            for step in 0 ..< 5 {
-                guard isCurrentDetail(item, generation: generation), timelineWindow.hasMoreOlder, !timelineWindow.busy, timelineWindow.error == nil else { break }
-                let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
-                let prevRowCount = coordinatorRef?.rows.count ?? 0
-                let pageLimit: Int? = step > 0 ? 500 : nil
-                await timelineWindow.loadOlder { cursor in
-                    try await readTimelineWindowPage(for: item, cursor: cursor, limitOverride: pageLimit)
+            return await ConversationTableCoordinator.runBoundedOlderContinuationLoop(
+                coordinator: { [weak self] in self?.coordinatorRef },
+                currentRowCount: { [weak self] in self?.coordinatorRef?.rows.count ?? 0 },
+                upgradeLimitOnSparseRows: false
+            ) { [weak self] limitOverride in
+                guard let self, self.isCurrentDetail(item, generation: generation),
+                      self.timelineWindow.hasMoreOlder, !self.timelineWindow.busy, self.timelineWindow.error == nil
+                else { return false }
+                await self.timelineWindow.loadOlder { cursor in
+                    try await self.readTimelineWindowPage(for: item, cursor: cursor, limitOverride: limitOverride)
                 }
-                guard isCurrentDetail(item, generation: generation) else { break }
-                if let winRows = timelineWindow.items {
-                    coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
+                guard self.isCurrentDetail(item, generation: generation) else { return false }
+                if let winRows = self.timelineWindow.items {
+                    self.coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
                 }
-                guard timelineWindow.error == nil else { break }
-                anyLoaded = true
-                guard let coord = coordinatorRef else { break }
-                let newHeight = coord.renderedContentHeight
-                let newCount = coord.rows.count
-                let needsMore = coord.isViewportUnderfilled
-                    || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
-                    || (newCount <= prevRowCount && newCount <= 2)
-                if !needsMore { break }
+                return self.timelineWindow.error == nil
             }
-            return anyLoaded
         }
 
         guard hasMoreOlder, !loadingOlder, loadOlderError == nil else { return false }
-        var anyLoaded = false
-        for step in 0 ..< 5 {
-            guard isCurrentDetail(item, generation: generation), hasMoreOlder, !loadingOlder, loadOlderError == nil else { break }
-            let prevHeight = coordinatorRef?.renderedContentHeight ?? 0
-            let prevRowCount = rows.count
-            let limitOverride: Int? = (step > 0 || prevRowCount <= 2) ? 500 : nil
-            let loaded = await loadSingleOlderPage(for: item, generation: generation, limitOverride: limitOverride, preferBottom: false)
-            if !loaded { break }
-            anyLoaded = true
-            guard let coord = coordinatorRef else { break }
-            let newHeight = coord.renderedContentHeight
-            let needsMore = coord.isViewportUnderfilled
-                || ((newHeight - prevHeight) < 48 && coord.isNearTopForContinuation)
-                || (rows.count <= prevRowCount && rows.count <= 2)
-            if !needsMore { break }
+        return await ConversationTableCoordinator.runBoundedOlderContinuationLoop(
+            coordinator: { [weak self] in self?.coordinatorRef },
+            currentRowCount: { [weak self] in self?.rows.count ?? 0 },
+            upgradeLimitOnSparseRows: true
+        ) { [weak self] limitOverride in
+            guard let self, self.isCurrentDetail(item, generation: generation),
+                  self.hasMoreOlder, !self.loadingOlder, self.loadOlderError == nil
+            else { return false }
+            return await self.loadSingleOlderPage(
+                for: item,
+                generation: generation,
+                limitOverride: limitOverride,
+                preferBottom: false
+            )
         }
-        return anyLoaded
     }
 
     private func loadSingleOlderPage(
@@ -919,7 +1008,11 @@ final class ProviderWorkspaceStore: ObservableObject {
                 )
                 hasMoreOlder = slot.hasMore
                 beforeCursor = slot.beforeCursor
-                let nextRows = ConversationRowBuilder.buildGrokRows(events: slot.events, fallbackTitle: item.title)
+                let nextRows = ConversationRowBuilder.buildGrokRows(
+                    events: slot.events,
+                    fallbackTitle: item.title,
+                    sessionRunning: selectedItem?.running ?? item.running
+                )
                 coordinatorRef?.updateRowsPreservingAnchor(nextRows, preferAutoFollowBottom: preferBottom)
                 rows = nextRows
                 return !page.events.isEmpty && slot.beforeCursor != cursor
@@ -972,6 +1065,12 @@ final class ProviderWorkspaceStore: ObservableObject {
             newTitle: newTitle,
             threadStore: threadStore
         )
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            var optimistic = selectedItem ?? item
+            optimistic.title = trimmed
+            syncSidebarItem(optimistic)
+        }
         if !skipSidebarListFetch {
             await fetchSessionList()
         }
@@ -988,8 +1087,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         switch provider {
         case .codex:
             struct RenameArgs: Encodable { let threadId: String; let name: String }
-            let ack: StartedJobResponse = try await store.rpc("threads.rename", args: RenameArgs(threadId: sessionKey, name: newTitle))
-            store.trackStartedJob(ack.jobId)
+            let _: StartedJobResponse = try await store.rpc("threads.rename", args: RenameArgs(threadId: sessionKey, name: newTitle))
             threadStore?.recordOptimisticTitle(threadId: sessionKey, title: newTitle)
         case .claudeCode:
             struct Args: Encodable { let sessionKey: String; let title: String }
@@ -1018,8 +1116,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         if provider == .codex {
             struct Args: Encodable { let threadId: String }
             let cmd = currentlyArchived ? "threads.restore" : "threads.archive"
-            let ack: StartedJobResponse = try await store.rpc(cmd, args: Args(threadId: sessionKey))
-            store.trackStartedJob(ack.jobId)
+            let _: StartedJobResponse = try await store.rpc(cmd, args: Args(threadId: sessionKey))
         } else {
             let prefix = provider == .antigravity ? "antigravity" : "dsh"
             let action = currentlyArchived ? "restore" : "archive"
@@ -1072,9 +1169,14 @@ final class ProviderWorkspaceStore: ObservableObject {
         guard store.target == .local, !claudeOwnershipLoading else { return }
         let capturedRevision = store.revision
         claudeOwnershipKey = sessionKey
+        claudeOwnershipData = nil
         claudeOwnershipError = nil
         claudeOwnershipLoading = true
-        defer { claudeOwnershipLoading = false }
+        defer {
+            if claudeOwnershipKey == sessionKey {
+                claudeOwnershipLoading = false
+            }
+        }
         struct Args: Encodable { let sessionKey: String }
         do {
             let diag: ClaudeOwnershipDiagnostics = try await store.rpc(
@@ -1082,10 +1184,16 @@ final class ProviderWorkspaceStore: ObservableObject {
                 args: Args(sessionKey: sessionKey),
                 localOnly: true
             )
-            guard store.revision == capturedRevision else { return }
+            guard store.revision == capturedRevision,
+                  claudeOwnershipKey == sessionKey,
+                  selectedItem?.sessionKey == sessionKey
+            else { return }
             claudeOwnershipData = diag
         } catch {
-            guard store.revision == capturedRevision else { return }
+            guard store.revision == capturedRevision,
+                  claudeOwnershipKey == sessionKey,
+                  selectedItem?.sessionKey == sessionKey
+            else { return }
             claudeOwnershipError = error.localizedDescription
         }
     }
@@ -1105,8 +1213,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         batchResult = nil
         batchPreview = nil
         defer { batchBusy = false }
-        struct Wrap: Encodable { let request: SessionBatchRequest }
-
         let targetStore = store
         do {
             let preview = try await SessionBatchChunkExecutor.preview(
@@ -1114,7 +1220,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                 operation: operation,
                 sessionKeys: keys
             ) { req in
-                try await targetStore.rpc("sessions.bulkPreview", args: Wrap(request: req), at: capturedRevision)
+                try await Self.sendBulkPreview(store: targetStore, request: req, at: capturedRevision)
             }
             guard store.revision == capturedRevision else { return }
             batchPreview = preview
@@ -1132,11 +1238,10 @@ final class ProviderWorkspaceStore: ObservableObject {
         batchBusy = true
         batchExecuteError = nil
         defer { batchBusy = false }
-        struct Wrap: Encodable { let request: SessionBatchExecuteRequest }
 
         let targetStore = store
         let outcome = await SessionBatchChunkExecutor.execute(preview: preview) { req in
-            try await targetStore.rpc("sessions.bulkExecute", args: Wrap(request: req), at: capturedRevision)
+            try await Self.sendBulkExecute(store: targetStore, request: req, at: capturedRevision)
         }
         guard store.revision == capturedRevision else { return }
 
@@ -1212,11 +1317,13 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     func loadNewerTimelineWindowPage() async {
-        guard let item = selectedItem, timelineWindow.isActive else { return }
+        let generation = detailSelectionGeneration
+        guard let item = selectedItem, timelineWindow.isActive, isCurrentDetail(item, generation: generation) else { return }
         await timelineWindow.loadNewer(latestTailId: latestNativeTailId ?? rows.last?.timelineId) { cursor in
             try await readTimelineWindowPage(for: item, cursor: cursor)
         }
-        if let winRows = timelineWindow.items {
+        guard isCurrentDetail(item, generation: generation) else { return }
+        if let winRows = timelineWindow.items, coordinatorRef?.rows != winRows {
             coordinatorRef?.updateRowsPreservingAnchor(winRows, preferAutoFollowBottom: false)
         }
     }
@@ -1296,7 +1403,11 @@ final class ProviderWorkspaceStore: ObservableObject {
             )
             let rawPage = TimelineWindowPage<GrokHistoryEvent>.from(grokDetail: page)
             return TimelineWindowPage<ConversationRowItem>(
-                items: ConversationRowBuilder.buildGrokRows(events: rawPage.items, fallbackTitle: item.title),
+                items: ConversationRowBuilder.buildGrokRows(
+                    events: rawPage.items,
+                    fallbackTitle: item.title,
+                    sessionRunning: selectedItem?.running ?? item.running
+                ),
                 before: rawPage.before,
                 after: rawPage.after,
                 hasMore: rawPage.hasMore,

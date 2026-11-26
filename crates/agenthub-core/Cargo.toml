@@ -23,7 +23,7 @@ hex.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
-tokio.workspace = true
+tokio = { version = "1.37", default-features = false, features = ["macros", "rt", "rt-multi-thread", "time", "process", "sync", "io-util"] }
 toml.workspace = true
 toml_edit.workspace = true
 url.workspace = true

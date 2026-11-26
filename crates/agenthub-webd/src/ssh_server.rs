@@ -72,6 +72,13 @@ async fn serve_at(state: AppState, path: &Path) -> Result<()> {
         });
     }
 }
+#[derive(serde::Serialize)]
+pub(crate) struct OutboundResponse {
+    pub id: u64,
+    pub result: Option<Box<serde_json::value::RawValue>>,
+    pub error: Option<String>,
+}
+
 async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
     let (mut reader, writer) = stream.into_split();
     let writer = Arc::new(Mutex::new(writer));
@@ -80,7 +87,7 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
         let writer = writer.clone();
         // An accepted operation finishes independently of the SSH connection.
         tokio::spawn(async move {
-            let response = dispatch(state, request).await;
+            let response = dispatch_raw(state, request).await;
             let mut writer = writer.lock().await;
             if ssh_rpc::write(&mut *writer, &response).await.is_err() {
                 use tokio::io::AsyncWriteExt;
@@ -90,18 +97,27 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
     }
     Ok(())
 }
-pub(crate) async fn dispatch(state: AppState, request: Request) -> Response {
+pub(crate) async fn dispatch_raw(state: AppState, request: Request) -> OutboundResponse {
     match crate::api::rpc_dispatch::rpc_dispatch(state, request.command, request.args).await {
-        Ok(value) => Response {
+        Ok(value) => OutboundResponse {
             id: request.id,
             result: Some(value),
             error: None,
         },
-        Err(error) => Response {
+        Err(error) => OutboundResponse {
             id: request.id,
             result: None,
             error: Some(agenthub_core::security::redact_output(&error.message)),
         },
+    }
+}
+#[cfg(test)]
+pub(crate) async fn dispatch(state: AppState, request: Request) -> Response {
+    let raw = dispatch_raw(state, request).await;
+    Response {
+        id: raw.id,
+        result: raw.result.and_then(|v| serde_json::from_str(v.get()).ok()),
+        error: raw.error,
     }
 }
 

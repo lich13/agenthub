@@ -1,9 +1,7 @@
 //! Background detection and final validation of native asynchronous questions.
-use super::{
-    build_probe_event, record_probe_event_with_bark, task_notification_suppression_reason,
-};
+use super::{build_probe_event, record_probe_event_with_bark};
 use agenthub_core::{
-    codex::{self, AsyncQuestionCall, ThreadSummary},
+    codex::{self, AsyncQuestionCall, CodexTaskIdentity, ThreadSummary},
     config::Config,
     db::PanelDb,
     probe::{ProbeBuiltEvent, ProbeEventInput},
@@ -163,7 +161,7 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
 pub async fn run_with_threads(
     load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
-    preloaded_sorted: Option<&[ThreadSummary]>,
+    preloaded_sorted: Option<&[(ThreadSummary, CodexTaskIdentity)]>,
 ) -> Result<()> {
     let config = &db.sync_notification_channels_from_config(load_config)?;
     let Some(since) = db
@@ -173,13 +171,13 @@ pub async fn run_with_threads(
         return Ok(());
     };
     let owned_threads;
-    let threads: &[ThreadSummary] = match preloaded_sorted {
+    let threads: &[(ThreadSummary, CodexTaskIdentity)] = match preloaded_sorted {
         Some(slice) => slice,
         None => {
             let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
             owned_threads = agenthub_core::read_tasks::spawn_blocking(move || {
-                let mut loaded = codex::notification_thread_headers(&paths)?;
-                loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                let mut loaded = codex::notification_thread_headers_with_identities(&paths)?;
+                loaded.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
                 Ok::<_, anyhow::Error>(loaded)
             })
             .await
@@ -193,30 +191,43 @@ pub async fn run_with_threads(
         .iter()
         .take(config.probe.recent_limit.clamp(1, 200))
         .enumerate()
-        .filter(|(_, thread)| {
-            task_notification_suppression_reason(config, Some(&thread.id)).is_none()
+        .filter(|(_, (_, identity))| identity.suppression_reason().is_none())
+        .filter_map(|(idx, (thread, _))| {
+            thread.rollout_path.as_ref().map(|path| (idx, path.clone()))
         })
-        .filter_map(|(idx, thread)| thread.rollout_path.as_ref().map(|path| (idx, path.clone())))
         .collect();
-    let scanned_calls = if candidates.is_empty() {
-        Vec::new()
+    let (scanned_calls, had_transient_err) = if candidates.is_empty() {
+        (Vec::new(), false)
     } else {
         agenthub_core::read_tasks::spawn_blocking(move || {
-            candidates
-                .into_iter()
-                .filter_map(|(idx, path)| {
-                    let pending =
-                        codex::rollout_pending_async_questions_since(&path, since).ok()?;
-                    (!pending.is_empty()).then_some((idx, pending))
-                })
-                .collect::<Vec<_>>()
+            let mut found = Vec::new();
+            let mut transient_err = false;
+            for (idx, path) in candidates {
+                match codex::rollout_pending_async_questions_since(&path, since) {
+                    Ok(pending) if !pending.is_empty() => found.push((idx, pending)),
+                    Ok(_) => {}
+                    Err(err) => {
+                        let is_not_found = err
+                            .downcast_ref::<std::io::Error>()
+                            .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+                            || matches!(
+                                std::fs::symlink_metadata(&path),
+                                Err(meta_err) if meta_err.kind() == std::io::ErrorKind::NotFound
+                            );
+                        if !is_not_found {
+                            transient_err = true;
+                        }
+                    }
+                }
+            }
+            (found, transient_err)
         })
         .await
         .map_err(|err| anyhow::anyhow!("async question scan join failed: {err}"))?
     };
     let mut active_markers = Vec::new();
     for (idx, calls) in scanned_calls {
-        let thread = &threads[idx];
+        let (thread, _) = &threads[idx];
         for call in &calls {
             let Some(event) = event_for(config, thread, call) else {
                 continue;
@@ -232,6 +243,13 @@ pub async fn run_with_threads(
                 now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
             }) {
                 record_probe_event_with_bark(load_config, db, event).await?;
+            }
+        }
+    }
+    if had_transient_err {
+        if let Ok(Some(prev)) = db.get_setting("probe_active_unresolved_markers:async_question") {
+            if let Ok(prev_keys) = serde_json::from_str::<Vec<String>>(&prev) {
+                active_markers.extend(prev_keys);
             }
         }
     }

@@ -52,20 +52,6 @@ public final class AgentHubWindowManager: NSObject, NSWindowDelegate {
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
-    public static func clampedInitialFrame(
-        desired: NSSize = NSSize(width: LayoutMetrics.windowDefaultWidth, height: LayoutMetrics.windowDefaultHeight),
-        visibleFrame: NSRect
-    ) -> NSRect {
-        guard visibleFrame.width > 0, visibleFrame.height > 0 else {
-            return NSRect(origin: .zero, size: desired)
-        }
-        let w = min(desired.width, visibleFrame.width)
-        let h = min(desired.height, visibleFrame.height)
-        let x = visibleFrame.minX + floor((visibleFrame.width - w) * 0.5)
-        let y = visibleFrame.minY + floor((visibleFrame.height - h) * 0.5)
-        return NSRect(x: x, y: y, width: w, height: h)
-    }
-
     public func alignOnceAndReveal(overrideVisibleFrame: NSRect? = nil) {
         if !alignedInitialFrame {
             alignedInitialFrame = true
@@ -121,7 +107,6 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
     private var bridge: FFIRuntimeBridge?
     private var store: RuntimeConnectionStore?
     private var windowManager: AgentHubWindowManager?
-    public var providerContentBuilder: (@MainActor (WorkspaceId, RuntimeConnectionStore) -> AnyView)?
 
     public override init() {
         super.init()
@@ -135,10 +120,7 @@ public final class AgentHubAppDelegate: NSObject, NSApplicationDelegate {
         do {
             let ffi = try FFIRuntimeBridge()
             let connStore = RuntimeConnectionStore(transport: ffi)
-            let rootView = AppShellView(
-                store: connStore,
-                providerContentBuilder: providerContentBuilder
-            )
+            let rootView = AppShellView(store: connStore)
             let manager = AgentHubWindowManager(store: connStore, rootView: rootView)
             self.bridge = ffi
             self.store = connStore

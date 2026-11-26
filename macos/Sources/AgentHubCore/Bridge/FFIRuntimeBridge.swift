@@ -228,7 +228,7 @@ enum NativeMarkdown {
     static func parse(_ markdown: String) -> Data {
         func invoke(_ ptr: UnsafePointer<CChar>?, _ count: Int) -> Data {
             guard let json = agenthub_ffi_parse_gfm_markdown(ptr, count) else {
-                return Data(#"{"blocks":[]}"#.utf8)
+                return Data()
             }
             defer { agenthub_ffi_string_free(json) }
             return Data(bytes: json, count: strlen(json))

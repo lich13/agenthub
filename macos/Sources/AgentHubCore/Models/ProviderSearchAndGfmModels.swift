@@ -157,13 +157,6 @@ public struct ClaudeDeletePreview: Codable, Equatable, Sendable {
         self.bytes = bytes
         self.warnings = warnings
     }
-
-    public var resolvedPaths: [String] {
-        if let paths, !paths.isEmpty {
-            return paths
-        }
-        return path.isEmpty ? [] : [path]
-    }
 }
 
 public struct ClaudeDeleteResult: Codable, Equatable, Sendable {

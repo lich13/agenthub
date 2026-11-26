@@ -356,14 +356,13 @@ public enum ConversationRowBuilder {
     public static func buildGrokRows(events: [GrokHistoryEvent], fallbackTitle: String, sessionRunning: Bool = false) -> [ConversationRowItem] {
         let grouped = ExecutionGroupingEngine.groupGrokEvents(events)
         let lastIndex = grouped.count - 1
-        let indexed = Array(grouped.enumerated())
-        let folded = ProcessGroupingEngine.foldProcessSequence(prefix: "grok", items: indexed.map(\.element)) { entry in
+        let folded = ProcessGroupingEngine.foldProcessSequenceIndexed(prefix: "grok", items: grouped) { idx, entry in
             switch entry {
             case let .group(group):
                 return .step(.execution(group: group, turnId: group.turnId))
             case let .item(ev, key, sourceIds):
                 if ev.kind == "agent_thought_chunk" || ev.kind == "thought_chunk" || ev.kind == "thinking" {
-                    let isTrailing = (grouped.last == entry) && lastIndex >= 0
+                    let isTrailing = (idx == lastIndex) && lastIndex >= 0
                     return ProcessGroupingEngine.thinkingStepFromText(
                         id: key,
                         sourceIds: sourceIds,
@@ -433,7 +432,8 @@ public enum ConversationRowBuilder {
             provider: providerLabel,
             recordedOnly: !sessionRunning
         )
-        let folded = ProcessGroupingEngine.foldProcessSequence(prefix: prefix, items: grouped) { entry in
+        let lastIndex = grouped.count - 1
+        let folded = ProcessGroupingEngine.foldProcessSequenceIndexed(prefix: prefix, items: grouped) { idx, entry in
             switch entry {
             case let .group(group):
                 return .step(.execution(group: group, turnId: group.turnId))
@@ -442,7 +442,7 @@ public enum ConversationRowBuilder {
                     return .passthrough
                 }
                 if ev.kind == "thinking" {
-                    let isTrailing = (grouped.last == entry)
+                    let isTrailing = (idx == lastIndex) && lastIndex >= 0
                     return ProcessGroupingEngine.thinkingStepFromText(
                         id: key,
                         sourceIds: sourceIds,
@@ -539,7 +539,9 @@ public enum ConversationRowBuilder {
 public final class AttachmentViewportManager {
     public static let viewportMargin: CGFloat = 240
     private var loadedImages: [String: NSImage] = [:]
-    private var inFlightKeys: Set<String> = []
+    private var inFlightTasks: [String: (token: UInt64, task: Task<Void, Never>)] = [:]
+    private var nextTaskToken: UInt64 = 0
+    private var activeScopeKey: String = ""
     public var onImageUpdated: ((String) -> Void)?
 
     public init() {}
@@ -549,11 +551,30 @@ public final class AttachmentViewportManager {
     }
 
     public var loadedCount: Int { loadedImages.count }
+    public var inFlightCount: Int { inFlightTasks.count }
+
+    public func resetScope(_ scopeKey: String) {
+        guard activeScopeKey != scopeKey else { return }
+        activeScopeKey = scopeKey
+        cancelAll()
+    }
+
+    public func cancelAll() {
+        for entry in inFlightTasks.values {
+            entry.task.cancel()
+        }
+        inFlightTasks.removeAll()
+        loadedImages.removeAll()
+    }
 
     public func evictOutside(visibleKeys: Set<String>) {
         let keysToDrop = loadedImages.keys.filter { !visibleKeys.contains($0) }
         for k in keysToDrop {
             loadedImages.removeValue(forKey: k)
+        }
+        let staleTasks = inFlightTasks.keys.filter { !visibleKeys.contains($0) }
+        for k in staleTasks {
+            inFlightTasks.removeValue(forKey: k)?.task.cancel()
         }
     }
 
@@ -562,23 +583,34 @@ public final class AttachmentViewportManager {
         request: SessionAttachmentRequest,
         store: RuntimeConnectionStore
     ) {
-        guard loadedImages[key] == nil, !inFlightKeys.contains(key) else { return }
-        inFlightKeys.insert(key)
+        guard loadedImages[key] == nil, inFlightTasks[key] == nil else { return }
         let sourceRevision = store.revision
-        Task { @MainActor [weak self] in
+        let boundScope = activeScopeKey
+        nextTaskToken &+= 1
+        let token = nextTaskToken
+        let task = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.inFlightKeys.remove(key) }
+            defer {
+                if self.inFlightTasks[key]?.token == token {
+                    self.inFlightTasks.removeValue(forKey: key)
+                }
+            }
             struct ReqWrap: Encodable { let request: SessionAttachmentRequest }
             guard let resp: SessionAttachmentResponse = try? await store.rpc(
                 "sessions.attachmentRead",
                 args: ReqWrap(request: request), at: sourceRevision
             ),
+                !Task.isCancelled,
+                self.inFlightTasks[key]?.token == token,
+                store.revision == sourceRevision,
+                self.activeScopeKey == boundScope,
                 let data = Data(base64Encoded: resp.base64),
                 let img = NSImage(data: data)
             else { return }
             self.loadedImages[key] = img
             self.onImageUpdated?(key)
         }
+        inFlightTasks[key] = (token, task)
     }
 
     public func injectForTesting(key: String, image: NSImage) {

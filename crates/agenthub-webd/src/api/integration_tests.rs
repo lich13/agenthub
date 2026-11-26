@@ -161,9 +161,10 @@ async fn request_rpc_json(
     command: &str,
     body: &str,
 ) -> serde_json::Value {
-    rpc_dispatch(state, command.into(), serde_json::from_str(body).unwrap())
+    let raw = rpc_dispatch(state, command.into(), serde_json::from_str(body).unwrap())
         .await
-        .unwrap()
+        .unwrap();
+    serde_json::from_str(raw.get()).unwrap()
 }
 async fn request_rpc_status(
     state: crate::state::AppState,

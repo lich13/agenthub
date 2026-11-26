@@ -115,16 +115,68 @@ impl PanelDb {
         &self,
         load_config: &(dyn Fn() -> Result<Config> + Sync),
     ) -> Result<Config> {
+        {
+            let conn = self.conn.lock().expect("db mutex");
+            let config = load_config()?;
+            if Self::notification_channels_already_synced(&conn, &config)? {
+                return Ok(config);
+            }
+        }
         self.with_transaction(|tx| {
             let config = load_config()?;
-            self.sync_notification_channels_in_transaction(
-                tx,
-                &config,
-                Timestamp::now().as_millisecond(),
-            )?;
-            Self::sync_question_baselines(tx, &config, Timestamp::now().as_millisecond())?;
+            let now = Timestamp::now().as_millisecond();
+            self.sync_notification_channels_in_transaction(tx, &config, now)?;
+            Self::sync_question_baselines(tx, &config, now)?;
             Ok(config)
         })
+    }
+
+    fn notification_channels_already_synced(
+        conn: &rusqlite::Connection,
+        config: &Config,
+    ) -> Result<bool> {
+        let questions_enabled = config.probe.codex_questions_enabled();
+        let mut settings_stmt = conn.prepare_cached("SELECT value FROM settings WHERE key=?1")?;
+        for key in ["probe_feedback_baseline", "probe_async_question_baseline"] {
+            let raw: Option<String> = settings_stmt.query_row([key], |r| r.get(0)).optional()?;
+            let ok = raw
+                .and_then(|v| serde_json::from_str::<Value>(&v).ok())
+                .is_some_and(|v| {
+                    v["enabled"].as_bool() == Some(questions_enabled) && v["since_ms"].is_i64()
+                });
+            if !ok {
+                return Ok(false);
+            }
+        }
+        let mut chan_stmt = conn
+            .prepare_cached("SELECT enabled FROM probe_notification_channels WHERE channel=?1")?;
+        for channel in NotificationChannel::ALL {
+            let enabled = channel.enabled(config);
+            let db_enabled: Option<bool> = chan_stmt
+                .query_row([channel.as_str()], |r| r.get(0))
+                .optional()?;
+            if db_enabled != Some(enabled) {
+                return Ok(false);
+            }
+            if !enabled || !config.probe.enabled || !config.probe.error_monitor.enabled {
+                let mut skip_stmt = conn.prepare_cached(
+                    "SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel=?1 AND status IN ('pending','delivering') AND (?2=0 OR (?3=0 AND event_key NOT LIKE 'test:%') OR (?4=0 AND EXISTS(SELECT 1 FROM probe_events AS event JOIN probe_error_incidents AS incident ON incident.event_id=event.id WHERE json_valid(event.payload_json) AND json_extract(event.payload_json,'$.notification_event_key')=probe_notification_deliveries.event_key))))",
+                )?;
+                let has_to_skip: bool = skip_stmt.query_row(
+                    params![
+                        channel.as_str(),
+                        enabled,
+                        config.probe.enabled,
+                        config.probe.error_monitor.enabled
+                    ],
+                    |r| r.get(0),
+                )?;
+                if has_to_skip {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     pub(crate) fn sync_notification_channels_in_transaction(
@@ -184,8 +236,8 @@ impl PanelDb {
             &["notification", channel.as_str(), key],
             &serde_json::to_vec(payload)?,
         )?;
-        let now = Timestamp::now().as_millisecond();
         let mut conn = self.conn.lock().expect("db mutex");
+        let now = Timestamp::now().as_millisecond();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for alias in aliases.iter().filter(|alias| alias.as_str() != key) {
             let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE channel=?1 AND event_key=?2)", params![channel.as_str(),alias], |r| r.get(0))?;
@@ -211,6 +263,83 @@ impl PanelDb {
         let staged = tx.execute("INSERT OR IGNORE INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,created_ms,updated_ms,queue_version,chunk_count) VALUES(?1,?2,?3,?4,'pending',?5,?5,1,?6)", params![key,channel.as_str(),ciphertext,nonce,now,chunks])? > 0;
         tx.commit()?;
         Ok(staged)
+    }
+
+    pub fn claim_and_stage_codex_delivery(
+        &self,
+        feedback_key: Option<&str>,
+        dedupe_namespace: &str,
+        dedupe_key: &str,
+        ttl_seconds: i64,
+        stage: Option<(NotificationChannel, &str, i64, &Value)>,
+    ) -> Result<(bool, bool, bool)> {
+        let encrypted_stage = match stage {
+            Some((channel, key, event_ms, payload)) => {
+                let (ciphertext, nonce) = self.crypto.encrypt(
+                    &["notification", channel.as_str(), key],
+                    &serde_json::to_vec(payload)?,
+                )?;
+                let chunks = payload["chunks"].as_array().map_or(1, Vec::len).max(1);
+                Some((channel, key, event_ms, chunks, ciphertext, nonce))
+            }
+            None => None,
+        };
+        let mut conn = self.conn.lock().expect("db mutex");
+        let now_sec = Self::now();
+        let now_ms = Timestamp::now().as_millisecond();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let feedback_claimed = match feedback_key {
+            Some(fkey) => {
+                let inserted = tx.execute(
+                    "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES(?1,'delivering',?2)",
+                    params![fkey, now_sec],
+                )? == 1;
+                if !inserted {
+                    let _ = tx.execute(
+                        "UPDATE settings SET updated_at = ?2 WHERE key = ?1 AND updated_at <= ?3",
+                        params![fkey, now_sec, now_sec - 86_400],
+                    );
+                }
+                inserted
+            }
+            None => true,
+        };
+        let dedupe_claimed = tx.execute(
+            r#"
+            INSERT INTO probe_dedupe(namespace, dedupe_key, expires_at, created_at)
+            VALUES(?1, ?2, ?3, ?4)
+            ON CONFLICT(namespace, dedupe_key) DO UPDATE
+            SET expires_at = excluded.expires_at, created_at = excluded.created_at
+            WHERE probe_dedupe.expires_at <= excluded.created_at
+            "#,
+            params![
+                dedupe_namespace,
+                dedupe_key,
+                now_sec + ttl_seconds.max(1),
+                now_sec
+            ],
+        )? > 0;
+        let mut staged = false;
+        if feedback_claimed && dedupe_claimed {
+            if let Some((channel, key, event_ms, chunks, ciphertext, nonce)) = encrypted_stage {
+                let eligible = tx
+                    .query_row(
+                        "SELECT enabled=1 AND ?2>=activated_ms FROM probe_notification_channels WHERE channel=?1",
+                        params![channel.as_str(), event_ms],
+                        |r| r.get::<_, bool>(0),
+                    )
+                    .optional()?
+                    .unwrap_or(false);
+                if eligible {
+                    staged = tx.execute(
+                        "INSERT OR IGNORE INTO probe_notification_deliveries(event_key,channel,ciphertext,nonce,status,created_ms,updated_ms,queue_version,chunk_count) VALUES(?1,?2,?3,?4,'pending',?5,?5,1,?6)",
+                        params![key, channel.as_str(), ciphertext, nonce, now_ms, chunks],
+                    )? > 0;
+                }
+            }
+        }
+        tx.commit()?;
+        Ok((feedback_claimed, dedupe_claimed, staged))
     }
 
     pub fn notification_instance_id(&self) -> Result<String> {
@@ -241,9 +370,9 @@ impl PanelDb {
         channel: NotificationChannel,
         key: &str,
     ) -> Result<Option<NotificationLease>> {
-        let now = Timestamp::now().as_millisecond();
         let owner = Uuid::new_v4().to_string();
         let mut conn = self.conn.lock().expect("db mutex");
+        let now = Timestamp::now().as_millisecond();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = tx.execute("UPDATE probe_notification_deliveries SET status='delivering',attempts=attempts+1,chunk_attempts=chunk_attempts+1,
             first_attempt_ms=coalesce(first_attempt_ms,?3),lease_owner=?4,lease_until_ms=?3+?5,updated_ms=?3
@@ -270,16 +399,26 @@ impl PanelDb {
         &self,
         lease: &NotificationLease,
     ) -> Result<Option<i64>> {
-        let now = Timestamp::now().as_millisecond();
         let conn = self.conn.lock().expect("db mutex");
-        Ok(conn.query_row(
+        let now = Timestamp::now().as_millisecond();
+        let mut stmt = conn.prepare_cached(
             "SELECT min(lease_until_ms,first_attempt_ms+?5)-?4 FROM probe_notification_deliveries
              WHERE event_key=?1 AND channel=?2 AND status='delivering' AND lease_owner=?3
              AND lease_until_ms>?4 AND first_attempt_ms+?5>?4 AND ciphertext IS NOT NULL
              AND EXISTS(SELECT 1 FROM probe_notification_channels WHERE channel=?2 AND enabled=1)",
-            params![lease.event_key,lease.channel.as_str(),lease.owner,now,NOTIFICATION_LIFETIME_MS],
-            |r| r.get(0),
-        ).optional()?)
+        )?;
+        Ok(stmt
+            .query_row(
+                params![
+                    lease.event_key,
+                    lease.channel.as_str(),
+                    lease.owner,
+                    now,
+                    NOTIFICATION_LIFETIME_MS
+                ],
+                |r| r.get(0),
+            )
+            .optional()?)
     }
 
     /// Acknowledges exactly one chunk, only while this sender still owns the lease.
@@ -288,6 +427,7 @@ impl PanelDb {
         lease: &NotificationLease,
         outcome: &Value,
     ) -> Result<Option<Value>> {
+        let mut conn = self.conn.lock().expect("db mutex");
         let now = Timestamp::now().as_millisecond();
         let sent = outcome["sent"].as_bool() == Some(true);
         let skipped = outcome["skipped"].as_bool() == Some(true);
@@ -343,7 +483,6 @@ impl PanelDb {
             obj.remove("retry_after_ms");
             obj.remove("uncertain");
         }
-        let mut conn = self.conn.lock().expect("db mutex");
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed=tx.execute("UPDATE probe_notification_deliveries SET status=?4,outcome_json=?5,updated_ms=?6,next_ms=?7,chunk_index=?8,
             chunk_attempts=CASE WHEN ?9 THEN 0 ELSE chunk_attempts END,chunk_uncertain=?10,lease_owner=NULL,lease_until_ms=0,
@@ -359,81 +498,197 @@ impl PanelDb {
     }
 
     pub fn due_notification_deliveries(&self, limit: usize) -> Result<Vec<NotificationDelivery>> {
-        let now = Timestamp::now().as_millisecond();
-        let mut conn = self.conn.lock().expect("db mutex");
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut changed_keys = Vec::new();
-        // An expired attempt may already have reached Bark. Recover only its unconfirmed chunk.
-        let interrupted: Vec<(String, String, usize, i64)> = {
-            let mut stmt=tx.prepare("SELECT event_key,channel,chunk_attempts,first_attempt_ms FROM probe_notification_deliveries
-                WHERE queue_version=1 AND status='delivering' AND lease_until_ms<=?1")?;
-            let rows = stmt
-                .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
-        };
-        for (key, channel, attempt, first) in interrupted {
-            let next = now + notification_retry_delay_ms(attempt);
-            let retry = attempt < 3 && next < first + NOTIFICATION_LIFETIME_MS;
-            tx.execute("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
-                outcome_json=json_set(?5,'$.request_count',attempts,'$.chunk_count',chunk_count,'$.confirmed_chunks',chunk_index),
-                updated_ms=?7,ciphertext=CASE WHEN ?6 THEN ciphertext ELSE NULL END,nonce=CASE WHEN ?6 THEN nonce ELSE NULL END
-                WHERE event_key=?1 AND channel=?2",params![key,channel,if retry {"pending"} else {"unknown"},next,
-                json!({"sent":false,"skipped":false,"status":if retry {"waiting_retry"}else{"unknown"},"reason":"delivery_interrupted_outcome_unknown","error_category":"network","attempts":attempt,"next_retry_ms":if retry {Some(next)}else{None}}).to_string(),retry,now])?;
-            changed_keys.push(key);
+        let cap = limit.min(10);
+        if cap == 0 {
+            return Ok(Vec::new());
         }
-        changed_keys.extend(tx.prepare("UPDATE probe_notification_deliveries SET status=CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?1,
-            outcome_json=json_set(coalesce(outcome_json,'{}'),'$.sent',json('false'),'$.status',CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,'$.reason','retry_deadline_exceeded','$.next_retry_ms',NULL)
-            WHERE queue_version=1 AND status='pending' AND first_attempt_ms+?2<=?1 RETURNING event_key")?
-            .query_map(params![now,NOTIFICATION_LIFETIME_MS], |row| row.get::<_,String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?);
-        for key in changed_keys {
-            publish_outcome(&tx, &key, now)?;
-        }
-        let rows = {
-            let mut stmt=tx.prepare("SELECT event_key,ciphertext,nonce FROM probe_notification_deliveries WHERE channel='bark' AND queue_version=1 AND status='pending'
-                AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL ORDER BY created_ms,event_key LIMIT ?2")?;
-            let rows = stmt
-                .query_map(params![now, limit.min(10)], |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, Vec<u8>>(1)?,
-                        r.get::<_, Vec<u8>>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
-        };
-        tx.commit()?;
-        rows.into_iter()
-            .map(|(event_key, ciphertext, nonce)| {
-                let plaintext = self.crypto.decrypt(
-                    &[
-                        "notification",
-                        NotificationChannel::Bark.as_str(),
-                        &event_key,
-                    ],
-                    &ciphertext,
-                    &nonce,
+        let now = {
+            let mut conn = self.conn.lock().expect("db mutex");
+            let now = Timestamp::now().as_millisecond();
+            let has_work: bool = {
+                let mut pre = conn.prepare_cached(
+                    "SELECT EXISTS(SELECT 1 FROM probe_notification_deliveries WHERE queue_version=1 AND ((status='delivering' AND lease_until_ms<=?1) OR (status='pending' AND first_attempt_ms+?2<=?1) OR (channel='bark' AND status='pending' AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL)))",
                 )?;
-                Ok(NotificationDelivery {
-                    channel: NotificationChannel::Bark,
-                    payload: serde_json::from_slice(&plaintext)?,
-                    event_key,
-                })
-            })
-            .collect()
+                pre.query_row(params![now, NOTIFICATION_LIFETIME_MS], |r| r.get(0))?
+            };
+            if !has_work {
+                *self.delivery_scan_cursor.lock().expect("cursor mutex") = None;
+                return Ok(Vec::new());
+            }
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let mut changed_keys = Vec::new();
+            // An expired attempt may already have reached Bark. Recover only its unconfirmed chunk.
+            let interrupted: Vec<(String, String, usize, i64)> = {
+                let mut stmt = tx.prepare_cached(
+                    "SELECT event_key,channel,chunk_attempts,first_attempt_ms FROM probe_notification_deliveries WHERE queue_version=1 AND status='delivering' AND lease_until_ms<=?1",
+                )?;
+                let rows = stmt
+                    .query_map([now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                rows
+            };
+            for (key, channel, attempt, first) in interrupted {
+                let next = now + notification_retry_delay_ms(attempt);
+                let retry = attempt < 3 && next < first + NOTIFICATION_LIFETIME_MS;
+                tx.execute("UPDATE probe_notification_deliveries SET status=?3,lease_owner=NULL,lease_until_ms=0,next_ms=?4,chunk_uncertain=1,
+                    outcome_json=json_set(?5,'$.request_count',attempts,'$.chunk_count',chunk_count,'$.confirmed_chunks',chunk_index),
+                    updated_ms=?7,ciphertext=CASE WHEN ?6 THEN ciphertext ELSE NULL END,nonce=CASE WHEN ?6 THEN nonce ELSE NULL END
+                    WHERE event_key=?1 AND channel=?2",params![key,channel,if retry {"pending"} else {"unknown"},next,
+                    json!({"sent":false,"skipped":false,"status":if retry {"waiting_retry"}else{"unknown"},"reason":"delivery_interrupted_outcome_unknown","error_category":"network","attempts":attempt,"next_retry_ms":if retry {Some(next)}else{None}}).to_string(),retry,now])?;
+                changed_keys.push(key);
+            }
+            changed_keys.extend(tx.prepare_cached("UPDATE probe_notification_deliveries SET status=CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,ciphertext=NULL,nonce=NULL,lease_owner=NULL,lease_until_ms=0,updated_ms=?1,
+                outcome_json=json_set(coalesce(outcome_json,'{}'),'$.sent',json('false'),'$.status',CASE WHEN chunk_uncertain=1 THEN 'unknown' ELSE 'failed' END,'$.reason','retry_deadline_exceeded','$.next_retry_ms',NULL)
+                WHERE queue_version=1 AND status='pending' AND first_attempt_ms+?2<=?1 RETURNING event_key")?
+                .query_map(params![now,NOTIFICATION_LIFETIME_MS], |row| row.get::<_,String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?);
+            for key in changed_keys {
+                publish_outcome(&tx, &key, now)?;
+            }
+            tx.commit()?;
+            now
+        };
+
+        // Page past unreadable rows in memory without mutating ciphertext so a temporary
+        // wrong SecretBox key preserves pending payloads while valid rows past LIMIT 10
+        // or past the 1,000-row per-tick scan cap are never starved behind corrupted entries.
+        let mut valid = Vec::with_capacity(cap);
+        let mut first_err: Option<anyhow::Error> = None;
+        let start_cursor = self
+            .delivery_scan_cursor
+            .lock()
+            .expect("cursor mutex")
+            .clone();
+        let mut cursor = start_cursor.clone();
+        let mut wrapped = start_cursor.is_none();
+        let mut scanned = 0usize;
+        while valid.len() < cap && scanned < 1_000 {
+            let batch_limit = (1_000 - scanned).min(cap.max(64));
+            let rows = {
+                let conn = self.conn.lock().expect("db mutex");
+                let map_row = |r: &rusqlite::Row<'_>| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Vec<u8>>(2)?,
+                        r.get::<_, Vec<u8>>(3)?,
+                    ))
+                };
+                match (&cursor, wrapped.then_some(start_cursor.as_ref()).flatten()) {
+                    (Some((last_ms, last_key)), Some((stop_ms, stop_key))) => {
+                        let mut stmt = conn.prepare_cached(
+                            "SELECT created_ms,event_key,ciphertext,nonce FROM probe_notification_deliveries
+                             WHERE channel='bark' AND queue_version=1 AND status='pending'
+                               AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL
+                               AND (created_ms>?2 OR (created_ms=?2 AND event_key>?3))
+                               AND (created_ms<?4 OR (created_ms=?4 AND event_key<=?5))
+                             ORDER BY created_ms,event_key LIMIT ?6",
+                        )?;
+                        let fetched = stmt
+                            .query_map(
+                                params![now, last_ms, last_key, stop_ms, stop_key, batch_limit],
+                                map_row,
+                            )?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        fetched
+                    }
+                    (Some((last_ms, last_key)), None) => {
+                        let mut stmt = conn.prepare_cached(
+                            "SELECT created_ms,event_key,ciphertext,nonce FROM probe_notification_deliveries
+                             WHERE channel='bark' AND queue_version=1 AND status='pending'
+                               AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL
+                               AND (created_ms>?2 OR (created_ms=?2 AND event_key>?3))
+                             ORDER BY created_ms,event_key LIMIT ?4",
+                        )?;
+                        let fetched = stmt
+                            .query_map(params![now, last_ms, last_key, batch_limit], map_row)?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        fetched
+                    }
+                    (None, Some((stop_ms, stop_key))) => {
+                        let mut stmt = conn.prepare_cached(
+                            "SELECT created_ms,event_key,ciphertext,nonce FROM probe_notification_deliveries
+                             WHERE channel='bark' AND queue_version=1 AND status='pending'
+                               AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL
+                               AND (created_ms<?2 OR (created_ms=?2 AND event_key<=?3))
+                             ORDER BY created_ms,event_key LIMIT ?4",
+                        )?;
+                        let fetched = stmt
+                            .query_map(params![now, stop_ms, stop_key, batch_limit], map_row)?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        fetched
+                    }
+                    (None, None) => {
+                        let mut stmt = conn.prepare_cached(
+                            "SELECT created_ms,event_key,ciphertext,nonce FROM probe_notification_deliveries
+                             WHERE channel='bark' AND queue_version=1 AND status='pending'
+                               AND next_ms<=?1 AND chunk_attempts<3 AND ciphertext IS NOT NULL
+                             ORDER BY created_ms,event_key LIMIT ?2",
+                        )?;
+                        let fetched = stmt
+                            .query_map(params![now, batch_limit], map_row)?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        fetched
+                    }
+                }
+            };
+            if rows.is_empty() {
+                if !wrapped {
+                    cursor = None;
+                    wrapped = true;
+                    continue;
+                }
+                cursor = None;
+                break;
+            }
+            for (created_ms, event_key, ciphertext, nonce) in rows {
+                scanned += 1;
+                cursor = Some((created_ms, event_key.clone()));
+                let decoded = self
+                    .crypto
+                    .decrypt(
+                        &[
+                            "notification",
+                            NotificationChannel::Bark.as_str(),
+                            &event_key,
+                        ],
+                        &ciphertext,
+                        &nonce,
+                    )
+                    .and_then(|pt| serde_json::from_slice(&pt).map_err(Into::into));
+                match decoded {
+                    Ok(payload) => {
+                        valid.push(NotificationDelivery {
+                            channel: NotificationChannel::Bark,
+                            payload,
+                            event_key,
+                        });
+                    }
+                    Err(err) => {
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                        }
+                    }
+                }
+                if valid.len() == cap || scanned == 1_000 {
+                    break;
+                }
+            }
+        }
+        *self.delivery_scan_cursor.lock().expect("cursor mutex") = cursor;
+        if valid.is_empty() {
+            if let Some(err) = first_err {
+                return Err(err);
+            }
+        }
+        Ok(valid)
     }
 
     pub fn notification_first_seen_ms(&self, dedupe_key: &str) -> Result<Option<i64>> {
-        self.conn
-            .lock()
-            .expect("db mutex")
-            .query_row(
-                "SELECT min(created_at)*1000 FROM probe_events WHERE dedupe_key=?1",
-                [dedupe_key],
-                |r| r.get(0),
-            )
+        let conn = self.conn.lock().expect("db mutex");
+        let mut stmt = conn
+            .prepare_cached("SELECT min(created_at)*1000 FROM probe_events WHERE dedupe_key=?1")?;
+        stmt.query_row([dedupe_key], |r| r.get(0))
             .map_err(Into::into)
     }
 }

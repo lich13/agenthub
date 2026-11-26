@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 import XCTest
 
-final class CodexDesktopAndIMETests: XCTestCase {
+final class InlineSearchIMETests: XCTestCase {
     // MARK: - Inline Search/Rename Field Editor Pre-keyDown IME Guard & Async Search Race Protection
 
     @MainActor

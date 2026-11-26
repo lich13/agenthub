@@ -5,17 +5,13 @@ pub(super) async fn threads_list(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ThreadsListArgs = parse_args(args_json)?;
+    let query: ThreadsQuery = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
             let plan = AgentHubUseCases::new(state.platform())
                 .threads()
-                .list_read(ThreadsQuery {
-                    archived: args.archived,
-                    q: args.q,
-                    limit: args.limit,
-                })?;
+                .list_read(query)?;
             core_thread_service::load_thread_read_model_inputs(&state.codex_paths(), &plan)
         })
         .await,
@@ -209,7 +205,7 @@ pub(super) async fn sessions_bulk_execute(
     let args: WrappedRequest<SessionBatchExecuteRequest> = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
-        tokio::task::spawn_blocking(move || {
+        agenthub_core::read_tasks::spawn_blocking(move || {
             let provider = args.request.provider;
             let operation = args.request.operation;
             let result = AgentHubUseCases::new(state.platform())

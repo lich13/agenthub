@@ -77,7 +77,7 @@ public struct UserAttachment: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-public struct UserContextBlock: Codable, Equatable, Sendable {
+public struct UserContextBlock: Codable, Hashable, Sendable {
     public var kind: String // "instructions" | "environment" | "runtime" | "files"
     public var text: String
 

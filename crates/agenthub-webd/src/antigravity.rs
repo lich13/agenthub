@@ -57,12 +57,18 @@ pub(crate) async fn evict_idle_cache(max_idle: Duration) {
         let mut cache = CACHE.lock().await;
         let before = cache.len();
         cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+        if cache.capacity() > cache.len().saturating_mul(4).max(16) {
+            cache.shrink_to_fit();
+        }
         evicted |= cache.len() < before;
     }
     {
         let mut meta_cache = META_CACHE.lock().await;
         let before = meta_cache.len();
         meta_cache.retain(|(_, _, _, touched)| now.saturating_duration_since(*touched) < max_idle);
+        if meta_cache.capacity() > meta_cache.len().saturating_mul(4).max(16) {
+            meta_cache.shrink_to_fit();
+        }
         evicted |= meta_cache.len() < before;
     }
     if evicted {
@@ -157,7 +163,8 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
         None => {}
     }
     let candidates =
-        tokio::task::spawn_blocking(antigravity::sessions::discover_host_endpoints).await?;
+        agenthub_core::read_tasks::spawn_blocking(antigravity::sessions::discover_host_endpoints)
+            .await?;
     if candidates.is_empty() {
         antigravity::sessions::record_endpoint_failure(false);
         anyhow::bail!("Antigravity native owner unavailable or ambiguous");
@@ -408,7 +415,7 @@ impl ProcessSnapshot {
             return false;
         }
         let cached = self.0.take();
-        let (rows, matched) = tokio::task::spawn_blocking(move || {
+        let (rows, matched) = agenthub_core::read_tasks::spawn_blocking(move || {
             let rows = cached.unwrap_or_else(|| {
                 read_ps_process_table()
                     .map(|table| parse_process_table(&table))
@@ -645,7 +652,7 @@ async fn scan_offline_stores(
     include_primary_offline: bool,
 ) -> Result<NativeScan> {
     let target = only.map(str::to_owned);
-    tokio::task::spawn_blocking(move || -> Result<NativeScan> {
+    agenthub_core::read_tasks::spawn_blocking(move || -> Result<NativeScan> {
         let paths = antigravity::sessions::AntigravityPaths::default_for_user()?;
         let mut combined = NativeScan::default();
         let mut seen_ids = BTreeSet::new();
@@ -694,7 +701,7 @@ async fn scan_offline_one_with_retry(
         let scan = scan_offline_stores(Some(cascade_id), include_primary_offline).await?;
         let settled_or_absent = match scan.streams.first() {
             Some(s) => !s.events.is_empty() || s.settled_count == s.record_count,
-            None => true,
+            None => scan.errors == 0,
         };
         last_scan = scan;
         if settled_or_absent {
@@ -807,7 +814,7 @@ async fn inspect_steps_background_tasks(
     let mut has_active_child_processes = false;
     let pending_logs = antigravity::collect_pending_task_logs(id, summary_traj_id, steps);
     if !pending_logs.is_empty() {
-        tasks = tokio::task::spawn_blocking(move || {
+        tasks = agenthub_core::read_tasks::spawn_blocking(move || {
             pending_logs
                 .into_iter()
                 .filter_map(|(tid, uri)| inspect_task_log(&uri).map(|l| (tid, l)))
@@ -1091,7 +1098,7 @@ async fn scan_at(
         summaries.len() <= 5000,
         "Antigravity source inventory exceeds limit"
     );
-    let (host_paths, disk_subagents) = tokio::task::spawn_blocking(|| {
+    let (host_paths, disk_subagents) = agenthub_core::read_tasks::spawn_blocking(|| {
         let paths = antigravity::sessions::AntigravityPaths::default_for_user().ok();
         let subs = paths
             .as_ref()

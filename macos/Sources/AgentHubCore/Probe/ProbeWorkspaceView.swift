@@ -1,21 +1,45 @@
+import Foundation
 import SwiftUI
+
+private struct PendingHookDialog: Equatable, Sendable {
+    let provider: String
+    let name: String
+    let action: String
+    let path: String
+    let revision: UInt64
+}
+
+private enum HostIntegrationEntryKind: Equatable {
+    case codex(hookStatus: String?, actualCount: Int, staleCount: Int, path: String, unavailable: Bool)
+    case localProvider(provider: String, installed: Bool, count: Int, path: String, error: String?)
+    case remoteReadOnly
+    case dshDirect(path: String)
+}
+
+private struct HostIntegrationEntry: Identifiable, Equatable {
+    let id: String
+    let brand: AgentBrandId
+    let name: String
+    let isReady: Bool
+    let hasError: Bool
+    let needsRepair: Bool
+    let kind: HostIntegrationEntryKind
+}
 
 public struct ProbeWorkspaceView: View {
     @Environment(\.agentHubPalette) private var palette
     @ObservedObject public var store: RuntimeConnectionStore
-    private let sourceRevision: UInt64
 
+    @State private var disclosureRules = ProbeDisclosureRules()
     @State private var status: ProbeStatus?
     @State private var statusError: String?
-    @State private var settingsView: ProbeSettingsView?
-    @State private var settingsError: String?
-    @State private var draft: ProbeSettingsDraft?
+    @State private var settingsSync = ProbeSettingsSyncState()
     @State private var events: [ProbeEventItem] = []
     @State private var eventsLoaded: Bool = false
     @State private var eventsError: String?
     @State private var loadingStatus: Bool = false
     @State private var saving: Bool = false
-    @State private var saveTarget: String = "settings"
+    @State private var saveTarget: ProbeSettingsSaveScope = .settings
     @State private var saveMessage: (tone: StatusChipTone, text: String)?
     @State private var actionMessage: (tone: StatusChipTone, text: String)?
 
@@ -25,26 +49,64 @@ public struct ProbeWorkspaceView: View {
 
     @State private var hookStatuses: [String: ClaudeHooksStatus] = [:]
     @State private var hookErrors: [String: String] = [:]
-    @State private var pendingHookDialog: (provider: String, name: String, action: String, path: String)?
+    @State private var pendingHookDialog: PendingHookDialog?
     @State private var hookBusy: Bool = false
-    @State private var advancedSettingsOpen: Bool = true
+    @State private var machineEpoch: UInt64 = 0
+    @State private var refreshToken: UInt64 = 0
 
-    public init(store: RuntimeConnectionStore) {
+    public init(
+        store: RuntimeConnectionStore,
+        initialOpenSections: Set<ProbeDisclosureSection> = []
+    ) {
         self.store = store
-        self.sourceRevision = store.revision
+        var rules = ProbeDisclosureRules(machineScope: store.machineScope)
+        for sec in initialOpenSections {
+            rules.setExpanded(sec, true)
+        }
+        self._disclosureRules = State(initialValue: rules)
+        self._settingsSync = State(initialValue: ProbeSettingsSyncState(revision: store.revision))
+    }
+
+    private var draft: ProbeSettingsDraft? {
+        settingsSync.draft
+    }
+
+    private var settingsError: String? {
+        settingsSync.settingsError
+    }
+
+    private var ciDraftBinding: Binding<ProbeSettingsDraft?> {
+        Binding(
+            get: { settingsSync.draft },
+            set: { next in
+                if let old = settingsSync.draft, let next, !old.subsetEquals(next, scope: .ci),
+                   saveTarget == .ci, saveMessage?.tone == .danger
+                {
+                    saveMessage = nil
+                }
+                settingsSync.draft = next
+            }
+        )
+    }
+
+    private func sectionBinding(_ section: ProbeDisclosureSection) -> Binding<Bool> {
+        Binding(
+            get: { disclosureRules.isExpanded(section) },
+            set: { next in
+                disclosureRules.resetIfMachineChanged(store.machineScope)
+                disclosureRules.setExpanded(section, next)
+            }
+        )
     }
 
     private var jobBusy: Bool {
         if startingJob { return true }
         guard let id = activeJobId else { return false }
-        if let tracked = store.trackedJobs[id] {
-            return !tracked.isTerminal
-        }
-        return true
+        return store.isTrackedJobActive(id)
     }
 
-    private var validationErrors: [String] {
-        draft?.validationErrors() ?? []
+    private var settingsValidationErrors: [String] {
+        draft?.validationErrors(for: .settings) ?? []
     }
 
     private var configuredDeviceKey: Bool {
@@ -52,26 +114,94 @@ public struct ProbeWorkspaceView: View {
         return draft.barkDeviceKeyConfigured || !draft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var visibleHostEntries: [HostIntegrationEntry] {
+        var items: [HostIntegrationEntry] = []
+
+        let codexHookStatus = status?.hookStatus
+        let codexManaged = (codexHookStatus == "managed")
+        let codexUnavailable = (codexHookStatus == nil && statusError != nil)
+        let codexStale = (codexHookStatus == "stale")
+        items.append(
+            HostIntegrationEntry(
+                id: "codex",
+                brand: .codex,
+                name: "Codex",
+                isReady: codexManaged,
+                hasError: codexUnavailable,
+                needsRepair: codexStale,
+                kind: .codex(
+                    hookStatus: codexHookStatus,
+                    actualCount: status?.actualCommands?.count ?? 0,
+                    staleCount: status?.staleCommandCount ?? 0,
+                    path: status?.codexHooksPath ?? "未返回路径",
+                    unavailable: codexUnavailable
+                )
+            )
+        )
+
+        var localCapableProviders: [(id: String, brand: AgentBrandId, name: String)] = [
+            ("claude", .claude, "Claude Code"),
+            ("grok", .grok, "Grok Build"),
+        ]
+        if store.capabilities.antigravityNotifications {
+            localCapableProviders.append(("antigravity", .antigravity, "Antigravity"))
+        }
+        for p in localCapableProviders {
+            if store.target == .remote {
+                items.append(
+                    HostIntegrationEntry(
+                        id: p.id,
+                        brand: p.brand,
+                        name: p.name,
+                        isReady: statusError == nil,
+                        hasError: false,
+                        needsRepair: false,
+                        kind: .remoteReadOnly
+                    )
+                )
+            } else {
+                let st = hookStatuses[p.id]
+                let err = hookErrors[p.id]
+                let installed = st?.installed ?? false
+                let count = st?.managedCount ?? 0
+                let path = st?.configPath ?? (err == nil ? "未返回路径" : "状态不可用")
+                items.append(
+                    HostIntegrationEntry(
+                        id: p.id,
+                        brand: p.brand,
+                        name: p.name,
+                        isReady: installed && err == nil,
+                        hasError: err != nil,
+                        needsRepair: false,
+                        kind: .localProvider(provider: p.id, installed: installed, count: count, path: path, error: err)
+                    )
+                )
+            }
+        }
+
+        if store.capabilities.dshNotifications {
+            items.append(
+                HostIntegrationEntry(
+                    id: "dsh",
+                    brand: .dsh,
+                    name: "DeepSeek Harness",
+                    isReady: statusError == nil,
+                    hasError: false,
+                    needsRepair: false,
+                    kind: .dshDirect(path: status?.dshSessionsPath ?? "原生日志直连")
+                )
+            )
+        }
+        return items
+    }
+
     public var body: some View {
         GeometryReader { geo in
             let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ZStack {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        // Header
-                        HStack {
-                            Text("Probe")
-                                .font(DesignFonts.body(22, weight: .semibold))
-                                .foregroundStyle(palette.textPrimary.color)
-                            Spacer()
-                            Button {
-                                Task { await refreshAll(force: true) }
-                            } label: {
-                                LucideIcon(.refreshCw, size: 17)
-                            }
-                            .buttonStyle(IconButtonStyle(dimension: 32))
-                            .help("刷新 Probe")
-                        }
+                    VStack(alignment: .leading, spacing: 10) {
+                        headerBar
 
                         if let statusError, !statusError.isEmpty {
                             Text(statusError)
@@ -90,57 +220,36 @@ public struct ProbeWorkspaceView: View {
                                 )
                         }
 
-                        // 1. Full-width GitHub CI Panel
                         if store.capabilities.isReady && store.capabilities.githubCi {
                             GithubCiCardView(
                                 store: store,
-                                draft: $draft,
+                                draft: ciDraftBinding,
+                                disclosureRules: $disclosureRules,
                                 saving: saving,
-                                saveMessage: saveTarget == "ci" ? saveMessage : nil,
-                                onSave: { Task { await saveSettings(target: "ci") } }
+                                savingCurrentScope: saving && saveTarget == .ci,
+                                saveMessage: saveTarget == .ci ? saveMessage : nil,
+                                onSave: { Task { await saveSettings(scope: .ci) } }
                             )
                         }
 
-                        // 2 & 3. Notification & Runtime Settings Panel (6 metrics + switches + 8 advanced fields)
-                        PanelCard(title: "通知配置与快捷开关", icon: .slidersHorizontal) {
-                            if let actionMessage {
-                                Text(actionMessage.text)
-                                    .font(DesignFonts.body(12))
-                                    .foregroundStyle((actionMessage.tone == .success ? palette.okFg : palette.errFg).color)
-                            }
-                            if let settingsError, !settingsError.isEmpty {
-                                Text(settingsError)
-                                    .font(DesignFonts.body(12))
-                                    .foregroundStyle(palette.errFg.color)
-                            }
-                            if let d = draft {
-                                runtimeSettingsBody(draft: d, isNarrow: isNarrow)
-                            } else if settingsError == nil {
-                                Text(loadingStatus ? "正在读取设置" : "设置不可用")
-                                    .font(DesignFonts.body(12))
-                                    .foregroundStyle(palette.textMuted.color)
-                            }
-                        }
+                        notificationSettingsCard(isNarrow: isNarrow)
 
-                        // 3b. Bark Panel
-                        if let d = draft {
-                            barkPanelBody(draft: d)
-                        }
+                        barkPanelBody(draft: draft, isNarrow: isNarrow)
 
-                        // 4. 5-Platform Host Matrix
-                        hostMatrixSection(isNarrow: isNarrow)
+                        hostMatrixSection
 
-                        // 5. Live Overview (top 12)
                         liveOverviewPanel
 
-                        // 6. Recent Events
                         recentEventsPanel
 
-                        // 7. Execution History (default collapsed)
-                        JobHistorySectionView(store: store, title: "执行记录")
+                        JobHistorySectionView(
+                            store: store,
+                            title: "执行记录",
+                            isExpanded: sectionBinding(.jobs)
+                        )
                     }
                     .frame(maxWidth: LayoutMetrics.consolePageMaxWidth, alignment: .leading)
-                    .padding(.vertical, isNarrow ? 18 : 28)
+                    .padding(.vertical, isNarrow ? 16 : 20)
                     .padding(.horizontal, isNarrow ? 14 : 32)
                     .frame(maxWidth: .infinity)
                 }
@@ -166,33 +275,70 @@ public struct ProbeWorkspaceView: View {
                             .buttonStyle(SecondaryButtonStyle())
                             .disabled(hookBusy || jobBusy)
 
-                            Button(dialog.action == "install" ? "确认写入" : "确认移除") {
-                                let captured = dialog
-                                pendingHookDialog = nil
-                                Task { await executeHookDialog(captured) }
+                            if dialog.action == "remove" {
+                                Button("确认移除") {
+                                    let captured = dialog
+                                    pendingHookDialog = nil
+                                    Task { await executeHookDialog(captured) }
+                                }
+                                .buttonStyle(DangerButtonStyle(soft: false))
+                                .disabled(hookBusy || jobBusy)
+                            } else {
+                                Button("确认写入") {
+                                    let captured = dialog
+                                    pendingHookDialog = nil
+                                    Task { await executeHookDialog(captured) }
+                                }
+                                .buttonStyle(PrimaryButtonStyle())
+                                .disabled(hookBusy || jobBusy)
                             }
-                            .buttonStyle(dialog.action == "remove" ? AnyButtonStyle(DangerButtonStyle(soft: false)) : AnyButtonStyle(PrimaryButtonStyle()))
-                            .disabled(hookBusy || jobBusy)
                         }
                     }
                 }
             }
             .background(palette.background.color)
         }
-        .onChange(of: activeJobId.flatMap { store.trackedJobs[$0]?.status }) { status in
-            guard status == "succeeded" || status == "failed",
-                  activeJobAction == "probe.installHooks" || activeJobAction == "probe.removeHooks" else { return }
-            Task { await refreshStatusAndEvents(force: true) }
+        .onChange(of: activeJobId.flatMap { store.trackedJobs[$0]?.status }) { jobStatus in
+            if jobStatus == "failed", let id = activeJobId {
+                disclosureRules.observeIssue(
+                    machineScope: store.machineScope,
+                    section: .jobs,
+                    issueSignature: "job:\(id):failed"
+                )
+                if activeJobAction == "probe.barkTest" {
+                    disclosureRules.observeIssue(
+                        machineScope: store.machineScope,
+                        section: .bark,
+                        issueSignature: "barkTest:\(id):failed"
+                    )
+                }
+            }
+            guard jobStatus == "succeeded" || jobStatus == "failed",
+                  activeJobAction == "probe.installHooks" || activeJobAction == "probe.removeHooks"
+            else { return }
+            Task { await refreshAll(force: true) }
         }
         .task(id: store.machineScope) {
-            draft = nil
+            machineEpoch &+= 1
+            refreshToken &+= 1
+            loadingStatus = false
+            saving = false
+            startingJob = false
+            hookBusy = false
+            disclosureRules.resetIfMachineChanged(store.machineScope)
+            settingsSync.reset(revision: store.revision)
             status = nil
             statusError = nil
-            settingsError = nil
             events = []
             eventsLoaded = false
             eventsError = nil
+            saveMessage = nil
+            actionMessage = nil
+            activeJobId = nil
+            activeJobAction = nil
+            pendingHookDialog = nil
             hookStatuses = [:]
+            hookErrors = [:]
             await refreshAll(force: false)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
@@ -203,124 +349,170 @@ public struct ProbeWorkspaceView: View {
             }
         }
     }
+    @ViewBuilder
+    private var headerBar: some View {
+        HStack(spacing: 8) {
+            Text("Probe")
+                .font(DesignFonts.body(22, weight: .semibold))
+                .foregroundStyle(palette.textPrimary.color)
+            if let incidentCount = status?.errorMonitorIncidentCount, incidentCount > 0 {
+                StatusChip("错误 \(incidentCount)", tone: .danger)
+            }
+            if let warnings = status?.discoveryWarnings, !warnings.isEmpty {
+                StatusChip("目录告警 \(warnings.count)", tone: .warning)
+                    .help(warnings.joined(separator: "；"))
+            }
+            Spacer()
+            Button {
+                Task { await refreshAll(force: true) }
+            } label: {
+                LucideIcon(.refreshCw, size: 17)
+            }
+            .buttonStyle(IconButtonStyle(dimension: 32))
+            .help("刷新 Probe")
+        }
+        .frame(minHeight: 32)
+    }
+
+    @ViewBuilder
+    private func notificationSettingsCard(isNarrow: Bool) -> some View {
+        PanelCard(
+            title: "通知配置",
+            icon: .slidersHorizontal,
+            headerAction: {
+                HStack(spacing: 8) {
+                    if saveTarget == .settings, let saveMessage {
+                        Text(saveMessage.text)
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
+                            .lineLimit(1)
+                    }
+                    Button {
+                        Task { await saveSettings(scope: .settings) }
+                    } label: {
+                        HStack(spacing: 5) {
+                            LucideIcon(.checkCircle2, size: 15)
+                            Text(saving && saveTarget == .settings ? "保存中" : "保存设置")
+                        }
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(saving || draft == nil)
+                }
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                if let actionMessage {
+                    Text(actionMessage.text)
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle((actionMessage.tone == .success ? palette.okFg : palette.errFg).color)
+                }
+                if let settingsError, !settingsError.isEmpty {
+                    Text(settingsError)
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.errFg.color)
+                }
+                if let d = draft {
+                    runtimeSettingsBody(draft: d, isNarrow: isNarrow)
+                } else if settingsError == nil {
+                    Text(loadingStatus ? "正在读取设置" : "设置不可用")
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.textMuted.color)
+                }
+            }
+        }
+    }
 
     @ViewBuilder
     private func runtimeSettingsBody(draft d: ProbeSettingsDraft, isNarrow: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // 6 Status Metric Cards
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
-                MetricCard(
-                    label: "探针",
-                    value: d.probeEnabled ? "已启用" : "已停用",
-                    tone: d.probeEnabled ? .success : .warning
-                )
-                MetricCard(
-                    label: "通知",
-                    value: d.barkEnabled ? "已启用" : "已停用",
-                    tone: d.barkEnabled ? .success : .warning
-                )
-                MetricCard(
-                    label: "错误监控",
-                    value: probeStateLabel(status?.errorMonitorStatus ?? (d.errorMonitorEnabled ? "enabled" : "disabled")),
-                    tone: d.errorMonitorEnabled ? .success : .warning
-                )
-                MetricCard(
-                    label: "错误事件",
-                    value: String(status?.errorMonitorIncidentCount ?? 0)
-                )
-                MetricCard(
-                    label: "Codex Home",
-                    value: status?.codexHome ?? (d.codexHome.isEmpty ? "auto" : d.codexHome)
-                )
-                MetricCard(
-                    label: "Discovery",
-                    value: (status?.discoveryWarnings?.isEmpty == false)
-                        ? status!.discoveryWarnings!.joined(separator: "；")
-                        : "正常"
-                )
-            }
-
-            // Probe & Error Monitor switches
+        VStack(alignment: .leading, spacing: 8) {
             LazyVGrid(
                 columns: isNarrow ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())],
-                spacing: 10
+                spacing: 8
             ) {
-                toggleRow("启用 Probe", isOn: d.probeEnabled) { next in
-                    updateDraft { $0.probeEnabled = next }
-                }
-                toggleRow("终止错误监控", isOn: d.errorMonitorEnabled) { next in
-                    updateDraft { $0.errorMonitorEnabled = next }
-                }
+                compactSwitchTile(
+                    label: "启用 Probe",
+                    isOn: Binding(
+                        get: { d.probeEnabled },
+                        set: { next in updateDraft { $0.probeEnabled = next } }
+                    )
+                )
+                compactSwitchTile(
+                    label: "终止错误监控",
+                    isOn: Binding(
+                        get: { d.errorMonitorEnabled },
+                        set: { next in updateDraft { $0.errorMonitorEnabled = next } }
+                    )
+                )
             }
 
-            // 6 Platform Notification One-Click Switches
-            VStack(alignment: .leading, spacing: 8) {
-                Text("平台通知一键开关")
-                    .font(DesignFonts.body(13, weight: .semibold))
-                    .foregroundStyle(palette.textPrimary.color)
-                let visiblePlatforms = SessionProvider.allCases.filter { p in
-                    switch p {
-                    case .antigravity: store.capabilities.antigravityNotifications
-                    case .grokbot: store.capabilities.grokbotNotifications
-                    case .dsh: store.capabilities.dshNotifications
-                    default: true
-                    }
+            let visiblePlatforms = SessionProvider.allCases.filter { p in
+                switch p {
+                case .antigravity: store.capabilities.antigravityNotifications
+                case .grokbot: store.capabilities.grokbotNotifications
+                case .dsh: store.capabilities.dshNotifications
+                default: true
                 }
-                let platformCols = isNarrow
-                    ? [GridItem(.flexible())]
-                    : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
-                LazyVGrid(columns: platformCols, spacing: 8) {
-                    ForEach(visiblePlatforms) { platform in
-                        let streams = status?.providerNotifications?.first(where: { $0.provider == platform.rawValue })?.streams
-                        HStack(spacing: 8) {
-                            AgentBrandIcon(platform.brand, size: 17)
-                                .foregroundStyle(palette.textPrimary.color)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(platform.label)
-                                    .font(DesignFonts.body(13, weight: .semibold))
-                                    .foregroundStyle(palette.textPrimary.color)
-                                    .lineLimit(1)
-                                if let streams {
-                                    Text("\(streams) 个会话")
-                                        .font(DesignFonts.body(11))
-                                        .foregroundStyle(palette.textMuted.color)
-                                }
-                            }
-                            Spacer(minLength: 4)
-                            CapsuleSwitch(
-                                isOn: Binding(
-                                    get: { d.isPlatformEnabled(platform) },
-                                    set: { val in updateDraft { $0.setPlatformEnabled(platform, enabled: val) } }
-                                ),
-                                label: "\(platform.label) 通知"
-                            )
+            }
+            let platformCols = isNarrow
+                ? [GridItem(.flexible())]
+                : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
+            LazyVGrid(columns: platformCols, spacing: 6) {
+                ForEach(visiblePlatforms) { platform in
+                    let streams = status?.providerNotifications?.first(where: { $0.provider == platform.rawValue })?.streams
+                    HStack(spacing: 7) {
+                        AgentBrandIcon(platform.brand, size: 15)
+                            .foregroundStyle(palette.textPrimary.color)
+                        Text(platform.label)
+                            .font(DesignFonts.body(13, weight: .medium))
+                            .foregroundStyle(palette.textPrimary.color)
+                            .lineLimit(1)
+                        if let streams, streams > 0 {
+                            Text("\(streams)")
+                                .font(DesignFonts.body(11))
+                                .foregroundStyle(palette.textMuted.color)
+                                .lineLimit(1)
                         }
-                        .padding(10)
-                        .background(RoundedRectangle(cornerRadius: 10).fill(palette.elevated.color))
-                        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+                        Spacer(minLength: 4)
+                        CapsuleSwitch(
+                            isOn: Binding(
+                                get: { d.isPlatformEnabled(platform) },
+                                set: { val in updateDraft { $0.setPlatformEnabled(platform, enabled: val) } }
+                            ),
+                            label: "\(platform.label) 通知"
+                        )
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .frame(minHeight: 34)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
+                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.borderStrong.color, lineWidth: 1))
                 }
             }
 
-            // Default-expanded 8 Advanced Parameters Disclosure (styles.css:868)
-            VStack(alignment: .leading, spacing: 10) {
+            let advOpen = disclosureRules.isExpanded(.advanced)
+            VStack(alignment: .leading, spacing: 8) {
                 Button {
-                    advancedSettingsOpen.toggle()
+                    sectionBinding(.advanced).wrappedValue.toggle()
                 } label: {
                     HStack(spacing: 6) {
-                        LucideIcon(advancedSettingsOpen ? .chevronDown : .chevronRight, size: 15)
+                        LucideIcon(advOpen ? .chevronDown : .chevronRight, size: 15)
                             .foregroundStyle(palette.textMuted.color)
                         Text("高级设置")
                             .font(DesignFonts.body(13, weight: .semibold))
                             .foregroundStyle(palette.textSecondary.color)
                         Spacer()
+                        let homeSummary = status?.codexHome ?? (d.codexHome.isEmpty ? "auto" : d.codexHome)
+                        Text("\(d.hostLabel) · \(homeSummary)")
+                            .font(DesignFonts.mono(11))
+                            .foregroundStyle(palette.textMuted.color)
+                            .lineLimit(1)
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, 2)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainHitButtonStyle())
 
-                if advancedSettingsOpen {
+                if advOpen {
                     let advCols = isNarrow
                         ? [GridItem(.flexible())]
                         : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
@@ -350,267 +542,311 @@ public struct ProbeWorkspaceView: View {
                             updateDraft { $0.logMaxMiBText = v }
                         }
                     }
-                }
-            }
-            .padding(.top, 10)
-            .overlay(alignment: .top) {
-                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
-            }
 
-            if let firstError = validationErrors.first {
-                Text(firstError)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.errFg.color)
-            }
-            if saveTarget == "settings", let saveMessage {
-                Text(saveMessage.text)
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
-            }
-
-            Button {
-                Task { await saveSettings(target: "settings") }
-            } label: {
-                HStack(spacing: 6) {
-                    LucideIcon(.checkCircle2, size: 16)
-                    Text("保存设置")
-                }
-            }
-            .buttonStyle(PrimaryButtonStyle())
-            .disabled(saving || !validationErrors.isEmpty)
-        }
-    }
-
-    @ViewBuilder
-    private func barkPanelBody(draft d: ProbeSettingsDraft) -> some View {
-        PanelCard(title: "Bark", icon: .cloud) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 10) {
-                    MetricCard(
-                        label: "通道状态",
-                        value: d.barkEnabled ? "已启用" : "已停用",
-                        tone: d.barkEnabled ? .success : .warning
-                    )
-                    MetricCard(
-                        label: "密钥状态",
-                        value: configuredDeviceKey ? "已配置" : "未配置",
-                        tone: configuredDeviceKey ? .success : .warning
-                    )
-                }
-
-                toggleRow("启用 Bark", isOn: d.barkEnabled) { next in
-                    updateDraft { $0.barkEnabled = next }
-                }
-
-                HStack(spacing: 12) {
-                    labeledField("Bark 服务 URL", placeholder: "https://api.day.app", value: d.barkServerUrl) { v in
-                        updateDraft { $0.barkServerUrl = v }
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Device Key")
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.textMuted.color)
-                        SecureField(
-                            configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key",
-                            text: Binding(
-                                get: { d.barkDeviceKey },
-                                set: { v in updateDraft { $0.barkDeviceKey = v } }
-                            )
-                        )
-                        .textFieldStyle(.plain)
-                        .font(DesignFonts.body(13))
-                        .foregroundStyle(palette.textPrimary.color)
-                        .padding(.horizontal, 10)
-                        .frame(height: LayoutMetrics.formControlHeight)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-
-                FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                    Button {
-                        Task { await saveSettings(target: "bark") }
-                    } label: {
-                        HStack(spacing: 6) {
-                            LucideIcon(.checkCircle2, size: 16)
-                            Text("保存")
-                        }
-                    }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(saving)
-
-                    Button {
-                        Task { await startProbeJob("probe.barkTest", label: "AgentHub 推送测试") }
-                    } label: {
-                        HStack(spacing: 6) {
-                            LucideIcon(.cloud, size: 16)
-                            Text("测试推送")
-                        }
-                    }
-                    .buttonStyle(SecondaryButtonStyle())
-                    .disabled(!configuredDeviceKey || jobBusy)
-                }
-
-                if activeJobAction == "probe.barkTest", let id = activeJobId {
-                    let statusText: String = if let job = store.trackedJobs[id] {
-                        if job.status == "succeeded" {
-                            "Bark 已受理"
-                        } else if job.status == "failed" {
-                            "发送失败，请查看执行记录"
-                        } else {
-                            "正在发送，遇到临时故障将自动重试…"
-                        }
-                    } else {
-                        "正在发送，遇到临时故障将自动重试…"
-                    }
-                    Text(statusText)
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textMuted.color)
-                }
-
-                if saveTarget == "bark", let saveMessage {
-                    Text(saveMessage.text)
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func hostMatrixSection(isNarrow: Bool) -> some View {
-        let cols = isNarrow ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())]
-        LazyVGrid(columns: cols, spacing: 12) {
-            // Codex Host
-            PanelCard(title: "Codex Host", icon: .gitFork) {
-                let hookStatus = status?.hookStatus
-                let managed = (hookStatus == "managed")
-                let actualCount = status?.actualCommands?.count ?? 0
-                let staleCount = status?.staleCommandCount ?? 0
-                let canRemove = managed || actualCount > 0 || staleCount > 0
-                let path = status?.codexHooksPath ?? "未返回路径"
-
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        AgentBrandIcon(.codex, size: 16)
-                        Text("Codex").font(DesignFonts.body(13, weight: .semibold))
-                        Spacer()
-                        Text(path)
-                            .font(DesignFonts.mono(11))
-                            .foregroundStyle(palette.textMuted.color)
-                            .lineLimit(1)
-                    }
-                    HStack(spacing: 8) {
-                        let unavailable = (hookStatus == nil && statusError != nil)
-                        MetricCard(
-                            label: "Codex Hook",
-                            value: unavailable ? "状态未知" : probeStateLabel(hookStatus),
-                            tone: unavailable ? .danger : (managed ? .success : .warning)
-                        )
-                        MetricCard(label: "实际命令", value: "\(actualCount) 条")
-                    }
-                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                        Button(hookStatus == "stale" || hookStatus == "missing" ? "修复 Hook" : managed ? "重新写入 Hook" : "写入通知 Hook") {
-                            pendingHookDialog = ("codex", "Codex", "install", status?.codexHooksPath ?? "")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(jobBusy)
-
-                        Button("移除 Hook") {
-                            pendingHookDialog = ("codex", "Codex", "remove", status?.codexHooksPath ?? "")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(jobBusy || !canRemove)
-                    }
-                }
-            }
-
-            // Claude, Grok, Antigravity Hosts
-            providerHookCard(provider: "claude", brand: .claude, title: "Claude Code Host", name: "Claude Code")
-            providerHookCard(provider: "grok", brand: .grok, title: "Grok Build Host", name: "Grok Build")
-            if store.capabilities.antigravityNotifications {
-                providerHookCard(provider: "antigravity", brand: .antigravity, title: "Antigravity Host", name: "Antigravity")
-            }
-            if store.capabilities.dshNotifications {
-                PanelCard(title: "DeepSeek Harness Host", icon: .gitFork) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            AgentBrandIcon(.dsh, size: 16)
-                            Text("DeepSeek Harness").font(DesignFonts.body(13, weight: .semibold))
-                            Spacer()
-                            Text(status?.dshSessionsPath ?? "原生日志直连")
-                                .font(DesignFonts.mono(11))
-                                .foregroundStyle(palette.textMuted.color)
-                                .lineLimit(1)
-                        }
-                        HStack(spacing: 8) {
-                            MetricCard(label: "接入方式", value: "原生直连", tone: .success)
-                            MetricCard(label: "Hook 配置", value: "无需写入")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func providerHookCard(provider: String, brand: AgentBrandId, title: String, name: String) -> some View {
-        PanelCard(title: title, icon: .gitFork) {
-            if store.target == .remote {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        AgentBrandIcon(brand, size: 16)
-                        Text(name).font(DesignFonts.body(13, weight: .semibold))
-                        Spacer()
-                        Text("远端只读").font(DesignFonts.mono(11)).foregroundStyle(palette.textMuted.color)
-                    }
-                    HStack(spacing: 8) {
-                        MetricCard(label: "Hook 状态", value: "仅限本机")
-                        MetricCard(label: "宿主模式", value: "远端只读轮询")
-                    }
-                }
-            } else {
-                let st = hookStatuses[provider]
-                let hookErr = hookErrors[provider]
-                let installed = st?.installed ?? false
-                let count = st?.managedCount ?? 0
-                let path = st?.configPath ?? (hookErr == nil ? "未返回路径" : "状态不可用")
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        AgentBrandIcon(brand, size: 16)
-                        Text(name).font(DesignFonts.body(13, weight: .semibold))
-                        Spacer()
-                        Text(path).font(DesignFonts.mono(11)).foregroundStyle(palette.textMuted.color).lineLimit(1)
-                    }
-                    HStack(spacing: 8) {
-                        if hookErr != nil {
-                            MetricCard(label: "Hook 状态", value: "读取失败", tone: .danger)
-                        } else {
-                            MetricCard(label: "Hook 状态", value: installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
-                        }
-                        MetricCard(label: "托管条目", value: "\(count) 条")
-                    }
-                    if let hookErr, !hookErr.isEmpty {
-                        Text(hookErr)
+                    if let firstError = settingsValidationErrors.first {
+                        Text(firstError)
                             .font(DesignFonts.body(12))
                             .foregroundStyle(palette.errFg.color)
                     }
-                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
-                        Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
-                            pendingHookDialog = (provider, name, "install", st?.configPath ?? "")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(hookBusy)
-
-                        Button("移除 Hook") {
-                            pendingHookDialog = (provider, name, "remove", st?.configPath ?? "")
-                        }
-                        .buttonStyle(SecondaryButtonStyle())
-                        .disabled(hookBusy || (!installed && count == 0))
-                    }
                 }
             }
+            .padding(.top, 6)
+            .overlay(alignment: .top) {
+                Rectangle().fill(palette.borderSubtle.color).frame(height: 1)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func barkPanelBody(draft: ProbeSettingsDraft?, isNarrow: Bool) -> some View {
+        let trimmedUrl = (draft?.barkServerUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostText: String? = {
+            guard !trimmedUrl.isEmpty else { return nil }
+            return URL(string: trimmedUrl)?.host ?? trimmedUrl
+        }()
+
+        CollapsiblePanelCard(
+            title: "Bark",
+            icon: .cloud,
+            isExpanded: sectionBinding(.bark),
+            summaryBadges: {
+                if let d = draft {
+                    StatusChip(d.barkEnabled ? "已启用" : "已停用", tone: d.barkEnabled ? .success : .neutral)
+                    StatusChip(configuredDeviceKey ? "密钥已配" : "未配密钥", tone: configuredDeviceKey ? .success : .warning)
+                    if let hostText, !hostText.isEmpty {
+                        StatusChip(hostText, tone: .neutral)
+                    }
+                } else {
+                    StatusChip(
+                        loadingStatus ? "读取中" : "不可用",
+                        tone: settingsError == nil ? .neutral : .danger
+                    )
+                }
+            },
+            headerTrailing: {
+                Button {
+                    let rev = store.revision
+                    Task { await startProbeJob("probe.barkTest", label: "AgentHub 推送测试", revision: rev) }
+                } label: {
+                    HStack(spacing: 5) {
+                        LucideIcon(.cloud, size: 15)
+                        Text("测试推送")
+                    }
+                }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(!configuredDeviceKey || jobBusy)
+            }
+        ) {
+            if let d = draft {
+                VStack(alignment: .leading, spacing: 10) {
+                    compactSwitchTile(
+                        label: "启用 Bark",
+                        isOn: Binding(
+                            get: { d.barkEnabled },
+                            set: { next in updateDraft(scope: .bark) { $0.barkEnabled = next } }
+                        )
+                    )
+
+                    let fieldCols = isNarrow
+                        ? [GridItem(.flexible())]
+                        : [GridItem(.flexible()), GridItem(.flexible())]
+                    LazyVGrid(columns: fieldCols, spacing: 12) {
+                        labeledField("Bark 服务 URL", placeholder: "https://api.day.app", value: d.barkServerUrl) { v in
+                            updateDraft(scope: .bark) { $0.barkServerUrl = v }
+                        }
+                        ProbeDraftSecureField(
+                            label: "Device Key",
+                            placeholder: configuredDeviceKey ? "已配置，留空保持不变" : "粘贴 Bark Device Key",
+                            value: d.barkDeviceKey
+                        ) { v in
+                            updateDraft(scope: .bark) { $0.barkDeviceKey = v }
+                        }
+                    }
+
+                    FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                        Button {
+                            Task { await saveSettings(scope: .bark) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                LucideIcon(.checkCircle2, size: 16)
+                                Text(saving && saveTarget == .bark ? "保存中" : "保存")
+                            }
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                        .disabled(saving)
+                    }
+
+                    if activeJobAction == "probe.barkTest", let id = activeJobId {
+                        let statusText: String = if let job = store.trackedJobs[id] {
+                            if job.status == "succeeded" {
+                                "Bark 已受理"
+                            } else if job.status == "failed" {
+                                "发送失败，请查看执行记录"
+                            } else {
+                                "正在发送，遇到临时故障将自动重试…"
+                            }
+                        } else {
+                            "正在发送，遇到临时故障将自动重试…"
+                        }
+                        Text(statusText)
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle(palette.textMuted.color)
+                    }
+
+                    if saveTarget == .bark, let saveMessage {
+                        Text(saveMessage.text)
+                            .font(DesignFonts.body(12))
+                            .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
+                    }
+                }
+            } else {
+                Text(settingsError ?? (loadingStatus ? "正在读取设置" : "设置不可用"))
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle((settingsError == nil ? palette.textMuted : palette.errFg).color)
+            }
+        }
+    }
+    @ViewBuilder
+    private var hostMatrixSection: some View {
+        let entries = visibleHostEntries
+        let readyCount = entries.filter(\.isReady).count
+        let anyError = entries.contains(where: \.hasError)
+        let anyRepair = entries.contains(where: \.needsRepair)
+        let summaryTone: StatusChipTone = if anyError {
+            .danger
+        } else if readyCount == entries.count {
+            .success
+        } else {
+            .warning
+        }
+
+        CollapsiblePanelCard(
+            title: "Hooks 与宿主接入",
+            icon: .gitFork,
+            isExpanded: sectionBinding(.hosts),
+            summaryBadges: {
+                StatusChip("已就绪 \(readyCount)/\(entries.count)", tone: summaryTone)
+                if anyError {
+                    StatusChip("读取失败", tone: .danger)
+                } else if anyRepair {
+                    StatusChip("需修复", tone: .warning)
+                }
+            }
+        ) {
+            VStack(spacing: 0) {
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(palette.borderSubtle.color)
+                            .frame(height: 1)
+                    }
+                    hostEntryRow(entry)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func hostEntryRow(_ entry: HostIntegrationEntry) -> some View {
+        switch entry.kind {
+        case let .codex(hookStatus, actualCount, staleCount, path, unavailable):
+            let managed = (hookStatus == "managed")
+            let canRemove = managed || actualCount > 0 || staleCount > 0
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    AgentBrandIcon(entry.brand, size: 16)
+                    Text(entry.name)
+                        .font(DesignFonts.body(13, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                    StatusChip(
+                        unavailable ? "状态未知" : probeStateLabel(hookStatus),
+                        tone: unavailable ? .danger : (managed ? .success : .warning)
+                    )
+                    StatusChip("\(actualCount) 条命令", tone: .neutral)
+                    Spacer(minLength: 8)
+                    Text(path)
+                        .font(DesignFonts.mono(11))
+                        .foregroundStyle(palette.textMuted.color)
+                        .lineLimit(1)
+                        .help(path)
+                }
+                FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                    Button(hookStatus == "stale" || hookStatus == "missing" ? "修复 Hook" : managed ? "重新写入 Hook" : "写入通知 Hook") {
+                        pendingHookDialog = PendingHookDialog(
+                            provider: "codex",
+                            name: "Codex",
+                            action: "install",
+                            path: status?.codexHooksPath ?? "",
+                            revision: store.revision
+                        )
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(jobBusy)
+
+                    Button("移除 Hook") {
+                        pendingHookDialog = PendingHookDialog(
+                            provider: "codex",
+                            name: "Codex",
+                            action: "remove",
+                            path: status?.codexHooksPath ?? "",
+                            revision: store.revision
+                        )
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(jobBusy || !canRemove)
+                }
+            }
+            .padding(12)
+
+        case let .localProvider(provider, installed, count, path, hookErr):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    AgentBrandIcon(entry.brand, size: 16)
+                    Text(entry.name)
+                        .font(DesignFonts.body(13, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                    if hookErr != nil {
+                        StatusChip("读取失败", tone: .danger)
+                    } else {
+                        StatusChip(installed ? "已安装" : "未安装", tone: installed ? .success : .warning)
+                    }
+                    StatusChip("\(count) 条托管", tone: .neutral)
+                    Spacer(minLength: 8)
+                    Text(path)
+                        .font(DesignFonts.mono(11))
+                        .foregroundStyle(palette.textMuted.color)
+                        .lineLimit(1)
+                        .help(path)
+                }
+                if let hookErr, !hookErr.isEmpty {
+                    Text(hookErr)
+                        .font(DesignFonts.body(12))
+                        .foregroundStyle(palette.errFg.color)
+                }
+                FlowButtonRow(spacing: 8, lineSpacing: 8) {
+                    Button(installed ? "重新写入 Hook" : "写入通知 Hook") {
+                        pendingHookDialog = PendingHookDialog(
+                            provider: provider,
+                            name: entry.name,
+                            action: "install",
+                            path: hookStatuses[provider]?.configPath ?? "",
+                            revision: store.revision
+                        )
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(hookBusy)
+
+                    Button("移除 Hook") {
+                        pendingHookDialog = PendingHookDialog(
+                            provider: provider,
+                            name: entry.name,
+                            action: "remove",
+                            path: hookStatuses[provider]?.configPath ?? "",
+                            revision: store.revision
+                        )
+                    }
+                    .buttonStyle(SecondaryButtonStyle())
+                    .disabled(hookBusy || (!installed && count == 0))
+                }
+            }
+            .padding(12)
+
+        case .remoteReadOnly:
+            HStack(spacing: 8) {
+                AgentBrandIcon(entry.brand, size: 16)
+                Text(entry.name)
+                    .font(DesignFonts.body(13, weight: .semibold))
+                    .foregroundStyle(palette.textPrimary.color)
+                StatusChip("仅限本机", tone: .neutral)
+                StatusChip("远端只读轮询", tone: .info)
+                Spacer(minLength: 8)
+                Text("远端只读")
+                    .font(DesignFonts.mono(11))
+                    .foregroundStyle(palette.textMuted.color)
+            }
+            .padding(12)
+
+        case let .dshDirect(path):
+            HStack(spacing: 8) {
+                AgentBrandIcon(entry.brand, size: 16)
+                Text(entry.name)
+                    .font(DesignFonts.body(13, weight: .semibold))
+                    .foregroundStyle(palette.textPrimary.color)
+                StatusChip("原生直连", tone: .success)
+                StatusChip("无需写入", tone: .neutral)
+                Spacer(minLength: 8)
+                Text(path)
+                    .font(DesignFonts.mono(11))
+                    .foregroundStyle(palette.textMuted.color)
+                    .lineLimit(1)
+                    .help(path)
+            }
+            .padding(12)
         }
     }
 
@@ -626,46 +862,50 @@ public struct ProbeWorkspaceView: View {
             running.map { ($0, "运行中", .info) }
         let top12 = Array(combined.prefix(12))
 
-        PanelCard(title: "实时态势", icon: .activity) {
-            VStack(alignment: .leading, spacing: 10) {
-                if let statusError, !statusError.isEmpty {
-                    Text(statusError)
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.errFg.color)
-                }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("全平台实时态势")
-                            .font(DesignFonts.body(13, weight: .semibold))
-                            .foregroundStyle(palette.textPrimary.color)
-                        Text(status?.hostLabel ?? draft?.hostLabel ?? "本机")
-                            .font(DesignFonts.body(12))
-                            .foregroundStyle(palette.textMuted.color)
-                    }
-                    Spacer()
-                    HStack(spacing: 6) {
-                        StatusChip("运行中 \(running.count)", tone: .info)
-                        StatusChip("待回复 \(replyNeeded.count)", tone: .warning)
-                        StatusChip("异常 \(recoverable.count)", tone: .danger)
-                    }
-                }
+        CollapsiblePanelCard(
+            title: "全平台实时态势",
+            icon: .activity,
+            isExpanded: sectionBinding(.live),
+            summaryBadges: {
+                StatusChip("运行中 \(running.count)", tone: running.isEmpty ? .neutral : .info)
+                StatusChip("待回复 \(replyNeeded.count)", tone: replyNeeded.isEmpty ? .neutral : .warning)
+                StatusChip("异常 \(recoverable.count)", tone: recoverable.isEmpty ? .neutral : .danger)
+            }
+        ) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(status?.hostLabel ?? draft?.hostLabel ?? "本机")
+                    .font(DesignFonts.body(12))
+                    .foregroundStyle(palette.textMuted.color)
 
                 if top12.isEmpty {
                     Text("当前所有已启用平台均无运行中、待回复或异常会话")
                         .font(DesignFonts.body(12))
                         .foregroundStyle(palette.textMuted.color)
                 } else {
-                    ForEach(top12, id: \.session.uniqueKey) { entry in
-                        HStack(spacing: 10) {
-                            Text(entry.session.title ?? entry.session.id)
-                                .font(DesignFonts.body(13, weight: .medium))
-                                .foregroundStyle(palette.textPrimary.color)
-                                .lineLimit(1)
-                            Spacer()
-                            StatusChip(entry.badge, tone: entry.tone)
+                    VStack(spacing: 0) {
+                        ForEach(Array(top12.enumerated()), id: \.element.session.uniqueKey) { index, entry in
+                            if index > 0 {
+                                Rectangle()
+                                    .fill(palette.borderSubtle.color)
+                                    .frame(height: 1)
+                            }
+                            HStack(spacing: 10) {
+                                Text(entry.session.title ?? entry.session.id)
+                                    .font(DesignFonts.body(13, weight: .medium))
+                                    .foregroundStyle(palette.textPrimary.color)
+                                    .lineLimit(1)
+                                Spacer()
+                                StatusChip(entry.badge, tone: entry.tone)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
                         }
-                        .padding(.vertical, 6)
                     }
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.elevated.color))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+                    )
                 }
             }
         }
@@ -673,7 +913,22 @@ public struct ProbeWorkspaceView: View {
 
     @ViewBuilder
     private var recentEventsPanel: some View {
-        PanelCard(title: "最近事件", icon: .terminalSquare) {
+        CollapsiblePanelCard(
+            title: "最近事件",
+            icon: .terminalSquare,
+            isExpanded: sectionBinding(.events),
+            summaryBadges: {
+                if eventsError != nil {
+                    StatusChip("读取失败", tone: .danger)
+                } else if eventsLoaded {
+                    StatusChip("\(events.count) 条", tone: .neutral)
+                    if let latest = events.first {
+                        let bark = ProbeFormatting.barkBadge(latest)
+                        StatusChip(bark.label, tone: bark.tone)
+                    }
+                }
+            }
+        ) {
             if let eventsError, !eventsError.isEmpty {
                 Text(eventsError)
                     .font(DesignFonts.body(12))
@@ -721,21 +976,34 @@ public struct ProbeWorkspaceView: View {
             }
         }
     }
-
     // MARK: - Helpers & Actions
 
-    private func toggleRow(_ label: String, isOn: Bool, onChange: @escaping @MainActor (Bool) -> Void) -> some View {
-        ProbeDraftToggleRow(label: label, value: isOn, onChange: onChange)
+    private func compactSwitchTile(label: String, isOn: Binding<Bool>) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(DesignFonts.body(13, weight: .medium))
+                .foregroundStyle(palette.textPrimary.color)
+            Spacer(minLength: 4)
+            CapsuleSwitch(isOn: isOn, label: label)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .frame(minHeight: 34)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
     }
 
     private func labeledField(_ label: String, placeholder: String, value: String, onChange: @escaping @MainActor (String) -> Void) -> some View {
         ProbeDraftTextField(label: label, placeholder: placeholder, value: value, onChange: onChange)
     }
 
-    private func updateDraft(_ mutate: (inout ProbeSettingsDraft) -> Void) {
-        guard var current = draft else { return }
+    private func updateDraft(scope: ProbeSettingsSaveScope = .settings, _ mutate: (inout ProbeSettingsDraft) -> Void) {
+        guard var current = settingsSync.draft else { return }
         mutate(&current)
-        draft = current
+        if current != settingsSync.draft, saveTarget == scope, saveMessage?.tone == .danger {
+            saveMessage = nil
+        }
+        settingsSync.draft = current
     }
 
     private func probeStateLabel(_ raw: String?) -> String {
@@ -748,22 +1016,62 @@ public struct ProbeWorkspaceView: View {
         }
     }
 
+    private func syncAutoOpenIssues(machineScope: String) {
+        disclosureRules.observeIssue(
+            machineScope: machineScope,
+            section: .hosts,
+            issueSignature: ProbeDisclosureRules.hostsIssueSignature(
+                codexHookStatus: status?.hookStatus,
+                statusError: statusError,
+                hookErrors: hookErrors
+            )
+        )
+        disclosureRules.observeIssue(
+            machineScope: machineScope,
+            section: .live,
+            issueSignature: ProbeDisclosureRules.liveIssueSignature(
+                sessions: status?.activeSessions ?? []
+            )
+        )
+        disclosureRules.observeIssue(
+            machineScope: machineScope,
+            section: .events,
+            issueSignature: ProbeDisclosureRules.eventsIssueSignature(
+                eventsError: eventsError
+            )
+        )
+    }
+
     private func refreshAll(force: Bool) async {
+        let rev = store.revision
+        let scope = store.machineScope
+        refreshToken &+= 1
+        let token = refreshToken
         loadingStatus = true
-        defer { loadingStatus = false }
-        await refreshStatusAndEvents(force: force)
-        do {
-            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get")
-            settingsView = loaded
-            settingsError = nil
-            if draft == nil {
-                draft = ProbeSettingsDraft.from(loaded)
+        defer {
+            if refreshToken == token {
+                loadingStatus = false
             }
-        } catch {
-            settingsError = error.localizedDescription
         }
+        await refreshStatusAndEvents(force: force, boundRevision: rev, boundScope: scope)
+        guard store.revision == rev, refreshToken == token else { return }
+
+        let readFence = settingsSync.beginSettingsRead()
+        do {
+            let loaded: ProbeSettingsView = try await store.rpc("probe.settings.get", at: rev)
+            guard store.revision == rev, refreshToken == token else { return }
+            settingsSync.applyLoadedSettings(loaded, readFence: readFence, revision: rev)
+        } catch {
+            guard store.revision == rev, refreshToken == token else { return }
+            settingsSync.applySettingsReadError(error.localizedDescription, readFence: readFence)
+        }
+
         if store.target == .local {
-            for provider in ["claude", "grok", "antigravity"] {
+            var providers = ["claude", "grok"]
+            if store.capabilities.antigravityNotifications {
+                providers.append("antigravity")
+            }
+            for provider in providers {
                 do {
                     let st: ClaudeHooksStatus = try await store.rpc(
                         "claude.hooks",
@@ -771,11 +1079,14 @@ public struct ProbeWorkspaceView: View {
                             "request": .object(["action": .string("status"), "confirmed": .bool(false)]),
                             "provider": .string(provider),
                         ],
-                        localOnly: true
+                        localOnly: true,
+                        at: rev
                     )
+                    guard store.revision == rev, refreshToken == token else { return }
                     hookStatuses[provider] = st
                     hookErrors.removeValue(forKey: provider)
                 } catch {
+                    guard store.revision == rev, refreshToken == token else { return }
                     hookStatuses.removeValue(forKey: provider)
                     hookErrors[provider] = error.localizedDescription
                 }
@@ -784,14 +1095,23 @@ public struct ProbeWorkspaceView: View {
             hookStatuses.removeAll()
             hookErrors.removeAll()
         }
+        syncAutoOpenIssues(machineScope: scope)
     }
 
-    private func refreshStatusAndEvents(force: Bool = false) async {
+    private func refreshStatusAndEvents(
+        force: Bool = false,
+        boundRevision: UInt64? = nil,
+        boundScope: String? = nil
+    ) async {
+        let rev = boundRevision ?? store.revision
+        let scope = boundScope ?? store.machineScope
         do {
             let st: ProbeStatus = try await store.rpc(
                 "probe.status",
-                args: force ? ["refresh": .bool(true)] : [:]
+                args: force ? ["refresh": .bool(true)] : [:],
+                at: rev
             )
+            guard store.revision == rev else { return }
             if st.available == false {
                 status = nil
                 statusError = st.error ?? "Probe 状态不可用"
@@ -800,75 +1120,124 @@ public struct ProbeWorkspaceView: View {
                 statusError = nil
             }
         } catch {
+            guard store.revision == rev else { return }
             statusError = error.localizedDescription
         }
+
         do {
             let ev: ProbeEventsResponse = try await store.rpc(
                 "probe.events",
-                args: ["limit": .number(10)]
+                args: ["limit": .number(10)],
+                at: rev
             )
+            guard store.revision == rev else { return }
             eventsLoaded = true
             eventsError = nil
             events = ev.events
         } catch {
+            guard store.revision == rev else { return }
             eventsError = error.localizedDescription
         }
+        syncAutoOpenIssues(machineScope: scope)
     }
 
-    private func saveSettings(target: String) async {
-        guard let currentDraft = draft, !saving else { return }
-        saving = true
-        saveTarget = target
+    private func saveSettings(scope: ProbeSettingsSaveScope) async {
+        guard let submittedDraft = settingsSync.draft, !saving, store.revision == settingsSync.draftRevision else { return }
+        let boundRevision = settingsSync.draftRevision
+        let epoch = machineEpoch
+        saveTarget = scope
         saveMessage = nil
-        defer { saving = false }
+
+        if scope == .settings {
+            let errs = submittedDraft.validationErrors(for: .settings)
+            if let first = errs.first {
+                disclosureRules.resetIfMachineChanged(store.machineScope)
+                disclosureRules.setExpanded(.advanced, true)
+                saveMessage = (.danger, first)
+                return
+            }
+        }
+
+        saving = true
+        defer {
+            if machineEpoch == epoch {
+                saving = false
+            }
+        }
         do {
-            let payload = try currentDraft.buildSavePayload()
+            let payload = try submittedDraft.buildSavePayload(for: scope)
             let saved: ProbeSettingsView = try await store.rpc(
                 "probe.settings.save",
-                args: ["settings": .object(payload)], at: sourceRevision
+                args: ["settings": .object(payload)],
+                at: boundRevision
             )
-            settingsView = saved
-            settingsError = nil
-            var refreshed = ProbeSettingsDraft.from(saved)
-            if !currentDraft.barkDeviceKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                refreshed.barkDeviceKeyConfigured = true
-            }
-            if draft == currentDraft { draft = refreshed }
+            guard store.revision == boundRevision, machineEpoch == epoch else { return }
+            settingsSync.applySavedSettings(
+                saved,
+                submittedDraft: submittedDraft,
+                scope: scope,
+                revision: boundRevision
+            )
             saveMessage = (.success, "设置已保存")
         } catch {
+            guard store.revision == boundRevision, machineEpoch == epoch else { return }
             saveMessage = (.danger, error.localizedDescription)
+            if scope == .bark {
+                disclosureRules.observeIssue(
+                    machineScope: store.machineScope,
+                    section: .bark,
+                    issueSignature: "saveErr:\(error.localizedDescription)"
+                )
+            }
         }
     }
 
-    private func startProbeJob(_ command: String, label: String) async {
-        guard !jobBusy else { return }
+    private func startProbeJob(_ command: String, label: String, revision: UInt64) async {
+        guard !jobBusy, store.revision == revision else { return }
+        let epoch = machineEpoch
         startingJob = true
-        defer { startingJob = false }
+        defer {
+            if machineEpoch == epoch {
+                startingJob = false
+            }
+        }
         actionMessage = nil
         activeJobAction = command
         do {
-            let res: StartedJobResponse = try await store.rpc(command, at: sourceRevision)
+            let res: StartedJobResponse = try await store.rpc(command, at: revision)
+            guard store.revision == revision, machineEpoch == epoch else { return }
             activeJobId = res.jobId
             store.trackStartedJob(res.jobId)
             if command == "probe.installHooks" || command == "probe.removeHooks" {
-                draft?.manageStopHook = command == "probe.installHooks"
+                settingsSync.applyHookManageFlag(command == "probe.installHooks")
             }
             if command != "probe.barkTest" {
                 actionMessage = (.success, "\(label) 已开始")
             }
         } catch {
+            guard store.revision == revision, machineEpoch == epoch else { return }
             actionMessage = (.danger, "\(label) 失败: \(error.localizedDescription)")
         }
     }
 
-    private func executeHookDialog(_ dialog: (provider: String, name: String, action: String, path: String)) async {
+    private func executeHookDialog(_ dialog: PendingHookDialog) async {
+        guard store.revision == dialog.revision else { return }
         if dialog.provider == "codex" {
             let cmd = dialog.action == "install" ? "probe.installHooks" : "probe.removeHooks"
-            await startProbeJob(cmd, label: dialog.action == "install" ? "写入 Codex Hook" : "移除 Codex Hook")
+            await startProbeJob(
+                cmd,
+                label: dialog.action == "install" ? "写入 Codex Hook" : "移除 Codex Hook",
+                revision: dialog.revision
+            )
             return
         }
+        let epoch = machineEpoch
         hookBusy = true
-        defer { hookBusy = false }
+        defer {
+            if machineEpoch == epoch {
+                hookBusy = false
+            }
+        }
         do {
             let st: ClaudeHooksStatus = try await store.rpc(
                 "claude.hooks",
@@ -876,59 +1245,16 @@ public struct ProbeWorkspaceView: View {
                     "request": .object(["action": .string(dialog.action), "confirmed": .bool(true)]),
                     "provider": .string(dialog.provider),
                 ],
-                localOnly: true, at: sourceRevision
+                localOnly: true,
+                at: dialog.revision
             )
+            guard store.revision == dialog.revision, machineEpoch == epoch else { return }
             hookStatuses[dialog.provider] = st
             hookErrors.removeValue(forKey: dialog.provider)
             actionMessage = (.success, "\(dialog.name) Hook 已更新")
         } catch {
+            guard store.revision == dialog.revision, machineEpoch == epoch else { return }
             actionMessage = (.danger, error.localizedDescription)
-        }
-    }
-}
-
-public struct AnyButtonStyle: ButtonStyle {
-    private let makeBodyClosure: (Configuration) -> AnyView
-
-    public init<S: ButtonStyle>(_ style: S) {
-        self.makeBodyClosure = { config in AnyView(style.makeBody(configuration: config)) }
-    }
-
-    public func makeBody(configuration: Configuration) -> some View {
-        makeBodyClosure(configuration)
-    }
-}
-
-private struct ProbeDraftToggleRow: View {
-    @Environment(\.agentHubPalette) private var palette
-    let label: String
-    let value: Bool
-    let onChange: @MainActor (Bool) -> Void
-    @State private var localValue: Bool
-
-    init(label: String, value: Bool, onChange: @escaping @MainActor (Bool) -> Void) {
-        self.label = label
-        self.value = value
-        self.onChange = onChange
-        self._localValue = State(initialValue: value)
-    }
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(DesignFonts.body(13))
-                .foregroundStyle(palette.textPrimary.color)
-            Spacer()
-            CapsuleSwitch(isOn: $localValue, label: label)
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderSubtle.color, lineWidth: 1))
-        .onChange(of: value) { next in
-            if localValue != next { localValue = next }
-        }
-        .onChange(of: localValue) { next in
-            if next != value { onChange(next) }
         }
     }
 }
@@ -963,6 +1289,46 @@ private struct ProbeDraftTextField: View {
                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
         }
+        .onChange(of: value) { next in
+            if localText != next { localText = next }
+        }
+        .onChange(of: localText) { next in
+            if next != value { onChange(next) }
+        }
+    }
+}
+
+private struct ProbeDraftSecureField: View {
+    @Environment(\.agentHubPalette) private var palette
+    let label: String
+    let placeholder: String
+    let value: String
+    let onChange: @MainActor (String) -> Void
+    @State private var localText: String
+
+    init(label: String, placeholder: String, value: String, onChange: @escaping @MainActor (String) -> Void) {
+        self.label = label
+        self.placeholder = placeholder
+        self.value = value
+        self.onChange = onChange
+        self._localText = State(initialValue: value)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label)
+                .font(DesignFonts.body(12))
+                .foregroundStyle(palette.textMuted.color)
+            SecureField(placeholder, text: $localText)
+                .textFieldStyle(.plain)
+                .font(DesignFonts.body(13))
+                .foregroundStyle(palette.textPrimary.color)
+                .padding(.horizontal, 10)
+                .frame(height: LayoutMetrics.formControlHeight)
+                .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+        }
+        .frame(maxWidth: .infinity)
         .onChange(of: value) { next in
             if localText != next { localText = next }
         }

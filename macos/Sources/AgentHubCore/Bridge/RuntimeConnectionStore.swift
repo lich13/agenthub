@@ -385,6 +385,29 @@ public final class RuntimeConnectionStore: ObservableObject {
         startJobPollingIfNeeded()
     }
 
+    public func isTrackedJobActive(_ id: String) -> Bool {
+        if let job = trackedJobs[id] {
+            return !job.isTerminal
+        }
+        return trackedJobOrder.contains(id)
+    }
+
+    private static func missingTrackedJobRecord(id: String, previous: JobRecord?) -> JobRecord {
+        let nowSec = Int64(Date().timeIntervalSince1970)
+        return JobRecord(
+            id: id,
+            kind: previous?.kind ?? "missing",
+            status: "failed",
+            title: previous?.title ?? id,
+            startedAt: previous?.startedAt ?? nowSec,
+            finishedAt: previous?.finishedAt ?? nowSec,
+            exitCode: previous?.exitCode,
+            output: previous?.output,
+            error: "作业记录不存在或已清理",
+            failureAnalysis: previous?.failureAnalysis
+        )
+    }
+
     private func startJobPollingIfNeeded() {
         guard jobPollingTask == nil else { return }
         let sourceRevision = revision
@@ -400,11 +423,30 @@ public final class RuntimeConnectionStore: ObservableObject {
                 }
                 for id in activeIds {
                     guard self.revision == sourceRevision, !Task.isCancelled else { return }
-                    if let job: JobRecord? = try? await self.rpc(
-                        "jobs.detail",
-                        args: ["id": .string(id), "includeOutput": .bool(false)]
-                    ), let job {
-                        self.trackedJobs[id] = job
+                    do {
+                        let job: JobRecord? = try await self.rpc(
+                            "jobs.detail",
+                            args: ["id": .string(id), "includeOutput": .bool(false)],
+                            at: sourceRevision
+                        )
+                        if let job {
+                            self.trackedJobs[id] = job
+                        } else {
+                            self.trackedJobs[id] = Self.missingTrackedJobRecord(
+                                id: id,
+                                previous: self.trackedJobs[id]
+                            )
+                            self.trackedJobOrder.removeAll { $0 == id }
+                        }
+                    } catch {
+                        let lower = error.localizedDescription.lowercased()
+                        if lower.contains("job not found") {
+                            self.trackedJobs[id] = Self.missingTrackedJobRecord(
+                                id: id,
+                                previous: self.trackedJobs[id]
+                            )
+                            self.trackedJobOrder.removeAll { $0 == id }
+                        }
                     }
                 }
                 try? await Task.sleep(nanoseconds: 2_000_000_000)

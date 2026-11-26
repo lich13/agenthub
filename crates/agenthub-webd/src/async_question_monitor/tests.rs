@@ -312,7 +312,7 @@ async fn save_enable_then_immediate_question_survives_first_poll_and_stale_sourc
             &fixture.db,
             ProbeSettingsSavePlan {
                 config_patch: serde_json::from_value(json!({"probe":{"enabled":enabled}})).unwrap(),
-                secret_writes: vec![],
+                secret_write: None,
             },
         )
         .unwrap()
@@ -357,4 +357,78 @@ async fn save_enable_then_immediate_question_survives_first_poll_and_stale_sourc
         .await
         .unwrap();
     assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn parent_dir_permission_denial_preserves_markers_and_unreadable_bark_row_does_not_block_monitor(
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new(StatusCode::OK).await;
+    fixture.question("call-perm");
+    run(&fixture.config, &fixture.db).await.unwrap();
+    assert_eq!(fixture.requests.lock().unwrap().len(), 1);
+    let expected_key = delivery_key(&fixture.event("call-perm")).unwrap();
+    let markers_before = fixture
+        .db
+        .get_setting("probe_active_unresolved_markers:async_question")
+        .unwrap()
+        .unwrap();
+    assert!(markers_before.contains(&expected_key));
+
+    // 1. `chmod 000` on `sessions/` makes `rollout.exists()` return `false` (`EACCES`),
+    //    yet `async_question_monitor` must treat it as transient and preserve active markers.
+    let sessions_dir = fixture.config.codex.home.join("sessions");
+    let orig_perm = fs::metadata(&sessions_dir).unwrap().permissions();
+    fs::set_permissions(&sessions_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    let probe_open = fs::symlink_metadata(sessions_dir.join("rollout.jsonl"));
+    let enforced = matches!(
+        probe_open,
+        Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied
+    );
+    run(&fixture.config, &fixture.db).await.unwrap();
+    fs::set_permissions(&sessions_dir, orig_perm).unwrap();
+    if enforced {
+        let markers_after = fixture
+            .db
+            .get_setting("probe_active_unresolved_markers:async_question")
+            .unwrap()
+            .unwrap();
+        assert_eq!(markers_after, markers_before);
+    }
+
+    // 2. Stage an unreadable Bark row under a different SecretBox key (with 0 valid pending Bark rows)
+    //    and verify `run_probe_error_monitor_once` still runs `async_question_monitor` for a new question.
+    let wrong_db = PanelDb::open_with_secret_box(
+        fixture.root.join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"99".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    wrong_db
+        .stage_notification_delivery(
+            agenthub_core::db::NotificationChannel::Bark,
+            "corrupt-unreadable-row",
+            jiff::Timestamp::now().as_millisecond(),
+            &json!({"title":"bad"}),
+        )
+        .unwrap();
+
+    let mut monitor_config = fixture.config.clone();
+    monitor_config.probe.error_monitor.enabled = false;
+    monitor_config.probe.notifications.notify_claude = false;
+    monitor_config.probe.notifications.notify_grok = false;
+    monitor_config.probe.notifications.notify_grokbot = false;
+    monitor_config.probe.notifications.notify_antigravity = false;
+    monitor_config.probe.notifications.notify_dsh = false;
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    fixture.question("call-after-unreadable");
+    crate::run_probe_error_monitor_once(&fixture.db, &|| Ok(monitor_config.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        2,
+        "unreadable Bark row must not abort subsequent monitor passes"
+    );
 }

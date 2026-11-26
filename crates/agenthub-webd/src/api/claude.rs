@@ -1,15 +1,12 @@
 use super::{ok, ApiResponse};
 use crate::state::AppState;
-use agenthub_core::{claude::ClaudeDeleteRequest, services::use_cases::AgentHubUseCases};
+use agenthub_core::{
+    claude::ClaudeDeleteRequest,
+    services::use_cases::{AgentHubUseCases, QueryLimitRequest},
+};
 use serde::Deserialize;
 
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct ClaudeListQuery {
-    pub q: Option<String>,
-    pub limit: Option<usize>,
-}
-
-pub(crate) async fn claude_list(state: AppState, query: ClaudeListQuery) -> ApiResponse {
+pub(crate) async fn claude_list(state: AppState, query: QueryLimitRequest) -> ApiResponse {
     let platform = state.platform().clone();
     ok(agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(&platform)

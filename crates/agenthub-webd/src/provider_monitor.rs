@@ -1094,7 +1094,7 @@ mod tests {
                     serde_json::json!({"probe":{"notifications":{"enabled":true}}}),
                 )
                 .unwrap(),
-                secret_writes: vec![],
+                secret_write: None,
             },
         )
         .unwrap();

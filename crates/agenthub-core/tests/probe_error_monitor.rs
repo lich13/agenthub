@@ -435,7 +435,7 @@ fn reenabled_error_monitor_baselines_at_first_scan_without_replaying_disabled_er
         ProbeSettingsSavePlan {
             config_patch: serde_json::from_value(serde_json::json!({"probe":{"enabled":true}}))
                 .unwrap(),
-            secret_writes: vec![],
+            secret_write: None,
         },
     )
     .unwrap();

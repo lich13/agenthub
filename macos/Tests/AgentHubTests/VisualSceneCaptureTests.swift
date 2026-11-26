@@ -120,10 +120,79 @@ final class VisualSceneCaptureTests: XCTestCase {
         try await pumpMainRunLoop(ms: 200)
         try captureWindow(window, host: host, to: "\(outDir)/swift-06-claude-expanded.png")
 
-        // Scene 7: Probe Workspace
+        // Scene 7: Probe Workspace (Light & Dark × Default Collapsed / All-Expanded / Error Banner)
+        store.setTheme(.light)
+        window.appearance = NSAppearance(named: .aqua)
         store.activeWorkspace = .probe
         try await pumpMainRunLoop(ms: 450)
         try captureWindow(window, host: host, to: "\(outDir)/swift-07-probe-light.png")
+
+        store.setTheme(.dark)
+        window.appearance = NSAppearance(named: .darkAqua)
+        try await pumpMainRunLoop(ms: 350)
+        try captureWindow(window, host: host, to: "\(outDir)/swift-07b-probe-dark.png")
+
+        // Standalone 1280x960 all-expanded Probe captures (Light & Dark)
+        let expandedSize = NSSize(width: 1280, height: 1120)
+        for (expScheme, expAppearance, expFile) in [
+            (ColorSchemeKind.light, NSAppearance.Name.aqua, "swift-07c-probe-light-expanded.png"),
+            (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "swift-07d-probe-dark-expanded.png"),
+        ] {
+            let expWin = NSWindow(
+                contentRect: NSRect(origin: .zero, size: expandedSize),
+                styleMask: [.borderless],
+                backing: .buffered,
+                defer: false
+            )
+            expWin.appearance = NSAppearance(named: expAppearance)
+            let expPalette = DesignPalette.resolve(scheme: expScheme, workspace: .probe)
+            let expHost = NSHostingView(
+                rootView: ProbeWorkspaceView(
+                    store: store,
+                    initialOpenSections: Set(ProbeDisclosureSection.allCases)
+                )
+                .environment(\.agentHubPalette, expPalette)
+                .frame(width: expandedSize.width, height: expandedSize.height)
+            )
+            expHost.frame = NSRect(origin: .zero, size: expandedSize)
+            expWin.contentView = expHost
+            expWin.orderBack(nil)
+            try await pumpMainRunLoop(ms: 350)
+            try captureWindow(expWin, host: expHost, to: "\(outDir)/\(expFile)")
+            expWin.orderOut(nil)
+        }
+
+        // Standalone 960x680 narrow Probe error banner capture
+        let errTransport = MockRuntimeTransport { cmd, args in
+            if cmd == "probe.status" {
+                throw AgentHubFFIError("Probe 状态读取失败：模拟远端服务暂不可用")
+            }
+            return Self.mockResponse(cmd: cmd, args: args)
+        }
+        let errStore = RuntimeConnectionStore(transport: errTransport, defaults: defaults)
+        await errStore.bootstrap()
+        let errSize = NSSize(width: 960, height: 680)
+        let errWin = NSWindow(
+            contentRect: NSRect(origin: .zero, size: errSize),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        errWin.appearance = NSAppearance(named: .aqua)
+        let errHost = NSHostingView(
+            rootView: ProbeWorkspaceView(store: errStore)
+                .environment(\.agentHubPalette, DesignPalette.resolve(scheme: .light, workspace: .probe))
+                .frame(width: errSize.width, height: errSize.height)
+        )
+        errHost.frame = NSRect(origin: .zero, size: errSize)
+        errWin.contentView = errHost
+        errWin.orderBack(nil)
+        try await pumpMainRunLoop(ms: 350)
+        try captureWindow(errWin, host: errHost, to: "\(outDir)/swift-07e-probe-error-banner.png")
+        errWin.orderOut(nil)
+
+        store.setTheme(.light)
+        window.appearance = NSAppearance(named: .aqua)
 
         // Scene 8: Settings Workspace
         store.activeWorkspace = .ops
@@ -402,7 +471,7 @@ final class VisualSceneCaptureTests: XCTestCase {
         case "probe.events":
             return Data(#"{"limit":10,"events":[]}"#.utf8)
         case "github.ci.status":
-            return Data(#"{"account":{"id":1,"login":"octocat"},"enabled":true,"refreshing":false,"error":null,"last_scan_ms":1732017600000,"selected_repositories":["octocat/AgentHub"],"repositories":[{"id":1,"full_name":"octocat/AgentHub","archived":false},{"id":2,"full_name":"octocat/swift-kit","archived":false}],"runs":[{"id":101,"run_attempt":1,"name":"Build and validate macOS Swift 6 native bundle","head_branch":"feat/macos-swift-native","head_sha":"c008e00a","status":"completed","conclusion":"success","html_url":"https://example.invalid/runs/101","created_at":"2026-11-19T11:50:00Z","updated_at":"2026-11-19T11:58:00Z","repository_id":1,"repository_name":"octocat/AgentHub","is_bot":false}]}"#.utf8)
+            return Data(#"{"account":{"id":1,"login":"octocat"},"enabled":true,"refreshing":false,"error":null,"last_scan_ms":1732017600000,"monitored_repositories":["octocat/AgentHub"],"repositories":[{"id":1,"full_name":"octocat/AgentHub","archived":false},{"id":2,"full_name":"octocat/swift-kit","archived":false}],"runs":[{"id":101,"run_attempt":1,"name":"Build and validate macOS Swift 6 native bundle","head_branch":"feat/macos-swift-native","head_sha":"c008e00a","status":"completed","conclusion":"success","html_url":"https://example.invalid/runs/101","created_at":"2026-11-19T11:50:00Z","updated_at":"2026-11-19T11:58:00Z","repository_id":1,"repository_name":"octocat/AgentHub","is_bot":false}]}"#.utf8)
         case "claude.hooks":
             return Data(#"{"installed":true,"managedCount":2,"changed":false,"configPath":"~/.claude/settings.json"}"#.utf8)
         case "updates.status":

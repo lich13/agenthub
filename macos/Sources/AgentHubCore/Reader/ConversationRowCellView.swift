@@ -26,6 +26,7 @@ public final class ConversationRowCellView: NSTableCellView {
         let workspace: WorkspaceId
         let disclosureRev: UInt64
         let scrollerStyle: NSScroller.Style
+        let loadedAttachmentState: ConversationTableCoordinator.LoadedAttachmentState
     }
 
     private var lastConfiguredSignature: CellConfigSignature?
@@ -138,7 +139,8 @@ public final class ConversationRowCellView: NSTableCellView {
             scheme: coordinator.scheme,
             workspace: coordinator.workspace,
             disclosureRev: coordinator.disclosureStore.revision,
-            scrollerStyle: ConversationTableCoordinator.effectiveScrollerStyle
+            scrollerStyle: ConversationTableCoordinator.effectiveScrollerStyle,
+            loadedAttachmentState: coordinator.loadedAttachmentState(for: item)
         )
         if lastConfiguredSignature == nextSig, !containerStack.arrangedSubviews.isEmpty {
             positionFloatingCopyButton()
@@ -239,8 +241,7 @@ public final class ConversationRowCellView: NSTableCellView {
     ) {
         let palette = coordinator.palette
         let body = msg?.text ?? rawText
-        let proj = UserContextEngine.projectUserMessage(body, contextBlocks: msg?.contextBlocks)
-        let segs = UserContextEngine.userMessageSegments(proj.text, contextBlocks: proj.contextBlocks)
+        let (proj, segs) = UserContextEngine.projectAndSegmentUserMessage(body, contextBlocks: msg?.contextBlocks)
         let identity = msg?.id ?? item.timelineId
 
         let rightAlignRow = NSStackView()
@@ -251,49 +252,73 @@ public final class ConversationRowCellView: NSTableCellView {
         rightAlignRow.widthAnchor.constraint(equalToConstant: width).isActive = true
 
         if let attachments = msg?.attachments, !attachments.isEmpty {
-            let attRow = NSStackView()
-            attRow.orientation = .horizontal
-            attRow.spacing = 8
-            for att in attachments {
-                if !namesOnly && att.kind == "image" {
-                    let key = "\(coordinator.sessionScopeKey):\(msg?.id ?? item.id):\(att.id)"
-                    let thumbBtn = ActionButton(frame: NSRect(x: 0, y: 0, width: 96, height: 96))
-                    thumbBtn.wantsLayer = true
-                    thumbBtn.layer?.cornerRadius = 12
-                    thumbBtn.layer?.masksToBounds = true
-                    thumbBtn.layer?.backgroundColor = palette.surface.nsColor.cgColor
-                    thumbBtn.layer?.borderWidth = 1
-                    thumbBtn.layer?.borderColor = palette.borderStrong.nsColor.cgColor
-                    thumbBtn.translatesAutoresizingMaskIntoConstraints = false
-                    thumbBtn.widthAnchor.constraint(equalToConstant: 96).isActive = true
-                    thumbBtn.heightAnchor.constraint(equalToConstant: 96).isActive = true
-                    if att.reason == nil, let img = coordinator.attachmentViewport.image(for: key) {
-                        thumbBtn.image = img
-                        thumbBtn.imageScaling = .scaleProportionallyUpOrDown
-                        thumbBtn.title = ""
-                        thumbBtn.toolTip = att.name
-                        thumbBtn.onTap = { [weak coordinator] in
-                            coordinator?.onPreviewImage?(att.name, img)
+            let wrappedRows = ConversationTableCoordinator.layoutUserAttachmentRows(
+                attachments: attachments,
+                namesOnly: namesOnly,
+                maxWidth: width
+            )
+            let attGroupCol = NSStackView()
+            attGroupCol.orientation = .vertical
+            attGroupCol.alignment = .trailing
+            attGroupCol.spacing = 8
+            attGroupCol.translatesAutoresizingMaskIntoConstraints = false
+
+            for rowItems in wrappedRows {
+                let attRow = NSStackView()
+                attRow.orientation = .horizontal
+                attRow.alignment = .centerY
+                attRow.spacing = 8
+                for entry in rowItems {
+                    let att = entry.attachment
+                    if !namesOnly && att.kind == "image" {
+                        let key = "\(coordinator.sessionScopeKey):\(msg?.id ?? item.id):\(att.id)"
+                        let thumbBtn = ActionButton(frame: NSRect(x: 0, y: 0, width: 96, height: 96))
+                        thumbBtn.wantsLayer = true
+                        thumbBtn.layer?.cornerRadius = 12
+                        thumbBtn.layer?.masksToBounds = true
+                        thumbBtn.layer?.backgroundColor = palette.surface.nsColor.cgColor
+                        thumbBtn.layer?.borderWidth = 1
+                        thumbBtn.layer?.borderColor = palette.borderStrong.nsColor.cgColor
+                        thumbBtn.translatesAutoresizingMaskIntoConstraints = false
+                        thumbBtn.widthAnchor.constraint(equalToConstant: 96).isActive = true
+                        thumbBtn.heightAnchor.constraint(equalToConstant: 96).isActive = true
+                        if att.reason == nil, let img = coordinator.attachmentViewport.image(for: key) {
+                            thumbBtn.image = img
+                            thumbBtn.imageScaling = .scaleProportionallyUpOrDown
+                            thumbBtn.title = ""
+                            thumbBtn.toolTip = att.name
+                            thumbBtn.onTap = { [weak coordinator] in
+                                coordinator?.onPreviewImage?(att.name, img)
+                            }
+                        } else {
+                            thumbBtn.image = LucideVectorCatalog.nsImage(
+                                for: .imageOff,
+                                size: 22,
+                                color: palette.textMuted.nsColor
+                            )
+                            thumbBtn.imagePosition = .imageAbove
+                            thumbBtn.font = DesignFonts.nsBodyFont(size: 11)
+                            thumbBtn.contentTintColor = palette.textMuted.nsColor
+                            thumbBtn.title = (att.reason != nil) ? "图片不可用" : "图片"
+                            thumbBtn.toolTip = att.reason ?? att.name
+                            thumbBtn.isEnabled = false
                         }
+                        attRow.addArrangedSubview(thumbBtn)
                     } else {
-                        thumbBtn.image = LucideVectorCatalog.nsImage(
-                            for: .imageOff,
-                            size: 22,
-                            color: palette.textMuted.nsColor
+                        attRow.addArrangedSubview(
+                            makeFileAttachmentCard(
+                                att: att,
+                                namesOnly: namesOnly,
+                                size: entry.size,
+                                palette: palette,
+                                coordinator: coordinator
+                            )
                         )
-                        thumbBtn.imagePosition = .imageAbove
-                        thumbBtn.font = DesignFonts.nsBodyFont(size: 11)
-                        thumbBtn.contentTintColor = palette.textMuted.nsColor
-                        thumbBtn.title = (att.reason != nil) ? "图片不可用" : "图片"
-                        thumbBtn.toolTip = att.reason ?? att.name
-                        thumbBtn.isEnabled = false
                     }
-                    attRow.addArrangedSubview(thumbBtn)
-                } else {
-                    attRow.addArrangedSubview(makeFileAttachmentCard(att: att, namesOnly: namesOnly, palette: palette, coordinator: coordinator))
                 }
+                attGroupCol.addArrangedSubview(attRow)
             }
-            rightAlignRow.addArrangedSubview(attRow)
+            rightAlignRow.addArrangedSubview(attGroupCol)
         }
 
         let maxBubbleW = max(140, min(width * 0.85, 640))
@@ -611,6 +636,7 @@ public final class ConversationRowCellView: NSTableCellView {
     private func makeFileAttachmentCard(
         att: UserAttachment,
         namesOnly: Bool,
+        size: NSSize,
         palette: DesignPalette,
         coordinator: ConversationTableCoordinator
     ) -> NSView {
@@ -618,12 +644,17 @@ public final class ConversationRowCellView: NSTableCellView {
         card.orientation = .horizontal
         card.alignment = .centerY
         card.spacing = 8
+        card.translatesAutoresizingMaskIntoConstraints = false
         card.wantsLayer = true
         card.layer?.cornerRadius = 12
         card.layer?.backgroundColor = palette.surface.nsColor.cgColor
         card.layer?.borderWidth = 1
         card.layer?.borderColor = palette.borderStrong.nsColor.cgColor
         card.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 10)
+        NSLayoutConstraint.activate([
+            card.widthAnchor.constraint(equalToConstant: size.width),
+            card.heightAnchor.constraint(equalToConstant: size.height),
+        ])
 
         let iconView = NSImageView(
             image: LucideVectorCatalog.nsImage(for: .file, size: 18, color: palette.textSecondary.nsColor)
@@ -639,9 +670,12 @@ public final class ConversationRowCellView: NSTableCellView {
         textCol.orientation = .vertical
         textCol.alignment = .leading
         textCol.spacing = 2
+        textCol.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         if !namesOnly, let rawPath = att.path, !rawPath.isEmpty {
             let linkBtn = ActionButton()
+            linkBtn.lineBreakMode = .byTruncatingTail
+            linkBtn.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             let attrTitle = NSAttributedString(
                 string: att.name,
                 attributes: [
@@ -661,6 +695,8 @@ public final class ConversationRowCellView: NSTableCellView {
             let nameLbl = NSTextField(labelWithString: att.name)
             nameLbl.font = DesignFonts.nsBodyFont(size: 14)
             nameLbl.textColor = palette.textPrimary.nsColor
+            nameLbl.lineBreakMode = .byTruncatingTail
+            nameLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             textCol.addArrangedSubview(nameLbl)
         }
 
@@ -668,6 +704,8 @@ public final class ConversationRowCellView: NSTableCellView {
             let reasonLbl = NSTextField(labelWithString: reason)
             reasonLbl.font = DesignFonts.nsBodyFont(size: 11)
             reasonLbl.textColor = palette.textMuted.nsColor
+            reasonLbl.lineBreakMode = .byTruncatingTail
+            reasonLbl.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
             textCol.addArrangedSubview(reasonLbl)
         }
         card.addArrangedSubview(textCol)

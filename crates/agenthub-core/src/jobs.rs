@@ -135,8 +135,13 @@ async fn run_process_command(
         }
     }
     let status = status?;
-    drain_result?;
     let code = status.code();
+    if let Err(err) = drain_result {
+        let message = redact_output(&err.to_string());
+        let _ = db.append_job_output(job_id, &format!("\nerror: {message}\n"));
+        db.finish_job(job_id, "failed", code, Some(&message))?;
+        return Ok("failed");
+    }
     let status_text = if status.success() {
         "succeeded"
     } else {

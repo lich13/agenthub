@@ -25,7 +25,7 @@ pub(super) async fn handle_probe_settings_save(state: AppState, args: Value) -> 
 
 pub(super) async fn handle_probe_events(state: AppState, args: Value) -> ApiResponse {
     let query = if args.is_null() {
-        ProbeEventsQuery::default()
+        LimitU32Request::default()
     } else {
         rpc_payload(&args)?
     };
@@ -88,7 +88,7 @@ pub(super) async fn handle_system_capabilities(state: AppState, _args: Value) ->
 
 pub(super) async fn handle_jobs_list(state: AppState, args: Value) -> ApiResponse {
     let query = if args.is_null() {
-        JobsListQuery::default()
+        LimitU32Request::default()
     } else {
         rpc_payload(&args)?
     };
@@ -96,12 +96,7 @@ pub(super) async fn handle_jobs_list(state: AppState, args: Value) -> ApiRespons
 }
 
 pub(super) async fn handle_jobs_detail(state: AppState, args: Value) -> ApiResponse {
-    job_detail(
-        state,
-        rpc_required_string(&args, "id")?,
-        args.get("includeOutput")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
-    )
-    .await
+    let mut req: JobDetailRequest = rpc_payload(&args)?;
+    req.id = agenthub_core::services::use_cases::required_job_id(&req.id)?;
+    job_detail(state, req).await
 }

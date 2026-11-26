@@ -1,7 +1,7 @@
 use super::{
     antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
     antigravity_restore, claude_delete_execute, claude_delete_preview, claude_detail, claude_list,
-    claude_rename, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore, ClaudeListQuery,
+    claude_rename, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
 use super::{
     api_error, archive_thread, get_probe_events, get_probe_settings, get_probe_status,
@@ -9,7 +9,7 @@ use super::{
     hidden_threads_delete_dry_run, job_detail, list_jobs, patch_probe_settings, rename_thread,
     restore_thread, start_probe_action, start_update_action, system_capabilities,
     system_update_status, thread_blocks, thread_detail, unified_cleanup_dry_run,
-    unified_cleanup_execute, ApiResponse, GrokListQuery, JobsListQuery, ProbeEventsQuery,
+    unified_cleanup_execute, ApiResponse,
 };
 use crate::{
     api::payload::{
@@ -21,6 +21,7 @@ use agenthub_core::services::{
     commands as rpc_commands,
     probe::{self as probe_service},
     updates::UpdateAction,
+    use_cases::{JobDetailRequest, LimitU32Request, QueryLimitRequest},
 };
 use serde_json::Value;
 
@@ -154,9 +155,10 @@ mod tests {
             ),
             (json!({"id":"fixture","includeOutput":false}), ""),
         ] {
-            let job = rpc_dispatch(state.clone(), "jobs.detail".into(), args)
+            let raw = rpc_dispatch(state.clone(), "jobs.detail".into(), args)
                 .await
                 .unwrap();
+            let job: Value = serde_json::from_str(raw.get()).unwrap();
             assert_eq!(job["output"], expected);
             assert_eq!(job["id"], "fixture");
         }

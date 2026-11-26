@@ -58,7 +58,7 @@ pub(crate) async fn bulk_execute(
     let provider = request.provider;
     let operation = request.operation;
     let runtime = state.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = agenthub_core::read_tasks::spawn_blocking(move || {
         AgentHubUseCases::new(runtime.platform())
             .sessions(runtime.codex_paths())?
             .bulk_execute(request)

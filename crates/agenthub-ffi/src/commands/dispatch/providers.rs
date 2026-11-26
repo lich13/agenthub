@@ -20,7 +20,7 @@ pub(super) async fn claude_hooks(
 }
 
 pub(super) async fn grok_list(ctx: DispatchContext<'_>, args_json: &str) -> Result<String, String> {
-    let args: QueryLimitArgs = parse_args(args_json)?;
+    let args: QueryLimitRequest = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
@@ -108,7 +108,7 @@ pub(super) async fn claude_list(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: QueryLimitArgs = parse_args(args_json)?;
+    let args: QueryLimitRequest = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
@@ -124,18 +124,13 @@ pub(super) async fn claude_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ClaudeDetailArgs = parse_args(args_json)?;
+    let request: ClaudeDetailRequest = parse_args(args_json)?;
     let state = ctx.state.clone();
     encode(
         crate::commands::blocking(move || {
             AgentHubUseCases::new(state.platform())
                 .claude()?
-                .detail(ClaudeDetailRequest {
-                    agent_id: args.agent_id,
-                    session_key: args.session_key,
-                    limit: args.limit,
-                    before: args.before,
-                })
+                .detail(request)
         })
         .await,
     )

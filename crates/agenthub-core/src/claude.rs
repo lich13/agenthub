@@ -195,7 +195,7 @@ struct Parsed {
     cwds: Vec<String>,
     version: String,
     updated_at: Option<String>,
-    events: Vec<Arc<ClaudeHistoryEvent>>,
+    events: Arc<Vec<Arc<ClaudeHistoryEvent>>>,
     message_count: usize,
     last_message: Option<String>,
     history: crate::jsonl_cache::HistoryJournal,

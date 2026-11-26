@@ -20,33 +20,60 @@ pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
 }
 
-pub fn thread_detail_page_from_summary(
-    summary: ThreadSummary,
-    compact: bool,
-    limit: Option<usize>,
-    before: Option<&str>,
-    since: Option<&str>,
-) -> Result<ThreadDetail> {
-    let Some(path) = summary.rollout_path.clone() else {
-        return Ok(ThreadDetail {
-            timeline: Some(Default::default()),
-            after_cursor: None,
-            history_subagent_blocks: Vec::new(),
-            summary,
-            subagents: None,
-            subagent_updates: Default::default(),
-            messages: Vec::new(),
-            blocks: Vec::new(),
-            raw_event_count: 0,
-            total_blocks: 0,
-            has_more_blocks: false,
-            before_cursor: None,
-            history: None,
-        });
-    };
+fn detail_state_weight(state: &DetailState) -> u64 {
+    fn opt_str_cap(s: &Option<String>) -> usize {
+        s.as_ref().map_or(0, String::capacity)
+    }
+    fn block_weight(block: &MessageBlock) -> u64 {
+        (512 + block.id.capacity()
+            + block.kind.capacity()
+            + block.role.capacity()
+            + opt_str_cap(&block.display_kind)
+            + opt_str_cap(&block.summary)
+            + opt_str_cap(&block.text)
+            + opt_str_cap(&block.tool_name)
+            + opt_str_cap(&block.call_id)
+            + opt_str_cap(&block.input)
+            + opt_str_cap(&block.group_id)
+            + opt_str_cap(&block.status)
+            + opt_str_cap(&block.created_at)
+            + opt_str_cap(&block.turn_id)
+            + opt_str_cap(&block.item_id)
+            + opt_str_cap(&block.plan_status)) as u64
+            + block
+                .questions
+                .iter()
+                .map(crate::codex::UserInputQuestion::heap_bytes)
+                .sum::<u64>()
+            + block
+                .user_message
+                .as_ref()
+                .map_or(0, crate::user_message::UserMessage::weight)
+    }
+    state
+        .messages
+        .capacity()
+        .saturating_mul(std::mem::size_of::<CodexMessage>()) as u64
+        + state
+            .messages
+            .iter()
+            .map(|m| {
+                (m.kind.capacity()
+                    + m.role.capacity()
+                    + m.text.capacity()
+                    + opt_str_cap(&m.created_at)) as u64
+            })
+            .sum::<u64>()
+        + state.blocks.iter().map(|b| block_weight(b)).sum::<u64>()
+        + (state.blocks.capacity() + state.compacted.capacity()) as u64
+            * std::mem::size_of::<Arc<MessageBlock>>() as u64
+        + crate::history_navigation::weight(&state.timeline)
+}
+
+fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Result<R>) -> Result<R> {
     crate::codex::rollout_file::read_cached(
         &DETAIL_CACHE,
-        &path,
+        path,
         true,
         |state, line, _, _| {
             if line.iter().all(u8::is_ascii_whitespace) {
@@ -121,97 +148,126 @@ pub fn thread_detail_page_from_summary(
                 state.compacted = compacted;
                 state.blocks = blocks;
             }
-            let seeking = before.is_some_and(|cursor| {
-                cursor.starts_with("j:")
-                    || cursor.starts_with("n:")
-                    || cursor.starts_with("w:")
-                    || cursor.starts_with("p:")
-            });
-            let source = if compact && !seeking {
-                &state.compacted
-            } else {
-                &state.blocks
-            };
-            let total_blocks = source.len();
-            let end = history_end(source, before);
-            let start = limit
-                .filter(|n| *n > 0)
-                .map_or(0, |n| end.saturating_sub(n));
-            let (start, end) = crate::history_navigation::seek_window(
-                source.iter().map(|block| block.id.as_str()),
-                before,
-                limit.unwrap_or(120).clamp(1, 500),
-            )?
-            .unwrap_or((start, end));
-            let mut blocks: Vec<_> = source[start..end]
-                .iter()
-                .map(|block| (**block).clone())
-                .collect();
-            for message in blocks
-                .iter_mut()
-                .filter_map(|block| block.user_message.as_mut())
-            {
-                message.refresh_files(summary.cwd.as_deref());
-            }
-            Ok(ThreadDetail {
-                timeline: before.is_none().then(|| state.timeline.clone()),
-                after_cursor: crate::history_navigation::after_cursor(
-                    end,
-                    total_blocks,
-                    source
-                        .get(end.saturating_sub(1))
-                        .map(|block| block.id.as_str()),
-                ),
-                history_subagent_blocks: if limit.is_some() {
-                    source
-                        .iter()
-                        .filter(|block| block.subagent.is_some())
-                        .map(|block| (**block).clone())
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-                summary,
-                subagents: None,
-                subagent_updates: Default::default(),
-                messages: if limit.is_none() {
-                    state.messages.clone()
-                } else {
-                    Vec::new()
-                },
-                blocks,
-                raw_event_count: state.raw_event_count,
-                total_blocks,
-                has_more_blocks: start > 0,
-                before_cursor: (start > 0).then(|| {
-                    if seeking {
-                        format!("p:{}", source[start].id)
-                    } else {
-                        format!("b:{start}")
-                    }
-                }),
-                history: Some(state.journal.metadata(since)),
-            })
+            project(state)
         },
-        |state| {
-            fn weight(block: &MessageBlock) -> u64 {
-                1024 + block.text.as_ref().map_or(0, String::len) as u64
-                    + block.input.as_ref().map_or(0, String::len) as u64
-                    + block
-                        .user_message
-                        .as_ref()
-                        .map_or(0, crate::user_message::UserMessage::weight)
-            }
-            state
-                .messages
-                .iter()
-                .map(|m| m.text.len() as u64 + 128)
-                .sum::<u64>()
-                + state.blocks.iter().map(|block| weight(block)).sum::<u64>()
-                + state.blocks.len() as u64 * 64
-                + crate::history_navigation::weight(&state.timeline)
-        },
+        detail_state_weight,
     )
+}
+
+pub(crate) fn visit_search_blocks(
+    summary: &ThreadSummary,
+    mut visit: impl FnMut(&MessageBlock) -> bool,
+) -> Result<()> {
+    let Some(path) = summary.rollout_path.as_deref() else {
+        return Ok(());
+    };
+    with_detail_state(path, |state| {
+        for block in &state.blocks {
+            if !visit(block) {
+                break;
+            }
+        }
+        Ok(())
+    })
+}
+
+pub fn thread_detail_page_from_summary(
+    summary: ThreadSummary,
+    compact: bool,
+    limit: Option<usize>,
+    before: Option<&str>,
+    since: Option<&str>,
+) -> Result<ThreadDetail> {
+    let Some(path) = summary.rollout_path.clone() else {
+        return Ok(ThreadDetail {
+            timeline: Some(Default::default()),
+            after_cursor: None,
+            history_subagent_blocks: Vec::new(),
+            summary,
+            subagents: None,
+            subagent_updates: Default::default(),
+            messages: Vec::new(),
+            blocks: Vec::new(),
+            raw_event_count: 0,
+            total_blocks: 0,
+            has_more_blocks: false,
+            before_cursor: None,
+            history: None,
+        });
+    };
+    with_detail_state(&path, |state| {
+        let seeking = before.is_some_and(|cursor| {
+            cursor.starts_with("j:")
+                || cursor.starts_with("n:")
+                || cursor.starts_with("w:")
+                || cursor.starts_with("p:")
+        });
+        let source = if compact && !seeking {
+            &state.compacted
+        } else {
+            &state.blocks
+        };
+        let total_blocks = source.len();
+        let end = history_end(source, before);
+        let start = limit
+            .filter(|n| *n > 0)
+            .map_or(0, |n| end.saturating_sub(n));
+        let (start, end) = crate::history_navigation::seek_window(
+            source.iter().map(|block| block.id.as_str()),
+            before,
+            limit.unwrap_or(120).clamp(1, 500),
+        )?
+        .unwrap_or((start, end));
+        let mut blocks: Vec<_> = source[start..end]
+            .iter()
+            .map(|block| (**block).clone())
+            .collect();
+        for message in blocks
+            .iter_mut()
+            .filter_map(|block| block.user_message.as_mut())
+        {
+            message.refresh_files(summary.cwd.as_deref());
+        }
+        Ok(ThreadDetail {
+            timeline: before.is_none().then(|| state.timeline.clone()),
+            after_cursor: crate::history_navigation::after_cursor(
+                end,
+                total_blocks,
+                source
+                    .get(end.saturating_sub(1))
+                    .map(|block| block.id.as_str()),
+            ),
+            history_subagent_blocks: if limit.is_some() {
+                source
+                    .iter()
+                    .filter(|block| block.subagent.is_some())
+                    .map(|block| (**block).clone())
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            summary,
+            subagents: None,
+            subagent_updates: Default::default(),
+            messages: if limit.is_none() {
+                state.messages.clone()
+            } else {
+                Vec::new()
+            },
+            blocks,
+            raw_event_count: state.raw_event_count,
+            total_blocks,
+            has_more_blocks: start > 0,
+            before_cursor: (start > 0).then(|| {
+                if seeking {
+                    format!("p:{}", source[start].id)
+                } else {
+                    format!("b:{start}")
+                }
+            }),
+            history: Some(state.journal.metadata(since)),
+        })
+    })
 }
 
 pub(crate) fn valid_history_cursor(cursor: &str) -> bool {

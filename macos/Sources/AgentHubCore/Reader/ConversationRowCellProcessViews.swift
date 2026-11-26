@@ -1,6 +1,14 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+private final class CapsulePillBoxNSView: NSView {
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = min(bounds.width, bounds.height) * 0.5
+    }
+}
+
 extension ConversationRowCellView {
     func buildExecutionGroupView(
         group: ExecutionGroup,
@@ -221,15 +229,9 @@ extension ConversationRowCellView {
         destStack.addArrangedSubview(summaryRow)
 
         guard isOpen else { return }
-        let subItems = meta.entries.map { entry -> ClaudeEventRenderItem in
-            switch entry {
-            case let .item(it, key, sids): .item(item: it, key: key, sourceIds: sids)
-            case let .group(g): .group(g)
-            }
-        }
         let bodyWidth = max(100, width - 22)
         let innerStack = buildClaudeEntriesStack(
-            entries: subItems,
+            entries: meta.renderItems,
             width: bodyWidth,
             wrapThinkingDisclosures: false,
             coordinator: coordinator
@@ -632,7 +634,7 @@ extension ConversationRowCellView {
         border: NSColor,
         semibold: Bool
     ) -> NSView {
-        let box = NSView()
+        let box = CapsulePillBoxNSView()
         box.translatesAutoresizingMaskIntoConstraints = false
         box.wantsLayer = true
         box.layer?.cornerRadius = 10

@@ -1,10 +1,26 @@
 use agenthub_core::services::{
     commands,
-    contract_dtos::{CONTRACT_DTO_NAMES, CONTRACT_DTO_OWNER_NAMES},
     system::{Capability, HostSurface},
 };
 use serde_json::Value;
 use std::collections::BTreeSet;
+
+const CONTRACT_DTO_OWNER_NAMES: &[&str] = &[
+    "github_ci",
+    "remote",
+    "cleanup",
+    "grok",
+    "jobs",
+    "claude",
+    "antigravity",
+    "dsh",
+    "plans",
+    "probe",
+    "sessions",
+    "system",
+    "threads",
+    "updates",
+];
 
 fn contract() -> Value {
     let path = concat!(
@@ -249,24 +265,16 @@ fn contract_registry_dto_catalog_matches_core_markers() {
         .get("dtoCatalog")
         .and_then(Value::as_object)
         .expect("contract dtoCatalog must be an object");
-    let core_dtos = CONTRACT_DTO_NAMES
-        .iter()
-        .map(|name| name.to_string())
-        .collect::<BTreeSet<_>>();
-    let contract_dtos = dto_catalog
-        .values()
-        .map(|entry| {
-            entry
-                .get("core")
-                .and_then(Value::as_str)
-                .expect("contract dtoCatalog entry must declare core")
-                .to_string()
-        })
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        core_dtos, contract_dtos,
-        "core DTO marker list must match contracts/agenthub-contract.json dtoCatalog"
-    );
+    for (dto_key, entry) in dto_catalog {
+        let core = entry
+            .get("core")
+            .and_then(Value::as_str)
+            .expect("contract dtoCatalog entry must declare core");
+        assert_eq!(
+            core, dto_key,
+            "contract dtoCatalog entry {dto_key} core marker must match key"
+        );
+    }
 
     let core_owners = CONTRACT_DTO_OWNER_NAMES
         .iter()

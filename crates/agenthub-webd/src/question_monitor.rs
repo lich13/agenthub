@@ -1,9 +1,7 @@
 //! Ordinary feedback requests share the existing Codex sender and persistent records.
-use super::{
-    build_probe_event, record_probe_event_with_bark, task_notification_suppression_reason,
-};
+use super::{build_probe_event, record_probe_event_with_bark};
 use agenthub_core::{
-    codex::{self, AssistantFeedback},
+    codex::{self, AssistantFeedback, CodexTaskIdentity},
     config::Config,
     db::PanelDb,
     probe::{ProbeBuiltEvent, ProbeEventInput},
@@ -131,7 +129,7 @@ pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
 pub async fn run_with_threads(
     load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
-    preloaded_sorted: Option<&[codex::ThreadSummary]>,
+    preloaded_sorted: Option<&[(codex::ThreadSummary, CodexTaskIdentity)]>,
 ) -> Result<()> {
     let config = &db.sync_notification_channels_from_config(load_config)?;
     let Some(since) = db
@@ -151,13 +149,13 @@ pub async fn run_with_threads(
     let mut next = HashMap::new();
     let mut next_active_keys = HashMap::new();
     let owned_threads;
-    let threads: &[codex::ThreadSummary] = match preloaded_sorted {
+    let threads: &[(codex::ThreadSummary, CodexTaskIdentity)] = match preloaded_sorted {
         Some(slice) => slice,
         None => {
             let paths = codex::resolve_codex_paths(&config.codex.home).codex_paths();
             owned_threads = agenthub_core::read_tasks::spawn_blocking(move || {
-                let mut loaded = codex::notification_thread_headers(&paths)?;
-                loaded.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                let mut loaded = codex::notification_thread_headers_with_identities(&paths)?;
+                loaded.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
                 Ok::<_, anyhow::Error>(loaded)
             })
             .await
@@ -168,6 +166,7 @@ pub async fn run_with_threads(
     enum FeedbackScanAction {
         Unchanged,
         Skipped,
+        TransientError,
         Pending(Option<codex::AssistantFeedback>),
     }
     struct FeedbackScanCandidate {
@@ -180,11 +179,10 @@ pub async fn run_with_threads(
         .iter()
         .take(config.probe.recent_limit.clamp(1, 200))
         .enumerate()
-        .filter_map(|(idx, thread)| {
+        .filter_map(|(idx, (thread, identity))| {
             let path = thread.rollout_path.as_ref()?.clone();
             let prev_fp = previous.get(&thread.id).copied();
-            let suppressed =
-                task_notification_suppression_reason(config, Some(&thread.id)).is_some();
+            let suppressed = identity.suppression_reason().is_some();
             Some(FeedbackScanCandidate {
                 idx,
                 path,
@@ -199,35 +197,54 @@ pub async fn run_with_threads(
         agenthub_core::read_tasks::spawn_blocking(move || {
             let mut out = Vec::with_capacity(candidates.len());
             for cand in candidates {
-                let Ok(meta) = std::fs::metadata(&cand.path) else {
-                    continue;
+                let meta = match std::fs::metadata(&cand.path) {
+                    Ok(meta) => meta,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => {
+                        out.push((
+                            cand.idx,
+                            cand.path,
+                            cand.prev_fp,
+                            FeedbackScanAction::TransientError,
+                        ));
+                        continue;
+                    }
                 };
                 let Ok(modified) = meta.modified() else {
+                    out.push((
+                        cand.idx,
+                        cand.path,
+                        cand.prev_fp,
+                        FeedbackScanAction::TransientError,
+                    ));
                     continue;
                 };
                 let modified = modified.duration_since(UNIX_EPOCH).unwrap_or_default();
                 let fingerprint = (meta.len(), modified.as_nanos());
-                let action = if cand.prev_fp == Some(fingerprint) {
-                    FeedbackScanAction::Unchanged
+                let (recorded_fp, action) = if cand.prev_fp == Some(fingerprint) {
+                    (Some(fingerprint), FeedbackScanAction::Unchanged)
                 } else if modified.as_millis() < since as u128 || cand.suppressed {
-                    FeedbackScanAction::Skipped
+                    (Some(fingerprint), FeedbackScanAction::Skipped)
                 } else {
-                    FeedbackScanAction::Pending(
-                        codex::rollout_pending_feedback(&cand.path).ok().flatten(),
-                    )
+                    match codex::rollout_pending_feedback(&cand.path) {
+                        Ok(opt_fb) => (Some(fingerprint), FeedbackScanAction::Pending(opt_fb)),
+                        Err(_) => (cand.prev_fp, FeedbackScanAction::TransientError),
+                    }
                 };
-                out.push((cand.idx, cand.path, fingerprint, action));
+                out.push((cand.idx, cand.path, recorded_fp, action));
             }
             out
         })
         .await
         .map_err(|err| anyhow::anyhow!("feedback rollout scan join failed: {err}"))?
     };
-    for (idx, path, fingerprint, action) in scanned {
-        let thread = &threads[idx];
-        next.insert(thread.id.clone(), fingerprint);
+    for (idx, path, recorded_fp, action) in scanned {
+        let (thread, _) = &threads[idx];
+        if let Some(fp) = recorded_fp {
+            next.insert(thread.id.clone(), fp);
+        }
         let feedback = match action {
-            FeedbackScanAction::Unchanged => {
+            FeedbackScanAction::Unchanged | FeedbackScanAction::TransientError => {
                 if let Some(key) = prev_active_keys.get(&thread.id) {
                     let _ = db.touch_setting_if_older_than(key, 86_400);
                     next_active_keys.insert(thread.id.clone(), key.clone());
@@ -398,7 +415,7 @@ mod tests {
                     json!({"probe":{"notifications":{"notify_reply_needed":true}}}),
                 )
                 .unwrap(),
-                secret_writes: vec![],
+                secret_write: None,
             },
         )
         .unwrap();
@@ -517,5 +534,43 @@ mod tests {
             .unwrap();
         run(&fixture.config, &fixture.db).await.unwrap();
         assert!(requests.recv_timeout(Duration::from_millis(150)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn transient_rollout_read_error_preserves_previous_fingerprint_and_delivers_when_restored(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let (url, requests) = mock_bark_server(1);
+        let fixture = Fixture::new(url);
+        let rollout = fixture.config.codex.home.join("sessions/rollout.jsonl");
+
+        // Make rollout unreadable (stat/metadata still succeeds, File::open returns EACCES).
+        // Restoring 0o600 does NOT change file len or mtime, so if the failed scan had
+        // recorded the new (len, mtime) fingerprint, the restored scan would skip forever!
+        fs::set_permissions(&rollout, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::File::open(&rollout).is_ok() {
+            fs::set_permissions(&rollout, fs::Permissions::from_mode(0o600)).unwrap();
+            return;
+        }
+        run(&fixture.config, &fixture.db).await.unwrap();
+        assert!(requests.recv_timeout(Duration::from_millis(100)).is_err());
+        let recorded_after_err: HashMap<String, (u64, u128)> = fixture
+            .db
+            .get_setting("probe_feedback_files")
+            .unwrap()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default();
+        assert!(
+            !recorded_after_err.contains_key("main"),
+            "transient read failure must not advance fingerprint past unread rollout"
+        );
+
+        // Restore read permission without touching len or mtime, then rescan.
+        fs::set_permissions(&rollout, fs::Permissions::from_mode(0o600)).unwrap();
+        run(&fixture.config, &fixture.db).await.unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(&requests.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+        assert!(payload["body"].as_str().unwrap().contains("请确认测试结果"));
     }
 }

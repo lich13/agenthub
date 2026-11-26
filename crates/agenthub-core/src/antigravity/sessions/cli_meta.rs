@@ -368,19 +368,99 @@ static CONV_DB_META_CACHE: std::sync::Mutex<
     Option<std::collections::HashMap<PathBuf, ConvDbMetaCacheEntry>>,
 > = std::sync::Mutex::new(None);
 
+#[derive(Clone)]
+struct CachedTranscriptPlanner {
+    pos: u64,
+    ts_ms: Option<i64>,
+    reply_non_empty: bool,
+    safe_reply_body: String,
+    detected_question: Option<String>,
+    artifact_feedback: Option<String>,
+}
+
+#[derive(Clone)]
+struct CachedTranscriptTurnSummary {
+    has_subagent_reminder: bool,
+    record_count: u64,
+    first_created_at: Option<String>,
+    file_mtime_ms: Option<i64>,
+    turn_start: usize,
+    last_substantive_pos: Option<u64>,
+    last_substantive_ts_ms: Option<i64>,
+    last_substantive_canceled: bool,
+    last_substantive_terminal_done: bool,
+    has_unsettled_tools: bool,
+    waiting_ask_question: Option<(u64, String, String, Option<i64>)>,
+    failed_target: Option<(u64, Option<i64>, String)>,
+    planner_target: Option<CachedTranscriptPlanner>,
+}
+
+#[derive(Clone)]
+struct CachedDbPlanner {
+    pos: u64,
+    reply_non_empty: bool,
+    safe_reply_body: String,
+    detected_question: Option<String>,
+}
+
+#[derive(Clone)]
+struct CachedDbStepsTurnSummary {
+    record_count: u64,
+    turn_start: usize,
+    last_status_canceled: bool,
+    failed_body: String,
+    terminal_planner: Option<CachedDbPlanner>,
+}
+
+type OfflineTranscriptCacheEntry = (
+    AntigravityFileStamp,
+    Option<CachedTranscriptTurnSummary>,
+    std::time::Instant,
+);
+type OfflineDbStepsCacheEntry = (
+    (AntigravityFileStamp, Option<AntigravityFileStamp>),
+    Option<CachedDbStepsTurnSummary>,
+    std::time::Instant,
+);
+
+static OFFLINE_TRANSCRIPT_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, OfflineTranscriptCacheEntry>>,
+> = std::sync::Mutex::new(None);
+static OFFLINE_DB_STEPS_CACHE: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, OfflineDbStepsCacheEntry>>,
+> = std::sync::Mutex::new(None);
+
+fn evict_stamped_map<V>(
+    slot: &std::sync::Mutex<Option<std::collections::HashMap<PathBuf, V>>>,
+    is_fresh: impl Fn(&V) -> bool,
+) -> bool {
+    let Ok(mut guard) = slot.lock() else {
+        return false;
+    };
+    let Some(map) = guard.as_mut() else {
+        return false;
+    };
+    let before = map.len();
+    map.retain(|_, v| is_fresh(v));
+    let evicted = map.len() < before;
+    if map.is_empty() {
+        *guard = None;
+    } else if map.capacity() > map.len().saturating_mul(4).max(32) {
+        map.shrink_to_fit();
+    }
+    evicted
+}
+
 pub(crate) fn evict_idle_meta_cache(max_idle: std::time::Duration) {
-    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
-        if let Some(map) = guard.as_mut() {
-            let before = map.len();
-            map.retain(|_, (_, _, ts)| ts.elapsed() < max_idle);
-            let evicted = map.len() < before;
-            if map.is_empty() {
-                *guard = None;
-            }
-            if evicted {
-                crate::note_cache_eviction();
-            }
-        }
+    let mut evicted = evict_stamped_map(&CONV_DB_META_CACHE, |(_, _, ts)| ts.elapsed() < max_idle);
+    evicted |= evict_stamped_map(&OFFLINE_TRANSCRIPT_CACHE, |(_, _, ts)| {
+        ts.elapsed() < max_idle
+    });
+    evicted |= evict_stamped_map(&OFFLINE_DB_STEPS_CACHE, |(_, _, ts)| {
+        ts.elapsed() < max_idle
+    });
+    if evicted {
+        crate::note_cache_eviction();
     }
 }
 
@@ -399,89 +479,116 @@ pub(crate) fn inspect_conv_db_metadata(
     paths: &AntigravityPaths,
     id: &str,
 ) -> Option<ConvDbMetadata> {
+    inspect_conv_db_metadata_checked(paths, id).ok().flatten()
+}
+
+pub(crate) fn inspect_conv_db_metadata_checked(
+    paths: &AntigravityPaths,
+    id: &str,
+) -> Result<Option<ConvDbMetadata>> {
     let db_path = paths.conversations_dir().join(format!("{id}.db"));
-    let stamp = AntigravityFileStamp::sqlite_pair(&db_path)?;
+    match fs::symlink_metadata(&db_path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    }
+    let Some(stamp) = AntigravityFileStamp::sqlite_pair(&db_path) else {
+        return Ok(None);
+    };
     if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
         if let Some((cached_stamp, ref cached_val, ref mut ts)) =
             guard.as_mut().and_then(|m| m.get_mut(&db_path))
         {
             if *cached_stamp == stamp {
                 *ts = std::time::Instant::now();
-                return cached_val.clone();
+                return Ok(cached_val.clone());
             }
         }
     }
-    let computed = inspect_conv_db_metadata_uncached(&db_path, id);
-    if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if map.len() >= 512 && !map.contains_key(&db_path) {
-            if let Some(oldest) = map
-                .iter()
-                .min_by_key(|(_, (_, _, ts))| *ts)
-                .map(|(k, _)| k.clone())
-            {
-                map.remove(&oldest);
+    let computed = inspect_conv_db_metadata_uncached(&db_path, id)?;
+    if AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = CONV_DB_META_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&db_path) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
             }
+            map.insert(
+                db_path,
+                (stamp, computed.clone(), std::time::Instant::now()),
+            );
         }
-        map.insert(
-            db_path,
-            (stamp, computed.clone(), std::time::Instant::now()),
-        );
     }
-    computed
+    Ok(computed)
 }
 
-fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbMetadata> {
-    let mut f = fs::File::open(db_path).ok()?;
-    let mut header = [0u8; 16];
-    if f.read_exact(&mut header).is_err() || &header != b"SQLite format 3\0" {
-        return None;
+fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<ConvDbMetadata>> {
+    use rusqlite::OptionalExtension;
+    let mut f = match fs::File::open(db_path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut header = Vec::with_capacity(16);
+    (&mut f).take(16).read_to_end(&mut header)?;
+    if header.as_slice() != b"SQLite format 3\0" {
+        return Ok(None);
     }
     drop(f);
     let conn = Connection::open_with_flags(
         db_path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
     let _ = conn.execute_batch("PRAGMA cache_size = -512; PRAGMA temp_store = MEMORY;");
     let mut out = ConvDbMetadata::default();
 
-    let tables: std::collections::HashSet<String> = conn
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .ok()
-        .and_then(|mut s| {
-            s.query_map([], |r| r.get::<_, String>(0))
-                .ok()
-                .map(|it| it.flatten().collect())
-        })
-        .unwrap_or_default();
+    let tables: std::collections::HashSet<String> = {
+        let mut s = conn.prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?;
+        let rows = s.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()?
+    };
     let has_table = |name: &str| -> bool { tables.contains(name) };
 
     if has_table("trajectory_metadata_blob") {
-        let blob: Option<Vec<u8>> = conn
-            .query_row(
-                "SELECT COALESCE(data, blob) FROM trajectory_metadata_blob WHERE id = 'main' LIMIT 1",
+        let cols: Vec<String> = {
+            let mut s = conn.prepare("PRAGMA table_info(trajectory_metadata_blob)")?;
+            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let has_id = cols.iter().any(|c| c == "id");
+        let data_cols: Vec<&str> = cols
+            .iter()
+            .map(String::as_str)
+            .filter(|&c| c != "id")
+            .collect();
+        let blob: Option<Vec<u8>> = if !data_cols.is_empty() {
+            let expr = if data_cols.contains(&"data") && data_cols.contains(&"blob") {
+                "COALESCE(\"data\", \"blob\")".to_owned()
+            } else {
+                format!("\"{}\"", data_cols[0])
+            };
+            let order = if has_id {
+                "ORDER BY CASE WHEN id = 'main' THEN 0 ELSE 1 END"
+            } else {
+                ""
+            };
+            conn.query_row(
+                &format!("SELECT {expr} FROM trajectory_metadata_blob {order} LIMIT 1"),
                 [],
-                |r| r.get(0),
+                |r| r.get::<_, Option<Vec<u8>>>(0),
             )
-            .ok()
-            .or_else(|| {
-                let cols: Vec<String> = conn
-                    .prepare("PRAGMA table_info(trajectory_metadata_blob)")
-                    .ok()?
-                    .query_map([], |r| r.get::<_, String>(1))
-                    .ok()?
-                    .flatten()
-                    .filter(|c| c != "id")
-                    .collect();
-                let col = cols.first()?;
-                conn.query_row(
-                    &format!("SELECT \"{col}\" FROM trajectory_metadata_blob ORDER BY CASE WHEN id = 'main' THEN 0 ELSE 1 END LIMIT 1"),
-                    [],
-                    |r| r.get::<_, Vec<u8>>(0),
-                )
-                .ok()
-            });
+            .optional()?
+            .flatten()
+        } else {
+            None
+        };
         if let Some(raw) = blob {
             let parsed = parse_trajectory_metadata_blob(&raw);
             out.is_subagent |= parsed.is_subagent(id);
@@ -508,31 +615,26 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbM
     }
 
     if has_table("parent_references") {
-        let cols: Vec<String> = conn
-            .prepare("PRAGMA table_info(parent_references)")
-            .ok()
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(1))
-                    .ok()
-                    .map(|it| it.flatten().collect())
-            })
-            .unwrap_or_default();
+        let cols: Vec<String> = {
+            let mut s = conn.prepare("PRAGMA table_info(parent_references)")?;
+            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
         for candidate in ["parent_conversation_id", "parent_id", "conversation_id"] {
             if cols.iter().any(|c| c == candidate) {
-                if let Ok(mut stmt) =
-                    conn.prepare(&format!("SELECT \"{candidate}\" FROM parent_references"))
-                {
-                    if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
-                        for pid in rows.flatten() {
-                            let pid = pid.trim();
-                            if !pid.is_empty()
-                                && pid != id
-                                && uuid::Uuid::parse_str(pid).is_ok()
-                                && !out.parent_ids.iter().any(|x| x == pid)
-                            {
-                                out.is_subagent = true;
-                                out.parent_ids.push(pid.to_owned());
-                            }
+                let mut stmt =
+                    conn.prepare(&format!("SELECT \"{candidate}\" FROM parent_references"))?;
+                let rows = stmt.query_map([], |r| r.get::<_, Option<String>>(0))?;
+                for pid in rows {
+                    if let Some(pid) = pid? {
+                        let pid = pid.trim();
+                        if !pid.is_empty()
+                            && pid != id
+                            && uuid::Uuid::parse_str(pid).is_ok()
+                            && !out.parent_ids.iter().any(|x| x == pid)
+                        {
+                            out.is_subagent = true;
+                            out.parent_ids.push(pid.to_owned());
                         }
                     }
                 }
@@ -541,21 +643,16 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbM
     }
 
     if has_table("steps") {
-        if let Ok(cnt) = conn.query_row("SELECT count(*) FROM steps", [], |r| r.get::<_, i64>(0)) {
-            out.step_count = cnt.max(0) as usize;
-        }
+        let cnt: i64 = conn.query_row("SELECT count(*) FROM steps", [], |r| r.get(0))?;
+        out.step_count = cnt.max(0) as usize;
     }
 
     if has_table("executor_metadata") {
-        let cols: Vec<String> = conn
-            .prepare("PRAGMA table_info(executor_metadata)")
-            .ok()
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(1))
-                    .ok()
-                    .map(|it| it.flatten().collect())
-            })
-            .unwrap_or_default();
+        let cols: Vec<String> = {
+            let mut s = conn.prepare("PRAGMA table_info(executor_metadata)")?;
+            let rows = s.query_map([], |r| r.get::<_, String>(1))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
         if let Some(blob_col) = cols
             .iter()
             .find(|c| matches!(c.as_str(), "metadata" | "data" | "blob" | "payload"))
@@ -565,13 +662,17 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbM
             } else {
                 "rowid"
             };
-            if let Ok(raw) = conn.query_row(
-                &format!(
-                    "SELECT \"{blob_col}\" FROM executor_metadata ORDER BY {order_col} DESC LIMIT 1"
-                ),
-                [],
-                |r| r.get::<_, Vec<u8>>(0),
-            ) {
+            if let Some(raw) = conn
+                .query_row(
+                    &format!(
+                        "SELECT \"{blob_col}\" FROM executor_metadata ORDER BY {order_col} DESC LIMIT 1"
+                    ),
+                    [],
+                    |r| r.get::<_, Option<Vec<u8>>>(0),
+                )
+                .optional()?
+                .flatten()
+            {
                 if let Some(exec_meta) = parse_executor_metadata_blob(&raw) {
                     out.latest_termination_reason = exec_meta.termination_reason;
                     out.has_execution_error = exec_meta.has_execution_error;
@@ -580,7 +681,7 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Option<ConvDbM
         }
     }
 
-    Some(out)
+    Ok(Some(out))
 }
 
 pub(crate) fn read_conv_meta_file(
@@ -688,31 +789,6 @@ fn safe_probe_text(raw: &str) -> String {
         .chars()
         .take(1200)
         .collect()
-}
-
-fn read_all_transcript_rows(store: &AntigravityPaths, id: &str) -> Option<(PathBuf, Vec<Value>)> {
-    let logs = store.brain_dir().join(id).join(".system_generated/logs");
-    let chosen = [
-        logs.join("transcript_full.jsonl"),
-        logs.join("transcript.jsonl"),
-    ]
-    .into_iter()
-    .find(|p| p.is_file())?;
-    let file = fs::File::open(&chosen).ok()?;
-    if file.metadata().ok()?.len() > 128 * 1024 * 1024 {
-        return None;
-    }
-    let mut reader = BufReader::new(file);
-    let mut rows = Vec::new();
-    let _ = super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
-        rows.push(row);
-        if rows.len() >= 200_000 {
-            std::ops::ControlFlow::Break(())
-        } else {
-            std::ops::ControlFlow::Continue(())
-        }
-    });
-    Some((chosen, rows))
 }
 
 fn extract_ask_question_from_row(row: &Value, row_idx: usize) -> Option<(String, String)> {
@@ -826,7 +902,7 @@ fn read_raw_summary_for_id(store: &AntigravityPaths, id: &str) -> Option<ParsedR
 fn offline_origin_anchor(
     store: &AntigravityPaths,
     id: &str,
-    transcript_rows: Option<&[Value]>,
+    first_transcript_ts: Option<&str>,
     raw_summary: Option<&ParsedRawSummary>,
 ) -> String {
     #[cfg(unix)]
@@ -848,16 +924,366 @@ fn offline_origin_anchor(
             return format!("traj:{tid}:{}", raw.created_time_ms.unwrap_or(0));
         }
     }
-    if let Some(rows) = transcript_rows {
-        if let Some(first_ts) = rows
-            .first()
-            .and_then(|r| r["created_at"].as_str())
-            .filter(|s| !s.is_empty())
-        {
-            return format!("ts:{first_ts}");
-        }
+    if let Some(first_ts) = first_transcript_ts.filter(|s| !s.is_empty()) {
+        return format!("ts:{first_ts}");
     }
     format!("id:{id}")
+}
+
+fn inspect_offline_transcript_cached(
+    store: &AntigravityPaths,
+    id: &str,
+) -> Result<Option<CachedTranscriptTurnSummary>> {
+    let logs = store.brain_dir().join(id).join(".system_generated/logs");
+    let mut chosen = None;
+    for candidate in [
+        logs.join("transcript_full.jsonl"),
+        logs.join("transcript.jsonl"),
+    ] {
+        match fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.is_file() => {
+                chosen = Some(candidate);
+                break;
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+    let Some(chosen) = chosen else {
+        return Ok(None);
+    };
+    let Some(stamp) = AntigravityFileStamp::of(&chosen) else {
+        return Ok(None);
+    };
+    if let Ok(mut guard) = OFFLINE_TRANSCRIPT_CACHE.lock() {
+        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&chosen))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return Ok(cached_val.clone());
+            }
+        }
+    }
+    let computed = inspect_offline_transcript_uncached(&chosen)?;
+    if AntigravityFileStamp::of(&chosen).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = OFFLINE_TRANSCRIPT_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&chosen) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
+            }
+            map.insert(chosen, (stamp, computed.clone(), std::time::Instant::now()));
+        }
+    }
+    Ok(computed)
+}
+
+fn inspect_offline_transcript_uncached(
+    chosen: &Path,
+) -> Result<Option<CachedTranscriptTurnSummary>> {
+    let mut head_file = match fs::File::open(chosen) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    if head_file.metadata()?.len() > 128 * 1024 * 1024 {
+        return Ok(None);
+    }
+    let mut head_buf = Vec::with_capacity(16 * 1024);
+    (&mut head_file)
+        .take(16 * 1024)
+        .read_to_end(&mut head_buf)?;
+    let has_subagent_reminder = head_buf
+        .windows(b"<subagent_reminder>".len())
+        .any(|w| w == b"<subagent_reminder>");
+    if has_subagent_reminder {
+        return Ok(Some(CachedTranscriptTurnSummary {
+            has_subagent_reminder: true,
+            record_count: 0,
+            first_created_at: None,
+            file_mtime_ms: None,
+            turn_start: 0,
+            last_substantive_pos: None,
+            last_substantive_ts_ms: None,
+            last_substantive_canceled: false,
+            last_substantive_terminal_done: false,
+            has_unsettled_tools: false,
+            waiting_ask_question: None,
+            failed_target: None,
+            planner_target: None,
+        }));
+    }
+    let file = match fs::File::open(chosen) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut reader = BufReader::new(file);
+    let mut rows = Vec::new();
+    super::prompt::for_each_bounded_jsonl_row(&mut reader, |row| {
+        rows.push(row);
+        if rows.len() >= 200_000 {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    })?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let record_count = rows.len() as u64;
+    let first_created_at = rows
+        .first()
+        .and_then(|r| r["created_at"].as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned);
+    let file_mtime_ms = file_mtime_ms(chosen).and_then(valid_epoch_ms);
+    let turn_start = rows
+        .iter()
+        .rposition(|row| {
+            let st = row["type"].as_str().unwrap_or("");
+            let src = row["source"].as_str().unwrap_or("");
+            (super::prompt::is_transcript_user_row(row)
+                && super::prompt::transcript_row_has_user_payload(row))
+                || (st == "SYSTEM_MESSAGE" && src == "SYSTEM")
+        })
+        .unwrap_or(0);
+    let turn_rows = &rows[turn_start..];
+    let last_substantive = turn_rows.iter().enumerate().rev().find(|(_, row)| {
+        let st = row["type"].as_str().unwrap_or("");
+        let src = row["source"].as_str().unwrap_or("");
+        !matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
+            && !(st == "SYSTEM_MESSAGE" && src == "SYSTEM_SDK")
+            && !(super::prompt::is_transcript_user_row(row)
+                && !super::prompt::transcript_row_has_user_payload(row))
+    });
+    let last_substantive_pos = last_substantive.map(|(i, _)| (turn_start + i + 1) as u64);
+    let last_substantive_ts_ms = last_substantive
+        .and_then(|(_, r)| r["created_at"].as_str())
+        .and_then(parse_valid_timestamp_ms);
+    let last_substantive_canceled = last_substantive.is_some_and(|(_, r)| {
+        matches!(
+            r["status"].as_str().unwrap_or(""),
+            "CANCELED" | "INTERRUPTED"
+        )
+    });
+    let last_substantive_terminal_done = last_substantive.is_some_and(|(_, r)| {
+        matches!(
+            r["type"].as_str().unwrap_or(""),
+            "PLANNER_RESPONSE" | "FINISH"
+        ) && r["status"].as_str().unwrap_or("DONE") == "DONE"
+    });
+    let has_unsettled_tools = turn_rows_have_unsettled_tools(turn_rows);
+    let waiting_ask_question = turn_rows.iter().enumerate().rev().find_map(|(i, r)| {
+        let (call_id, body) = extract_ask_question_from_row(r, turn_start + i)?;
+        let pos = (turn_start + i + 1) as u64;
+        let row_ts = r["created_at"].as_str().and_then(parse_valid_timestamp_ms);
+        Some((pos, call_id, safe_probe_text(&body), row_ts))
+    });
+    let failed_target = turn_rows
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, r)| {
+            r["type"].as_str() == Some("ERROR_MESSAGE")
+                || matches!(r["status"].as_str().unwrap_or(""), "ERROR" | "FAILED")
+        })
+        .or(last_substantive)
+        .map(|(rel_idx, err_row)| {
+            let ts_ms = err_row["created_at"]
+                .as_str()
+                .and_then(parse_valid_timestamp_ms);
+            let raw_err = err_row["content"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| err_row["error"].as_str().filter(|s| !s.trim().is_empty()));
+            let body = match raw_err {
+                Some(txt) => safe_probe_text(txt),
+                None => "主回合未能完成，请打开 Antigravity 查看详情。".into(),
+            };
+            ((turn_start + rel_idx + 1) as u64, ts_ms, body)
+        });
+    let planner_target = turn_rows
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, r)| r["type"].as_str() == Some("PLANNER_RESPONSE"))
+        .map(|(rel_idx, planner)| {
+            let ts_ms = planner["created_at"]
+                .as_str()
+                .and_then(parse_valid_timestamp_ms);
+            let reply_text = planner["content"].as_str().unwrap_or("");
+            let detected_question =
+                crate::codex::assistant_feedback_request(reply_text).map(|q| safe_probe_text(&q));
+            let artifact_feedback =
+                extract_artifact_feedback_summary_from_rows(&turn_rows[..=rel_idx]).map(|fb| {
+                    if fb.is_empty() {
+                        String::new()
+                    } else {
+                        safe_probe_text(&fb)
+                    }
+                });
+            let reply_non_empty = !reply_text.trim().is_empty();
+            CachedTranscriptPlanner {
+                pos: (turn_start + rel_idx + 1) as u64,
+                ts_ms,
+                reply_non_empty,
+                safe_reply_body: if reply_non_empty {
+                    safe_probe_text(reply_text)
+                } else {
+                    String::new()
+                },
+                detected_question,
+                artifact_feedback,
+            }
+        });
+    Ok(Some(CachedTranscriptTurnSummary {
+        has_subagent_reminder: false,
+        record_count,
+        first_created_at,
+        file_mtime_ms,
+        turn_start,
+        last_substantive_pos,
+        last_substantive_ts_ms,
+        last_substantive_canceled,
+        last_substantive_terminal_done,
+        has_unsettled_tools,
+        waiting_ask_question,
+        failed_target,
+        planner_target,
+    }))
+}
+
+fn inspect_offline_db_steps_cached(
+    store: &AntigravityPaths,
+    id: &str,
+) -> Result<Option<CachedDbStepsTurnSummary>> {
+    let db_path = store.conversations_dir().join(format!("{id}.db"));
+    match fs::symlink_metadata(&db_path) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    }
+    let Some(stamp) = AntigravityFileStamp::sqlite_pair(&db_path) else {
+        return Ok(None);
+    };
+    if let Ok(mut guard) = OFFLINE_DB_STEPS_CACHE.lock() {
+        if let Some((cached_stamp, ref cached_val, ref mut ts)) =
+            guard.as_mut().and_then(|m| m.get_mut(&db_path))
+        {
+            if *cached_stamp == stamp {
+                *ts = std::time::Instant::now();
+                return Ok(cached_val.clone());
+            }
+        }
+    }
+    let computed = inspect_offline_db_steps_uncached(&db_path)?;
+    if AntigravityFileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+        if let Ok(mut guard) = OFFLINE_DB_STEPS_CACHE.lock() {
+            let map = guard.get_or_insert_with(std::collections::HashMap::new);
+            if map.len() >= 512 && !map.contains_key(&db_path) {
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, (_, _, ts))| *ts)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
+            }
+            map.insert(
+                db_path,
+                (stamp, computed.clone(), std::time::Instant::now()),
+            );
+        }
+    }
+    Ok(computed)
+}
+
+fn inspect_offline_db_steps_uncached(db_path: &Path) -> Result<Option<CachedDbStepsTurnSummary>> {
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
+    let has_steps: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'steps')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_steps {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT idx, step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM steps ORDER BY idx ASC LIMIT 200000",
+    )?;
+    let db_steps: Vec<(i64, i64, i64, Vec<u8>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if db_steps.is_empty() {
+        return Ok(None);
+    }
+    let record_count = db_steps.len() as u64;
+    let turn_start = db_steps
+        .iter()
+        .rposition(|(_, st, _, blob)| *st == 14 && extract_db_user_input_text(blob).is_some())
+        .or_else(|| db_steps.iter().rposition(|(_, st, _, _)| *st == 14))
+        .unwrap_or(0);
+    let last_status_canceled = db_steps
+        .last()
+        .is_some_and(|(_, _, status, _)| *status == 4);
+    let failed_body = db_steps[turn_start..]
+        .iter()
+        .rev()
+        .find(|(_, st, status, _)| *st == 17 || *status == 7)
+        .and_then(|(_, _, _, blob)| {
+            extract_db_error_text(blob)
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| safe_probe_text(&s))
+        })
+        .unwrap_or_else(|| "主回合未能完成，请打开 Antigravity 查看详情。".into());
+    let terminal_db_tail = db_steps
+        .last()
+        .is_some_and(|(_, st, status, _)| matches!(*st, 15 | 16) && *status == 3);
+    let terminal_planner = if terminal_db_tail {
+        db_steps[turn_start..]
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, (_, st, _, _))| *st == 15)
+            .map(|(rel_idx, (_, _, _, blob))| {
+                let reply = extract_db_planner_texts(blob).0.unwrap_or_default();
+                let detected_question =
+                    crate::codex::assistant_feedback_request(&reply).map(|q| safe_probe_text(&q));
+                let reply_non_empty = !reply.trim().is_empty();
+                CachedDbPlanner {
+                    pos: (turn_start + rel_idx + 1) as u64,
+                    reply_non_empty,
+                    safe_reply_body: if reply_non_empty {
+                        safe_probe_text(&reply)
+                    } else {
+                        String::new()
+                    },
+                    detected_question,
+                }
+            })
+    } else {
+        None
+    };
+    Ok(Some(CachedDbStepsTurnSummary {
+        record_count,
+        turn_start,
+        last_status_canceled,
+        failed_body,
+        terminal_planner,
+    }))
 }
 
 fn turn_rows_have_unsettled_tools(turn_rows: &[Value]) -> bool {
@@ -909,23 +1335,66 @@ pub(crate) fn build_offline_stream_snapshot(
     store: &AntigravityPaths,
     summary: &ProviderSessionSummary,
 ) -> Option<NativeStreamSnapshot> {
+    let raw_summary = read_raw_summary_for_id(store, &summary.id);
+    build_offline_stream_snapshot_with_raw(store, summary, raw_summary.as_ref(), None)
+}
+
+pub(crate) fn build_offline_stream_snapshot_with_raw(
+    store: &AntigravityPaths,
+    summary: &ProviderSessionSummary,
+    raw_summary: Option<&ParsedRawSummary>,
+    store_canon_override: Option<&Path>,
+) -> Option<NativeStreamSnapshot> {
+    build_offline_stream_snapshot_with_raw_checked(
+        store,
+        summary,
+        raw_summary,
+        store_canon_override,
+    )
+    .ok()
+    .flatten()
+}
+
+pub(crate) fn build_offline_stream_snapshot_with_raw_checked(
+    store: &AntigravityPaths,
+    summary: &ProviderSessionSummary,
+    raw_summary: Option<&ParsedRawSummary>,
+    store_canon_override: Option<&Path>,
+) -> Result<Option<NativeStreamSnapshot>> {
     let id = summary.id.as_str();
-    let raw_summary = read_raw_summary_for_id(store, id);
-    if raw_summary
-        .as_ref()
-        .is_some_and(|r| r.trajectory_meta.is_subagent(id))
-        || transcript_has_subagent_reminder(store, id)
-    {
-        return None;
+    if raw_summary.is_some_and(|r| r.trajectory_meta.is_subagent(id)) {
+        return Ok(None);
+    }
+    if inspect_conv_db_metadata_checked(store, id)?.is_some_and(|m| m.is_subagent) {
+        return Ok(None);
     }
 
-    let transcript = read_all_transcript_rows(store, id);
-    let rows_ref = transcript.as_ref().map(|(_, r)| r.as_slice());
-    let store_canon = store
-        .home
-        .canonicalize()
-        .unwrap_or_else(|_| store.home.clone());
-    let origin = offline_origin_anchor(store, id, rows_ref, raw_summary.as_ref());
+    let transcript = inspect_offline_transcript_cached(store, id)?;
+    if transcript.as_ref().is_some_and(|t| t.has_subagent_reminder)
+        || (transcript.is_none() && transcript_has_subagent_reminder(store, id))
+    {
+        return Ok(None);
+    }
+
+    let owned_canon;
+    let store_canon = match store_canon_override {
+        Some(path) => path,
+        None => {
+            owned_canon = store
+                .home
+                .canonicalize()
+                .unwrap_or_else(|_| store.home.clone());
+            owned_canon.as_path()
+        }
+    };
+    let origin = offline_origin_anchor(
+        store,
+        id,
+        transcript
+            .as_ref()
+            .and_then(|t| t.first_created_at.as_deref()),
+        raw_summary,
+    );
     let identity = format!(
         "cli:{}",
         hex::encode(Sha256::digest(format!(
@@ -942,19 +1411,14 @@ pub(crate) fn build_offline_stream_snapshot(
         .updated_at
         .as_deref()
         .and_then(parse_valid_timestamp_ms)
-        .or_else(|| {
-            transcript
-                .as_ref()
-                .and_then(|(p, _)| file_mtime_ms(p))
-                .and_then(valid_epoch_ms)
-        })
+        .or_else(|| transcript.as_ref().and_then(|t| t.file_mtime_ms))
         .or_else(|| file_mtime_ms(&store.canonical_path(id)).and_then(valid_epoch_ms));
 
-    if let Some((_, rows)) = &transcript {
-        if !rows.is_empty() {
-            let record_count = rows.len() as u64;
+    if let Some(t) = &transcript {
+        if t.record_count > 0 {
+            let record_count = t.record_count;
             if summary.archived {
-                return Some(NativeStreamSnapshot {
+                return Ok(Some(NativeStreamSnapshot {
                     provider: NativeProvider::Antigravity,
                     session_key: id.into(),
                     id: id.into(),
@@ -963,48 +1427,19 @@ pub(crate) fn build_offline_stream_snapshot(
                     record_count,
                     settled_count: record_count,
                     events: Vec::new().into(),
-                });
+                }));
             }
-            let turn_start = rows
-                .iter()
-                .rposition(|row| {
-                    let st = row["type"].as_str().unwrap_or("");
-                    let src = row["source"].as_str().unwrap_or("");
-                    (super::prompt::is_transcript_user_row(row)
-                        && super::prompt::transcript_row_has_user_payload(row))
-                        || (st == "SYSTEM_MESSAGE" && src == "SYSTEM")
-                })
-                .unwrap_or(0);
-            let turn_rows = &rows[turn_start..];
-            let last_substantive = turn_rows.iter().enumerate().rev().find(|(_, row)| {
-                let st = row["type"].as_str().unwrap_or("");
-                let src = row["source"].as_str().unwrap_or("");
-                !matches!(st, "CHECKPOINT" | "EPHEMERAL_MESSAGE" | "")
-                    && !(st == "SYSTEM_MESSAGE" && src == "SYSTEM_SDK")
-                    && !(super::prompt::is_transcript_user_row(row)
-                        && !super::prompt::transcript_row_has_user_payload(row))
-            });
-            let canceled = raw_summary
-                .as_ref()
-                .is_some_and(ParsedRawSummary::is_user_canceled_or_killed)
-                || last_substantive.is_some_and(|(_, r)| {
-                    matches!(
-                        r["status"].as_str().unwrap_or(""),
-                        "CANCELED" | "INTERRUPTED"
-                    )
-                });
+            let turn_start = t.turn_start;
+            let canceled = raw_summary.is_some_and(ParsedRawSummary::is_user_canceled_or_killed)
+                || t.last_substantive_canceled;
 
             let mut events = Vec::new();
             let settled_count = match summary.status.as_str() {
                 "running" => turn_start as u64,
                 "waiting" => {
-                    let ts_ms = last_substantive
-                        .and_then(|(_, r)| r["created_at"].as_str())
-                        .and_then(parse_valid_timestamp_ms)
-                        .or(fallback_ts_ms);
+                    let ts_ms = t.last_substantive_ts_ms.or(fallback_ts_ms);
                     if let Some(timestamp_ms) = ts_ms {
-                        if let Some(ws) = raw_summary.as_ref().and_then(|r| r.waiting_steps.last())
-                        {
+                        if let Some(ws) = raw_summary.and_then(|r| r.waiting_steps.last()) {
                             events.push(NativeTurnEvent {
                                 prompt_id: None,
                                 position: record_count,
@@ -1016,29 +1451,17 @@ pub(crate) fn build_offline_stream_snapshot(
                                 body: safe_probe_text(&ws.body),
                                 timestamp_ms,
                             });
-                        } else if let Some((rel_idx, call_id, body)) =
-                            turn_rows.iter().enumerate().rev().find_map(|(i, r)| {
-                                extract_ask_question_from_row(r, turn_start + i)
-                                    .map(|(cid, b)| (i, cid, b))
-                            })
-                        {
-                            let pos = (turn_start + rel_idx + 1) as u64;
-                            let row_ts = turn_rows[rel_idx]["created_at"]
-                                .as_str()
-                                .and_then(parse_valid_timestamp_ms)
-                                .unwrap_or(timestamp_ms);
+                        } else if let Some((pos, call_id, body, row_ts)) = &t.waiting_ask_question {
                             events.push(NativeTurnEvent {
                                 prompt_id: None,
-                                position: pos,
+                                position: *pos,
                                 turn_id: format!("cli-ask:{turn_start}:{call_id}"),
                                 kind: "reply_needed".into(),
-                                body: safe_probe_text(&body),
-                                timestamp_ms: row_ts,
+                                body: body.clone(),
+                                timestamp_ms: row_ts.unwrap_or(timestamp_ms),
                             });
                         } else {
-                            let pos = last_substantive
-                                .map(|(i, _)| (turn_start + i + 1) as u64)
-                                .unwrap_or(record_count);
+                            let pos = t.last_substantive_pos.unwrap_or(record_count);
                             events.push(NativeTurnEvent {
                                 prompt_id: None,
                                 position: pos,
@@ -1053,40 +1476,14 @@ pub(crate) fn build_offline_stream_snapshot(
                 }
                 "failed" => {
                     if !canceled {
-                        let err_target = turn_rows
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find(|(_, r)| {
-                                r["type"].as_str() == Some("ERROR_MESSAGE")
-                                    || matches!(
-                                        r["status"].as_str().unwrap_or(""),
-                                        "ERROR" | "FAILED"
-                                    )
-                            })
-                            .or(last_substantive);
-                        if let Some((rel_idx, err_row)) = err_target {
-                            let ts_ms = err_row["created_at"]
-                                .as_str()
-                                .and_then(parse_valid_timestamp_ms)
-                                .or(fallback_ts_ms);
-                            if let Some(timestamp_ms) = ts_ms {
-                                let raw_err = err_row["content"]
-                                    .as_str()
-                                    .filter(|s| !s.trim().is_empty())
-                                    .or_else(|| {
-                                        err_row["error"].as_str().filter(|s| !s.trim().is_empty())
-                                    });
-                                let body = match raw_err {
-                                    Some(txt) => safe_probe_text(txt),
-                                    None => "主回合未能完成，请打开 Antigravity 查看详情。".into(),
-                                };
+                        if let Some((pos, err_ts_ms, body)) = &t.failed_target {
+                            if let Some(timestamp_ms) = (*err_ts_ms).or(fallback_ts_ms) {
                                 events.push(NativeTurnEvent {
                                     prompt_id: None,
-                                    position: (turn_start + rel_idx + 1) as u64,
+                                    position: *pos,
                                     turn_id: format!("cli-turn:{turn_start}"),
                                     kind: "failure".into(),
-                                    body,
+                                    body: body.clone(),
                                     timestamp_ms,
                                 });
                             }
@@ -1095,46 +1492,28 @@ pub(crate) fn build_offline_stream_snapshot(
                     record_count
                 }
                 _ => {
-                    let terminal_tail = last_substantive.is_some_and(|(_, r)| {
-                        matches!(
-                            r["type"].as_str().unwrap_or(""),
-                            "PLANNER_RESPONSE" | "FINISH"
-                        ) && r["status"].as_str().unwrap_or("DONE") == "DONE"
-                    }) && !turn_rows_have_unsettled_tools(turn_rows);
+                    let terminal_tail = t.last_substantive_terminal_done && !t.has_unsettled_tools;
                     if !canceled && terminal_tail {
-                        if let Some((rel_idx, planner)) = turn_rows
-                            .iter()
-                            .enumerate()
-                            .rev()
-                            .find(|(_, r)| r["type"].as_str() == Some("PLANNER_RESPONSE"))
-                        {
-                            let ts_ms = planner["created_at"]
-                                .as_str()
-                                .and_then(parse_valid_timestamp_ms)
-                                .or(fallback_ts_ms);
-                            if let Some(timestamp_ms) = ts_ms {
-                                let reply_text = planner["content"].as_str().unwrap_or("");
-                                let detected_q =
-                                    crate::codex::assistant_feedback_request(reply_text);
-                                let artifact_fb = extract_artifact_feedback_summary_from_rows(
-                                    &turn_rows[..=rel_idx],
-                                );
+                        if let Some(planner) = &t.planner_target {
+                            if let Some(timestamp_ms) = planner.ts_ms.or(fallback_ts_ms) {
                                 let is_reply = summary.status == "reply_needed"
-                                    || detected_q.is_some()
-                                    || artifact_fb.is_some();
+                                    || planner.detected_question.is_some()
+                                    || planner.artifact_feedback.is_some();
                                 let kind = if is_reply {
                                     "reply_needed"
                                 } else {
                                     "completion"
                                 };
-                                let body = if let Some(q) = detected_q {
-                                    safe_probe_text(&q)
-                                } else if !reply_text.trim().is_empty() {
-                                    safe_probe_text(reply_text)
-                                } else if let Some(fb) =
-                                    artifact_fb.as_deref().filter(|s| !s.is_empty())
+                                let body = if let Some(q) = &planner.detected_question {
+                                    q.clone()
+                                } else if planner.reply_non_empty {
+                                    planner.safe_reply_body.clone()
+                                } else if let Some(fb) = planner
+                                    .artifact_feedback
+                                    .as_deref()
+                                    .filter(|s| !s.is_empty())
                                 {
-                                    safe_probe_text(fb)
+                                    fb.to_owned()
                                 } else if is_reply {
                                     "需要回复或确认计划，请打开 Antigravity 处理。".into()
                                 } else {
@@ -1142,7 +1521,7 @@ pub(crate) fn build_offline_stream_snapshot(
                                 };
                                 events.push(NativeTurnEvent {
                                     prompt_id: None,
-                                    position: (turn_start + rel_idx + 1) as u64,
+                                    position: planner.pos,
                                     turn_id: format!("cli-turn:{turn_start}"),
                                     kind: kind.into(),
                                     body,
@@ -1155,7 +1534,7 @@ pub(crate) fn build_offline_stream_snapshot(
                 }
             };
 
-            return Some(NativeStreamSnapshot {
+            return Ok(Some(NativeStreamSnapshot {
                 provider: NativeProvider::Antigravity,
                 session_key: id.into(),
                 id: id.into(),
@@ -1164,31 +1543,17 @@ pub(crate) fn build_offline_stream_snapshot(
                 record_count,
                 settled_count,
                 events: events.into(),
-            });
+            }));
         }
     }
 
-    // Secondary offline fallback: conversations/<id>.db steps + raw_summary
-    let db_path = store.conversations_dir().join(format!("{id}.db"));
-    let conn = Connection::open_with_flags(
-        &db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .ok()?;
-    let mut stmt = conn
-        .prepare("SELECT idx, step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM steps ORDER BY idx ASC LIMIT 200000")
-        .ok()?;
-    let db_steps: Vec<(i64, i64, i64, Vec<u8>)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-        .ok()?
-        .flatten()
-        .collect();
-    if db_steps.is_empty() {
-        return None;
-    }
-    let record_count = db_steps.len() as u64;
+    // Secondary offline fallback: conversations/<id>.db steps + raw_summary (bounded stamp cache)
+    let Some(db_turn) = inspect_offline_db_steps_cached(store, id)? else {
+        return Ok(None);
+    };
+    let record_count = db_turn.record_count;
     if summary.archived {
-        return Some(NativeStreamSnapshot {
+        return Ok(Some(NativeStreamSnapshot {
             provider: NativeProvider::Antigravity,
             session_key: id.into(),
             id: id.into(),
@@ -1197,25 +1562,17 @@ pub(crate) fn build_offline_stream_snapshot(
             record_count,
             settled_count: record_count,
             events: Vec::new().into(),
-        });
+        }));
     }
-    let turn_start = db_steps
-        .iter()
-        .rposition(|(_, st, _, blob)| *st == 14 && extract_db_user_input_text(blob).is_some())
-        .or_else(|| db_steps.iter().rposition(|(_, st, _, _)| *st == 14))
-        .unwrap_or(0);
-    let canceled = raw_summary
-        .as_ref()
-        .is_some_and(ParsedRawSummary::is_user_canceled_or_killed)
-        || db_steps
-            .last()
-            .is_some_and(|(_, _, status, _)| *status == 4);
+    let turn_start = db_turn.turn_start;
+    let canceled = raw_summary.is_some_and(ParsedRawSummary::is_user_canceled_or_killed)
+        || db_turn.last_status_canceled;
     let mut events = Vec::new();
     let settled_count = match summary.status.as_str() {
         "running" => turn_start as u64,
         "waiting" => {
             if let Some(timestamp_ms) = fallback_ts_ms {
-                if let Some(ws) = raw_summary.as_ref().and_then(|r| r.waiting_steps.last()) {
+                if let Some(ws) = raw_summary.and_then(|r| r.waiting_steps.last()) {
                     events.push(NativeTurnEvent {
                         prompt_id: None,
                         position: record_count,
@@ -1243,22 +1600,12 @@ pub(crate) fn build_offline_stream_snapshot(
         "failed" => {
             if !canceled {
                 if let Some(timestamp_ms) = fallback_ts_ms {
-                    let body = db_steps[turn_start..]
-                        .iter()
-                        .rev()
-                        .find(|(_, st, status, _)| *st == 17 || *status == 7)
-                        .and_then(|(_, _, _, blob)| {
-                            extract_db_error_text(blob)
-                                .filter(|s| !s.trim().is_empty())
-                                .map(|s| safe_probe_text(&s))
-                        })
-                        .unwrap_or_else(|| "主回合未能完成，请打开 Antigravity 查看详情。".into());
                     events.push(NativeTurnEvent {
                         prompt_id: None,
                         position: record_count,
                         turn_id: format!("cli-turn:{turn_start}"),
                         kind: "failure".into(),
-                        body,
+                        body: db_turn.failed_body,
                         timestamp_ms,
                     });
                 }
@@ -1266,49 +1613,40 @@ pub(crate) fn build_offline_stream_snapshot(
             record_count
         }
         _ => {
-            let terminal_db_tail = db_steps
-                .last()
-                .is_some_and(|(_, st, status, _)| matches!(*st, 15 | 16) && *status == 3);
-            if !canceled && terminal_db_tail {
-                if let Some((rel_idx, (_, _, _, blob))) = db_steps[turn_start..]
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, (_, st, _, _))| *st == 15)
+            if !canceled {
+                if let (Some(planner), Some(timestamp_ms)) =
+                    (&db_turn.terminal_planner, fallback_ts_ms)
                 {
-                    if let Some(timestamp_ms) = fallback_ts_ms {
-                        let reply = extract_db_planner_texts(blob).0.unwrap_or_default();
-                        let detected_q = crate::codex::assistant_feedback_request(&reply);
-                        let is_reply = summary.status == "reply_needed" || detected_q.is_some();
-                        let body = if let Some(q) = detected_q {
-                            safe_probe_text(&q)
-                        } else if !reply.trim().is_empty() {
-                            safe_probe_text(&reply)
-                        } else if is_reply {
-                            "需要回复或确认计划，请打开 Antigravity 处理。".into()
+                    let is_reply =
+                        summary.status == "reply_needed" || planner.detected_question.is_some();
+                    let body = if let Some(q) = &planner.detected_question {
+                        q.clone()
+                    } else if planner.reply_non_empty {
+                        planner.safe_reply_body.clone()
+                    } else if is_reply {
+                        "需要回复或确认计划，请打开 Antigravity 处理。".into()
+                    } else {
+                        String::new()
+                    };
+                    events.push(NativeTurnEvent {
+                        prompt_id: None,
+                        position: planner.pos,
+                        turn_id: format!("cli-turn:{turn_start}"),
+                        kind: if is_reply {
+                            "reply_needed".into()
                         } else {
-                            String::new()
-                        };
-                        events.push(NativeTurnEvent {
-                            prompt_id: None,
-                            position: (turn_start + rel_idx + 1) as u64,
-                            turn_id: format!("cli-turn:{turn_start}"),
-                            kind: if is_reply {
-                                "reply_needed".into()
-                            } else {
-                                "completion".into()
-                            },
-                            body,
-                            timestamp_ms,
-                        });
-                    }
+                            "completion".into()
+                        },
+                        body,
+                        timestamp_ms,
+                    });
                 }
             }
             record_count
         }
     };
 
-    Some(NativeStreamSnapshot {
+    Ok(Some(NativeStreamSnapshot {
         provider: NativeProvider::Antigravity,
         session_key: id.into(),
         id: id.into(),
@@ -1317,7 +1655,7 @@ pub(crate) fn build_offline_stream_snapshot(
         record_count,
         settled_count,
         events: events.into(),
-    })
+    }))
 }
 
 pub fn scan_offline_store(
@@ -1332,12 +1670,316 @@ pub fn scan_offline_store(
             return Ok(crate::native_probe::NativeScan::default());
         }
     }
-    let summaries = list_offline_summaries(store, only)?;
+    let (summaries, raw_summaries) = super::list_offline_summaries_with_raw(store, only)?;
+    let store_canon = store
+        .home
+        .canonicalize()
+        .unwrap_or_else(|_| store.home.clone());
     let mut scan = crate::native_probe::NativeScan::default();
     for summary in summaries {
-        if let Some(snapshot) = build_offline_stream_snapshot(store, &summary) {
-            scan.streams.push(snapshot);
+        let raw = raw_summaries.get(&summary.id);
+        match build_offline_stream_snapshot_with_raw_checked(
+            store,
+            &summary,
+            raw,
+            Some(&store_canon),
+        ) {
+            Ok(Some(snapshot)) => scan.streams.push(snapshot),
+            Ok(None) => {}
+            Err(_) => scan.errors += 1,
         }
     }
     Ok(scan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::annotations::ParsedWaitingStep;
+    use super::*;
+    use crate::provider_sessions::ProviderSessionSummary;
+
+    fn push_varint(out: &mut Vec<u8>, mut v: u64) {
+        while v >= 0x80 {
+            out.push(((v as u8) & 0x7f) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+    }
+
+    fn pb_bytes(field: u64, bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_varint(&mut out, (field << 3) | 2);
+        push_varint(&mut out, bytes.len() as u64);
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    fn pb_string(field: u64, val: &str) -> Vec<u8> {
+        pb_bytes(field, val.as_bytes())
+    }
+
+    #[test]
+    fn offline_dual_source_cache_detects_wal_commit_and_raw_summary_question_change() {
+        let root = std::env::temp_dir().join(format!(
+            "agenthub-ag-offline-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let conv_dir = root.join("conversations");
+        fs::create_dir_all(&conv_dir).unwrap();
+        let store = AntigravityPaths::offline(root.clone());
+
+        // 1. SQLite .db in WAL mode without checkpoint: committing to -wal must invalidate OFFLINE_DB_STEPS_CACHE
+        let db_id = "11111111-2222-4333-8444-555555555555";
+        let db_path = conv_dir.join(format!("{db_id}.db"));
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA wal_autocheckpoint = 0;
+             CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+        )
+        .unwrap();
+        let user_blob = pb_bytes(19, &pb_string(1, "测试离线 WAL 缓存"));
+        conn.execute(
+            "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (0, 14, 3, ?1)",
+            params![user_blob],
+        )
+        .unwrap();
+        let mut summary = ProviderSessionSummary {
+            id: db_id.into(),
+            session_key: db_id.into(),
+            format_version: String::new(),
+            title: "WAL Cache Test".into(),
+            cwd: "/workspace/example.invalid".into(),
+            workspace_root: None,
+            path: db_path.clone(),
+            status: "recent".into(),
+            archived: false,
+            updated_at: Some("2026-11-25T12:00:00Z".into()),
+            message_count: 1,
+            last_message: None,
+            can_rename: true,
+            rename_block_reason: None,
+            can_archive: true,
+            archive_block_reason: None,
+            can_delete: true,
+            delete_block_reason: None,
+            storage_size: None,
+            read_error: None,
+            read_warning: None,
+        };
+        let first_snap =
+            build_offline_stream_snapshot_with_raw(&store, &summary, None, None).unwrap();
+        assert!(
+            first_snap.events.is_empty(),
+            "user-only step must not emit completion"
+        );
+
+        let planner_inner = pb_string(1, "已在未 checkpoint 的 WAL 中完成最终答复。");
+        let planner_blob = pb_bytes(20, &planner_inner);
+        conn.execute(
+            "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (1, 15, 3, ?1)",
+            params![planner_blob],
+        )
+        .unwrap();
+        summary.updated_at = Some("2026-11-25T12:00:05Z".into());
+
+        let second_snap =
+            build_offline_stream_snapshot_with_raw(&store, &summary, None, None).unwrap();
+        assert_eq!(second_snap.events.len(), 1);
+        assert_eq!(second_snap.events[0].kind, "completion");
+        assert!(second_snap.events[0].body.contains("完成最终答复"));
+        drop(conn);
+
+        // 2. Transcript unchanged (cache hit) while raw_summary waiting question proof_hash changes
+        let tr_id = "66666666-7777-4888-9999-aaaaaaaaaaaa";
+        let logs_dir = store.brain_dir().join(tr_id).join(".system_generated/logs");
+        fs::create_dir_all(&logs_dir).unwrap();
+        let tr_path = logs_dir.join("transcript.jsonl");
+        fs::write(
+            &tr_path,
+            concat!(
+                r#"{"type":"USER_INPUT","source":"USER","content":"部署确认","created_at":"2026-11-25T12:01:00Z"}"#,
+                "\n",
+                r#"{"type":"PLANNER_RESPONSE","status":"WAITING","content":"等待确认","created_at":"2026-11-25T12:01:02Z"}"#,
+                "\n"
+            ),
+        )
+        .unwrap();
+        let mut tr_summary = summary.clone();
+        tr_summary.id = tr_id.into();
+        tr_summary.session_key = tr_id.into();
+        tr_summary.status = "waiting".into();
+        let mut raw_a = ParsedRawSummary::default();
+        raw_a.waiting_steps.push(ParsedWaitingStep {
+            step_index: 2,
+            kind: "reply_needed",
+            body: "问题一：确认目标环境？".into(),
+            proof_hash: "proof-a".into(),
+        });
+        let snap_a =
+            build_offline_stream_snapshot_with_raw(&store, &tr_summary, Some(&raw_a), None)
+                .unwrap();
+        assert_eq!(snap_a.events.len(), 1);
+        assert_eq!(snap_a.events[0].turn_id, "cli-wait:0:2:proof-a");
+        assert_eq!(snap_a.events[0].body, "问题一：确认目标环境？");
+
+        let mut raw_b = ParsedRawSummary::default();
+        raw_b.waiting_steps.push(ParsedWaitingStep {
+            step_index: 3,
+            kind: "reply_needed",
+            body: "问题二：是否同时升级本机？".into(),
+            proof_hash: "proof-b".into(),
+        });
+        let snap_b =
+            build_offline_stream_snapshot_with_raw(&store, &tr_summary, Some(&raw_b), None)
+                .unwrap();
+        assert_eq!(snap_b.events.len(), 1);
+        assert_eq!(snap_b.events[0].turn_id, "cli-wait:0:3:proof-b");
+        assert_eq!(snap_b.events[0].body, "问题二：是否同时升级本机？");
+
+        evict_idle_meta_cache(std::time::Duration::ZERO);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn transient_sqlite_lock_is_not_cached_and_recovers_with_unchanged_file_stamp() {
+        let root = std::env::temp_dir().join(format!(
+            "agenthub-ag-transient-db-lock-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let conv_dir = root.join("conversations");
+        fs::create_dir_all(&conv_dir).unwrap();
+        let store = AntigravityPaths::offline(root.clone());
+
+        let db_id = "22222222-3333-4444-8555-666666666666";
+        let db_path = conv_dir.join(format!("{db_id}.db"));
+        // Use DELETE journal mode so BEGIN EXCLUSIVE blocks readers with SQLITE_BUSY
+        // and ROLLBACK leaves the file's FileStamp 100% identical!
+        let writer = Connection::open(&db_path).unwrap();
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+            )
+            .unwrap();
+        let user_blob = pb_bytes(19, &pb_string(1, "锁释放后不能漏发通知"));
+        let planner_blob = pb_bytes(20, &pb_string(1, "锁释放后的最终完成答复。"));
+        writer
+            .execute(
+                "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (0, 14, 3, ?1)",
+                params![user_blob],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (1, 15, 3, ?1)",
+                params![planner_blob],
+            )
+            .unwrap();
+
+        let sum_conn = Connection::open(store.summaries_db()).unwrap();
+        sum_conn
+            .execute_batch(
+                "CREATE TABLE conversation_summaries (
+                    conversation_id TEXT PRIMARY KEY,
+                    title TEXT,
+                    preview TEXT,
+                    step_count INTEGER,
+                    last_modified_time TEXT,
+                    workspace_uris TEXT,
+                    parent_conversation_id TEXT,
+                    nesting_depth INTEGER
+                );",
+            )
+            .unwrap();
+        sum_conn
+            .execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'Locked DB Test', 'p', 2, '2026-11-26T01:00:00Z', '', '', 0)",
+                params![db_id],
+            )
+            .unwrap();
+        drop(sum_conn);
+
+        writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let stamp_locked = AntigravityFileStamp::sqlite_pair(&db_path).unwrap();
+        let scan_while_locked = scan_offline_store(&store, Some(db_id)).unwrap();
+        assert!(scan_while_locked.streams.is_empty());
+        assert_eq!(
+            scan_while_locked.errors, 1,
+            "transient SQLite lock must record scan error instead of silently succeeding as empty"
+        );
+
+        writer.execute_batch("ROLLBACK;").unwrap();
+        let stamp_unlocked = AntigravityFileStamp::sqlite_pair(&db_path).unwrap();
+        assert_eq!(
+            stamp_locked, stamp_unlocked,
+            "FileStamp must remain unchanged across ROLLBACK"
+        );
+
+        let scan_after_unlock = scan_offline_store(&store, Some(db_id)).unwrap();
+        assert_eq!(scan_after_unlock.errors, 0);
+        assert_eq!(scan_after_unlock.streams.len(), 1);
+        assert_eq!(scan_after_unlock.streams[0].events.len(), 1);
+        assert_eq!(scan_after_unlock.streams[0].events[0].kind, "completion");
+        assert!(scan_after_unlock.streams[0].events[0]
+            .body
+            .contains("锁释放后的最终完成答复"));
+
+        // Also verify a failed `.db` session (where `CONV_DB_STEPS_CACHE` & `CONV_DB_META_CACHE`
+        // derive `summary.status == "failed"`) is not poisoned during a transient exclusive lock.
+        let err_id = "33333333-4444-4555-8666-777777777777";
+        let err_db_path = conv_dir.join(format!("{err_id}.db"));
+        let err_writer = Connection::open(&err_db_path).unwrap();
+        err_writer
+            .execute_batch(
+                "PRAGMA journal_mode = DELETE;
+                 CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+            )
+            .unwrap();
+        err_writer
+            .execute(
+                "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (0, 14, 3, ?1)",
+                params![user_blob],
+            )
+            .unwrap();
+        let err_blob = pb_bytes(24, &pb_bytes(3, &pb_string(2, "锁释放后可见的执行失败")));
+        err_writer
+            .execute(
+                "INSERT INTO steps (idx, step_type, status, step_payload) VALUES (1, 17, 7, ?1)",
+                params![err_blob],
+            )
+            .unwrap();
+        Connection::open(store.summaries_db())
+            .unwrap()
+            .execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'Locked Fail Test', 'p', 2, '2026-11-26T01:05:00Z', '', '', 0)",
+                params![err_id],
+            )
+            .unwrap();
+
+        err_writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+        let err_stamp_locked = AntigravityFileStamp::sqlite_pair(&err_db_path).unwrap();
+        let err_scan_locked = scan_offline_store(&store, Some(err_id)).unwrap();
+        assert!(err_scan_locked.streams.is_empty());
+        assert_eq!(err_scan_locked.errors, 1);
+
+        err_writer.execute_batch("ROLLBACK;").unwrap();
+        assert_eq!(
+            err_stamp_locked,
+            AntigravityFileStamp::sqlite_pair(&err_db_path).unwrap()
+        );
+        let err_scan_unlocked = scan_offline_store(&store, Some(err_id)).unwrap();
+        assert_eq!(err_scan_unlocked.errors, 0);
+        assert_eq!(err_scan_unlocked.streams.len(), 1);
+        assert_eq!(err_scan_unlocked.streams[0].events.len(), 1);
+        assert_eq!(err_scan_unlocked.streams[0].events[0].kind, "failure");
+        assert!(err_scan_unlocked.streams[0].events[0]
+            .body
+            .contains("锁释放后可见的执行失败"));
+
+        drop(err_writer);
+        drop(writer);
+        evict_idle_meta_cache(std::time::Duration::ZERO);
+        let _ = fs::remove_dir_all(root);
+    }
 }

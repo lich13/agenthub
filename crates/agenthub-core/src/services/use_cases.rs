@@ -242,6 +242,26 @@ impl<'a> ThreadUseCases<'a> {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryLimitRequest {
+    pub q: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LimitU32Request {
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobDetailRequest {
+    pub id: String,
+    pub include_output: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct JobUseCases;
 
@@ -256,6 +276,27 @@ impl JobUseCases {
 
     pub fn response(self, job: JobRecord) -> JobResponse {
         job_response(job)
+    }
+
+    pub fn list_from_db(
+        self,
+        db: &crate::db::PanelDb,
+        limit: Option<u32>,
+    ) -> Result<Vec<JobResponse>> {
+        let plan = self.list(limit)?;
+        Ok(db.list_jobs(plan)?.into_iter().map(job_response).collect())
+    }
+
+    pub fn detail_from_db(
+        self,
+        db: &crate::db::PanelDb,
+        job_id: &str,
+        include_output: Option<bool>,
+    ) -> Result<Option<JobResponse>> {
+        let plan = self.detail(job_id)?;
+        Ok(db
+            .job_with_output(&plan, include_output.unwrap_or(true))?
+            .map(job_response))
     }
 }
 

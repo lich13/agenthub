@@ -16,6 +16,11 @@ public struct AgentBrandIcon: View {
     private static let deepseekWhalePath =
         "M 48.84 10.05 C 48.32 9.79 48.1 10.28 47.8 10.53 C 47.7 10.61 47.61 10.71 47.53 10.81 C 46.78 11.62 45.9 12.16 44.76 12.1 C 43.09 12 41.67 12.54 40.41 13.84 C 40.14 12.23 39.25 11.27 37.89 10.66 C 37.18 10.34 36.47 10.02 35.97 9.32 C 35.62 8.82 35.53 8.27 35.36 7.73 C 35.25 7.4 35.14 7.06 34.77 7.01 C 34.36 6.94 34.21 7.29 34.05 7.58 C 33.42 8.75 33.17 10.05 33.2 11.36 C 33.25 14.31 34.47 16.66 36.9 18.34 C 37.18 18.53 37.25 18.72 37.16 19 C 36.99 19.58 36.8 20.14 36.62 20.71 C 36.51 21.08 36.35 21.16 35.96 21 C 34.63 20.43 33.48 19.59 32.46 18.58 C 30.74 16.87 29.18 14.99 27.23 13.52 C 26.78 13.18 26.32 12.86 25.85 12.55 C 23.86 10.58 26.11 8.97 26.63 8.78 C 27.17 8.58 26.82 7.89 25.06 7.9 C 23.3 7.9 21.7 8.5 19.65 9.3 C 19.35 9.42 19.03 9.51 18.71 9.58 C 16.85 9.22 14.92 9.14 12.9 9.38 C 9.11 9.81 6.07 11.64 3.84 14.77 C 1.16 18.53 0.53 22.8 1.31 27.26 C 2.12 31.95 4.47 35.84 8.07 38.88 C 11.82 42.03 16.13 43.58 21.04 43.28 C 24.03 43.1 27.35 42.7 31.1 39.46 C 32.05 39.94 33.04 40.13 34.69 40.27 C 35.95 40.39 37.18 40.21 38.12 40.01 C 39.6 39.69 39.5 38.29 38.96 38.03 C 34.62 35.97 35.58 36.81 34.71 36.13 C 36.92 33.46 40.24 30.7 41.54 21.73 C 41.64 21.02 41.56 20.57 41.54 19.99 C 41.53 19.64 41.61 19.5 42 19.46 C 43.09 19.34 44.15 19.03 45.12 18.49 C 47.93 16.92 49.06 14.34 49.33 11.26 C 49.37 10.78 49.32 10.3 48.84 10.05 Z M 24.33 37.84 C 20.12 34.46 18.08 33.35 17.24 33.4 C 16.45 33.45 16.59 34.37 16.76 34.97 C 16.94 35.56 17.18 35.97 17.51 36.49 C 17.74 36.83 17.9 37.34 17.28 37.73 C 15.93 38.58 13.57 37.44 13.46 37.38 C 10.72 35.74 8.43 33.56 6.81 30.58 C 5.25 27.72 4.35 24.65 4.2 21.37 C 4.16 20.58 4.39 20.3 5.16 20.15 C 6.18 19.96 7.22 19.92 8.24 20.07 C 12.53 20.71 16.19 22.67 19.25 25.78 C 21 27.54 22.33 29.66 23.69 31.72 C 25.14 33.91 26.7 36 28.68 37.71 C 29.38 38.31 29.94 38.77 30.48 39.1 C 28.86 39.29 26.17 39.33 24.33 37.84 Z M 26.34 24.6 C 26.34 24.25 26.62 23.97 26.97 23.97 C 27.04 23.97 27.12 23.98 27.18 24.01 C 27.27 24.04 27.34 24.09 27.41 24.16 C 27.52 24.27 27.58 24.43 27.58 24.6 C 27.58 24.95 27.3 25.23 26.96 25.23 C 26.61 25.23 26.34 24.95 26.34 24.6 Z M 32.61 27.88 C 32.2 28.05 31.8 28.19 31.42 28.21 C 30.82 28.24 30.16 27.99 29.81 27.69 C 29.26 27.22 28.86 26.95 28.7 26.13 C 28.63 25.78 28.67 25.23 28.73 24.92 C 28.87 24.25 28.71 23.82 28.25 23.42 C 27.87 23.1 27.39 23.02 26.86 23.02 C 26.67 23.02 26.48 22.93 26.35 22.86 C 26.13 22.74 25.95 22.46 26.12 22.12 C 26.18 22.01 26.45 21.74 26.51 21.69 C 27.23 21.27 28.05 21.41 28.82 21.72 C 29.53 22.02 30.06 22.56 30.83 23.33 C 31.62 24.26 31.76 24.51 32.21 25.21 C 32.57 25.75 32.89 26.31 33.11 26.95 C 33.24 27.35 33.07 27.68 32.61 27.88 Z"
 
+    private static let parsedCodexPath: CGPath = SVGPathParser.parse(codexPath)
+    private static let parsedClaudePath: CGPath = SVGPathParser.parse(claudePath)
+    private static let parsedDeepseekWhalePath: CGPath = SVGPathParser.parse(deepseekWhalePath)
+    private static let parsedAntigravityArchPath: CGPath = SVGPathParser.parse(antigravityArchPath)
+
     public init(_ agent: AgentBrandId, size: CGFloat = 17) {
         self.agent = agent
         self.size = size
@@ -27,19 +32,19 @@ public struct AgentBrandIcon: View {
             case .codex:
                 let scale = min(canvasSize.width, canvasSize.height) / 24.0
                 var t = CGAffineTransform(scaleX: scale, y: scale)
-                if let cg = SVGPathParser.parse(Self.codexPath).copy(using: &t) {
+                if let cg = Self.parsedCodexPath.copy(using: &t) {
                     context.fill(Path(cg), with: .foreground)
                 }
             case .claude:
                 let scale = min(canvasSize.width, canvasSize.height) / 24.0
                 var t = CGAffineTransform(scaleX: scale, y: scale)
-                if let cg = SVGPathParser.parse(Self.claudePath).copy(using: &t) {
+                if let cg = Self.parsedClaudePath.copy(using: &t) {
                     context.fill(Path(cg), with: .foreground)
                 }
             case .dsh:
                 let scale = min(canvasSize.width, canvasSize.height) / 50.0
                 var t = CGAffineTransform(scaleX: scale, y: scale)
-                if let cg = SVGPathParser.parse(Self.deepseekWhalePath).copy(using: &t) {
+                if let cg = Self.parsedDeepseekWhalePath.copy(using: &t) {
                     context.fill(Path(cg), with: .foreground)
                 }
             case .grok, .grokbot:
@@ -108,7 +113,7 @@ public struct AgentBrandIcon: View {
     private func drawAntigravity(context: inout GraphicsContext, size: CGSize) {
         let s = min(size.width, size.height) / 24.0
         context.scaleBy(x: s, y: s)
-        let arch = Path(SVGPathParser.parse(Self.antigravityArchPath))
+        let arch = Path(Self.parsedAntigravityArchPath)
         context.clip(to: arch)
 
         context.fill(
@@ -154,6 +159,7 @@ public struct AgentBrandIcon: View {
 
 public struct AgentHubLogoView: View {
     public var size: CGFloat
+    private static let parsedStarPath: CGPath = SVGPathParser.parse("M14 11.5L14.9 13.1L16.5 14L14.9 14.9L14 16.5L13.1 14.9L11.5 14L13.1 13.1Z")
 
     public init(size: CGFloat = 24) {
         self.size = size
@@ -204,7 +210,7 @@ public struct AgentHubLogoView: View {
             context.fill(center, with: .color(RGBAColor(hex: 0x0F172A).color))
             context.stroke(center, with: .color(RGBAColor(hex: 0x38BDF8).color), lineWidth: 0.9)
 
-            let star = Path(SVGPathParser.parse("M14 11.5L14.9 13.1L16.5 14L14.9 14.9L14 16.5L13.1 14.9L11.5 14L13.1 13.1Z"))
+            let star = Path(Self.parsedStarPath)
             context.fill(star, with: .color(RGBAColor(hex: 0xF8FAFC).color))
         }
         .frame(width: size, height: size)

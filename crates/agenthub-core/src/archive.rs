@@ -247,10 +247,11 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
     let updated_expr = first_existing(columns, &["updated_at", "last_activity_at", "created_at"])
         .unwrap_or("id")
         .to_string();
-    let thread_source_expr = first_existing(columns, &["thread_source", "source_kind"])
-        .or_else(|| first_existing(columns, &["source"]))
-        .unwrap_or("NULL");
-    let source_expr = first_existing(columns, &["source"]).unwrap_or("NULL");
+    let thread_source_expr = super::codex::coalesce_non_empty_columns(
+        columns,
+        &["thread_source", "source_kind", "source"],
+    );
+    let source_expr = super::codex::coalesce_non_empty_columns(columns, &["source"]);
     let parent_thread_expr = super::codex::coalesce_non_empty_columns(
         columns,
         &[
@@ -260,12 +261,14 @@ fn build_visibility_select_sql(columns: &HashSet<String>) -> VisibilitySelectSql
             "attachedThreadParentId",
         ],
     );
-    let agent_path_expr = first_existing(columns, &["agent_path", "agentPath"]).unwrap_or("NULL");
+    let agent_path_expr =
+        super::codex::coalesce_non_empty_columns(columns, &["agent_path", "agentPath"]);
     let agent_nickname_expr =
-        first_existing(columns, &["agent_nickname", "agentNickname"]).unwrap_or("NULL");
-    let agent_role_expr = first_existing(columns, &["agent_role", "agentRole"]).unwrap_or("NULL");
+        super::codex::coalesce_non_empty_columns(columns, &["agent_nickname", "agentNickname"]);
+    let agent_role_expr =
+        super::codex::coalesce_non_empty_columns(columns, &["agent_role", "agentRole"]);
     let has_user_event_expr = first_existing(columns, &["has_user_event"]).unwrap_or("NULL");
-    let title_expr = first_existing(columns, &["title", "name"]).unwrap_or("NULL");
+    let title_expr = super::codex::coalesce_non_empty_columns(columns, &["title", "name"]);
     let select_cols = format!(
         "id, CASE WHEN {archived_condition} THEN 1 ELSE 0 END, \
          {thread_source_expr}, {source_expr}, {parent_thread_expr}, {agent_path_expr}, \
@@ -341,7 +344,23 @@ pub(crate) fn verify_hidden_target_fingerprint(
     id: &str,
 ) -> Result<Option<String>> {
     verify_closure_target_fingerprint(conn, thread_columns, has_spawn_edges, id, |row| {
-        !row.archived && row.hidden_category.is_some()
+        if row.archived {
+            return false;
+        }
+        if row.hidden_category.is_some() {
+            return true;
+        }
+        has_spawn_edges
+            && conn
+                .query_row(
+                    "SELECT 1 FROM thread_spawn_edges WHERE child_thread_id = ?1 LIMIT 1",
+                    [&row.id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .is_some()
     })
 }
 
@@ -407,6 +426,14 @@ fn hidden_visibility_rows(
     work: &crate::scan_work::ScanWork,
 ) -> Result<Vec<HiddenVisibilityRow>> {
     let columns = table_columns(conn, "threads")?;
+    let spawn_cols = table_columns(conn, "thread_spawn_edges")?;
+    let spawned_children: HashSet<String> = if spawn_cols.contains("child_thread_id") {
+        let mut stmt = conn.prepare("SELECT DISTINCT child_thread_id FROM thread_spawn_edges")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<HashSet<_>>>()?
+    } else {
+        HashSet::new()
+    };
     let spec = build_visibility_select_sql(&columns);
     let sql = format!(
         "SELECT {} FROM threads ORDER BY {} DESC, id",
@@ -416,8 +443,11 @@ fn hidden_visibility_rows(
     let rows = stmt.query_map([], decode_visibility_row)?;
     let mut result = Vec::new();
     for row in rows {
-        let row = row?;
+        let mut row = row?;
         work.check()?;
+        if row.hidden_category.is_none() && spawned_children.contains(&row.id) {
+            row.hidden_category = Some("subagent".to_string());
+        }
         result.push(row);
     }
     Ok(result)

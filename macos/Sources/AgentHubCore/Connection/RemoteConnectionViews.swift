@@ -18,14 +18,22 @@ public struct MachineButtonView: View {
 
     private var menuEntries: [NativeMenuEntry] {
         var entries: [NativeMenuEntry] = [
-            NativeMenuEntry(id: "local", title: "本机") { selectTarget(id: "local") },
+            NativeMenuEntry(id: "local", title: "本机", selected: store.target == .local) {
+                selectTarget(id: "local")
+            },
         ]
         if !store.machines.isEmpty {
             entries.append(.separator("sep-machines"))
             for machine in store.machines {
-                entries.append(NativeMenuEntry(id: machine.id, title: machine.name) {
-                    selectTarget(id: machine.id)
-                })
+                entries.append(
+                    NativeMenuEntry(
+                        id: machine.id,
+                        title: machine.name,
+                        selected: store.target == .remote && store.activeMachineId == machine.id
+                    ) {
+                        selectTarget(id: machine.id)
+                    }
+                )
             }
         }
         entries.append(.separator("sep-config"))

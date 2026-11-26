@@ -81,7 +81,7 @@ public struct DangerButtonStyle: ButtonStyle {
         let soft: Bool
 
         var body: some View {
-            let fg = soft ? palette.errFg : RGBAColor(hex: 0xFFFFFF)
+            let fg = soft ? palette.errFg : palette.buttonFg
             let bg = soft ? palette.errBg : palette.errFg
             let border = soft ? palette.errBorder : palette.errFg
             return configuration.label
@@ -219,6 +219,12 @@ public struct CapsuleSwitch: View {
             ZStack(alignment: isOn ? .trailing : .leading) {
                 Capsule(style: .continuous)
                     .fill((isOn ? palette.accent : palette.trackOff).color)
+                    .overlay {
+                        if !isOn {
+                            Capsule(style: .continuous)
+                                .strokeBorder(palette.textMuted.color, lineWidth: 1)
+                        }
+                    }
                     .frame(width: 38, height: 22)
                 Circle()
                     .fill(
@@ -369,6 +375,91 @@ public struct PanelCard<HeaderAction: View, Content: View>: View {
             content()
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(palette.surface.color)
+                .shadow(
+                    color: palette.shadow1.color.color,
+                    radius: palette.shadow1.radius,
+                    x: palette.shadow1.x,
+                    y: palette.shadow1.y
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(palette.borderSubtle.color, lineWidth: 1)
+        )
+    }
+}
+
+public struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: View>: View {
+    @Environment(\.agentHubPalette) private var palette
+    public let title: String
+    public var icon: LucideIconName?
+    @Binding public var isExpanded: Bool
+    @ViewBuilder public let summaryBadges: () -> SummaryBadges
+    @ViewBuilder public let headerTrailing: () -> HeaderTrailing
+    @ViewBuilder public let content: () -> Content
+
+    public init(
+        title: String,
+        icon: LucideIconName? = nil,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder summaryBadges: @escaping () -> SummaryBadges = { EmptyView() },
+        @ViewBuilder headerTrailing: @escaping () -> HeaderTrailing = { EmptyView() },
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.title = title
+        self.icon = icon
+        self._isExpanded = isExpanded
+        self.summaryBadges = summaryBadges
+        self.headerTrailing = headerTrailing
+        self.content = content
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    isExpanded.toggle()
+                } label: {
+                    HStack(spacing: 8) {
+                        LucideIcon(isExpanded ? .chevronDown : .chevronRight, size: 15)
+                            .foregroundStyle(palette.textMuted.color)
+                        if let icon {
+                            LucideIcon(icon, size: 17)
+                                .foregroundStyle(palette.textMuted.color)
+                        }
+                        Text(title)
+                            .font(DesignFonts.body(14, weight: .semibold))
+                            .foregroundStyle(palette.textPrimary.color)
+                            .lineLimit(1)
+                        summaryBadges()
+                        Spacer(minLength: 4)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(PlainHitButtonStyle())
+
+                headerTrailing()
+                    .padding(.vertical, 6)
+            }
+            .padding(.horizontal, 16)
+            .frame(minHeight: 48)
+
+            if isExpanded {
+                Rectangle()
+                    .fill(palette.borderSubtle.color)
+                    .frame(height: 1)
+                VStack(alignment: .leading, spacing: 12) {
+                    content()
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)

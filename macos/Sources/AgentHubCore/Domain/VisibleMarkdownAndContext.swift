@@ -102,15 +102,16 @@ private enum MarkdownPatterns {
     static let heading = try! NSRegularExpression(pattern: "^ {0,3}(#{1,6})\\s")
     static let openInstructions = try! NSRegularExpression(pattern: "^\\s*<INSTRUCTIONS>[ \\t]*(?:\\r?\\n|$)", options: [.caseInsensitive])
     static let closeInstructions = try! NSRegularExpression(pattern: "<\\/INSTRUCTIONS\\s*>", options: [.caseInsensitive])
-    static let ordinaryTag = try! NSRegularExpression(pattern: "^<([a-z][a-z0-9_:-]*)", options: [.caseInsensitive])
+    static let ordinaryTag = try! NSRegularExpression(pattern: "<([a-z][a-z0-9_:-]*)", options: [.caseInsensitive])
     static let replyEnvelope = try! NSRegularExpression(
         pattern: "^[ \\t]{0,3}<send_user_message_question_reply>([\\s\\S]*?)<\\/send_user_message_question_reply>[ \\t]*(?=\\r?$)",
         options: [.anchorsMatchLines]
     )
-    static let fileHeader = try! NSRegularExpression(pattern: "^# Files mentioned by the user:\\r?\\n")
+    static let fileHeader = try! NSRegularExpression(pattern: "# Files mentioned by the user:\\r?\\n")
     static let fileLine = try! NSRegularExpression(pattern: "^## .+: .+$")
     static let agentsPath = try! NSRegularExpression(pattern: "^[^\\s]+[/\\\\]agents\\.md$")
     static let planHeading = try! NSRegularExpression(pattern: "^ {0,3}#\\s+(.+?)\\s*#*\\s*$", options: [.anchorsMatchLines])
+    static let fileLinkSpan = try! NSRegularExpression(pattern: "(?:\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\))|(?:<(file:[^>\\s]+)>)")
 }
 
 public enum VisibleMarkdownEngine {
@@ -639,16 +640,135 @@ public enum UserContextEngine {
         ("legacy_model_mismatch_warning", "runtime"),
     ]
 
+    private struct ParsedUserMessageCacheKey: Hashable {
+        let utf8Count: Int
+        let text: String
+        let contextBlocks: [UserContextBlock]?
+    }
+
+    private struct ParsedUserMessageCacheEntry {
+        let projection: UserMessageProjection
+        let segments: [UserMessageSegment]
+        let byteWeight: Int
+        var seq: UInt64
+    }
+
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var parsedCache: [ParsedUserMessageCacheKey: ParsedUserMessageCacheEntry] = [:]
+    nonisolated(unsafe) private static var parsedCacheTotalBytes: Int = 0
+    nonisolated(unsafe) private static var parsedCacheSeq: UInt64 = 0
+    private static let maxParsedCacheEntries = 256
+    private static let maxParsedCacheEntryBytes = 262_144
+    private static let maxParsedCacheTotalBytes = 8 * 1_048_576
+    private static let fileHeaderPrefix = "# Files mentioned by the user:"
+    private static let fileHeaderPrefixLength = (fileHeaderPrefix as NSString).length
+
+    private static func contextBlocksByteCount(_ blocks: [UserContextBlock]?) -> Int {
+        guard let blocks else { return 0 }
+        var total = 0
+        for block in blocks {
+            total += block.kind.utf8.count + block.text.utf8.count + 32
+        }
+        return total
+    }
+
+    private static func segmentsByteCount(_ segments: [UserMessageSegment]) -> Int {
+        var total = 0
+        for segment in segments {
+            switch segment {
+            case let .text(id, s):
+                total += id.utf8.count + s.utf8.count + 16
+            case let .reply(id, question, answer):
+                total += id.utf8.count + question.utf8.count + answer.utf8.count + 32
+            }
+        }
+        return total
+    }
+
+    public static func _parsedCacheStatsForTesting() -> (count: Int, totalBytes: Int) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return (parsedCache.count, parsedCacheTotalBytes)
+    }
+
+    public static func _resetParsedCacheForTesting() {
+        cacheLock.lock()
+        parsedCache.removeAll()
+        parsedCacheTotalBytes = 0
+        parsedCacheSeq = 0
+        cacheLock.unlock()
+    }
+
     public static func visibleContextText(_ text: String) -> String {
         let ranges = VisibleMarkdownEngine.literalMarkdownRanges(text, includeInline: true, includeQuotes: true)
         return VisibleMarkdownEngine.visibleMarkdown(text, protectedRanges: ranges)
     }
 
+    public static func projectAndSegmentUserMessage(
+        _ text: String,
+        contextBlocks: [UserContextBlock]? = nil
+    ) -> (projection: UserMessageProjection, segments: [UserMessageSegment]) {
+        let inputContextBytes = contextBlocksByteCount(contextBlocks)
+        let inputBytes = text.utf8.count + inputContextBytes
+        let key = ParsedUserMessageCacheKey(utf8Count: text.utf8.count, text: text, contextBlocks: contextBlocks)
+        if inputBytes <= maxParsedCacheEntryBytes {
+            cacheLock.lock()
+            if var hit = parsedCache[key] {
+                parsedCacheSeq &+= 1
+                hit.seq = parsedCacheSeq
+                parsedCache[key] = hit
+                cacheLock.unlock()
+                return (hit.projection, hit.segments)
+            }
+            cacheLock.unlock()
+        }
+
+        let proj = computeProjectUserMessage(text, contextBlocks: contextBlocks)
+        let segs = computeUserMessageSegments(fromProjectedText: proj.text)
+
+        let projectedBytes = proj.text.utf8.count
+            + contextBlocksByteCount(proj.contextBlocks)
+            + segmentsByteCount(segs)
+        let entryBytes = inputBytes + projectedBytes + 128
+        if inputBytes <= maxParsedCacheEntryBytes
+            && projectedBytes <= maxParsedCacheEntryBytes
+            && entryBytes <= maxParsedCacheTotalBytes
+        {
+            cacheLock.lock()
+            if let existing = parsedCache.removeValue(forKey: key) {
+                parsedCacheTotalBytes = max(0, parsedCacheTotalBytes - existing.byteWeight)
+            }
+            while !parsedCache.isEmpty
+                && (parsedCache.count >= maxParsedCacheEntries
+                    || parsedCacheTotalBytes + entryBytes > maxParsedCacheTotalBytes),
+                let oldestKey = parsedCache.min(by: { $0.value.seq < $1.value.seq })?.key
+            {
+                if let removed = parsedCache.removeValue(forKey: oldestKey) {
+                    parsedCacheTotalBytes = max(0, parsedCacheTotalBytes - removed.byteWeight)
+                }
+            }
+            parsedCacheSeq &+= 1
+            parsedCache[key] = ParsedUserMessageCacheEntry(
+                projection: proj,
+                segments: segs,
+                byteWeight: entryBytes,
+                seq: parsedCacheSeq
+            )
+            parsedCacheTotalBytes += entryBytes
+            cacheLock.unlock()
+        }
+        return (proj, segs)
+    }
+
     public static func projectUserMessage(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> UserMessageProjection {
+        projectAndSegmentUserMessage(text, contextBlocks: contextBlocks).projection
+    }
+
+    private static func computeProjectUserMessage(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> UserMessageProjection {
         if let contextBlocks {
             return UserMessageProjection(text: text, contextBlocks: contextBlocks)
         }
-        if !text.contains("<") && !text.contains("# Files mentioned by the user:") {
+        if !text.contains("<") && !text.contains(fileHeaderPrefix) {
             return UserMessageProjection(text: text, contextBlocks: [])
         }
 
@@ -665,11 +785,18 @@ public enum UserContextEngine {
         var adjacent = false
         var lineStart = 0
 
+        let substring: (Int, Int) -> String = { start, end in
+            let s = max(0, min(start, total))
+            let e = max(s, min(end, total))
+            return s < e ? ns.substring(with: NSRange(location: s, length: e - s)) : ""
+        }
+
         let advance: (Int) -> Void = { end in
-            let slice = text.utf16Substring(from: cursor, to: end) as NSString
-            let nl = slice.range(of: "\n", options: .backwards)
-            if nl.location != NSNotFound {
-                lineStart = cursor + nl.location + 1
+            if end > cursor {
+                let nl = ns.range(of: "\n", options: .backwards, range: NSRange(location: cursor, length: end - cursor))
+                if nl.location != NSNotFound {
+                    lineStart = nl.location + 1
+                }
             }
             cursor = end
         }
@@ -682,17 +809,35 @@ public enum UserContextEngine {
                 adjacent = false
                 continue
             }
-            let prefixSpaces = text.utf16Substring(from: lineStart, to: cursor)
-            let boundary = (cursor - lineStart <= 3) && prefixSpaces.allSatisfy { $0 == " " }
+            var boundary = (cursor - lineStart <= 3)
+            if boundary && cursor > lineStart {
+                for idx in lineStart ..< cursor where ns.character(at: idx) != 0x20 {
+                    boundary = false
+                    break
+                }
+            }
 
             if adjacent || boundary {
-                let tailFromCursor = text.utf16Substring(from: cursor, to: total)
-                let isFileHeader = tailFromCursor.hasPrefix("# Files mentioned by the user:")
-                if let fileEnd = isFileHeader ? fileHeaderEnd(ns: ns, start: cursor) : nil {
-                    let pre = text.utf16Substring(from: 0, to: cursor)
-                    let contextStart = (kept == 0 && pre.allSatisfy { $0 == "\r" || $0 == "\n" }) ? 0 : cursor
-                    bodyParts.append(text.utf16Substring(from: kept, to: contextStart))
-                    blocks.append(UserContextBlock(kind: "files", text: text.utf16Substring(from: contextStart, to: fileEnd)))
+                let isFileHeader = (cursor + fileHeaderPrefixLength <= total)
+                    && ns.compare(
+                        fileHeaderPrefix,
+                        options: [.literal],
+                        range: NSRange(location: cursor, length: fileHeaderPrefixLength)
+                    ) == .orderedSame
+                if let fileEnd = isFileHeader ? fileHeaderEnd(text: text, ns: ns, start: cursor) : nil {
+                    var onlyLeadingNewlines = (kept == 0)
+                    if onlyLeadingNewlines {
+                        for idx in 0 ..< cursor {
+                            let cu = ns.character(at: idx)
+                            if cu != 0x0D && cu != 0x0A {
+                                onlyLeadingNewlines = false
+                                break
+                            }
+                        }
+                    }
+                    let contextStart = onlyLeadingNewlines ? 0 : cursor
+                    bodyParts.append(substring(kept, contextStart))
+                    blocks.append(UserContextBlock(kind: "files", text: substring(contextStart, fileEnd)))
                     advance(fileEnd)
                     kept = fileEnd
                     adjacent = true
@@ -703,7 +848,7 @@ public enum UserContextEngine {
                 var matched: (name: String, kind: String, end: Int)?
                 if let instEnd = instructionEnd(ns: ns, lowerNS: lowerNS, start: cursor) {
                     matched = ("instructions", "instructions", instEnd)
-                } else {
+                } else if ns.character(at: cursor) == 0x3C {
                     for (name, kind) in knownTags {
                         if let openEnd = openingEnd(lowerNS: lowerNS, start: cursor, name: name) {
                             matched = (name, kind, openEnd)
@@ -716,17 +861,22 @@ public enum UserContextEngine {
                     guard let closeEnd = closingEnd(lowerNS: lowerNS, cursor: matched.end, name: matched.name, ranges: ranges) else {
                         break
                     }
-                    bodyParts.append(text.utf16Substring(from: kept, to: cursor))
-                    blocks.append(UserContextBlock(kind: matched.kind, text: text.utf16Substring(from: cursor, to: closeEnd)))
+                    bodyParts.append(substring(kept, cursor))
+                    blocks.append(UserContextBlock(kind: matched.kind, text: substring(cursor, closeEnd)))
                     advance(closeEnd)
                     kept = closeEnd
                     adjacent = true
                     continue
                 }
 
-                let tailNS = tailFromCursor as NSString
-                if let m = ordinaryTagRegex.firstMatch(in: tailFromCursor, range: NSRange(location: 0, length: min(tailNS.length, 80))) {
-                    let tagName = tailNS.substring(with: m.range(at: 1)).lowercased()
+                if ns.character(at: cursor) == 0x3C,
+                   let m = ordinaryTagRegex.firstMatch(
+                       in: text,
+                       options: [.anchored],
+                       range: NSRange(location: cursor, length: min(total - cursor, 80))
+                   )
+                {
+                    let tagName = ns.substring(with: m.range(at: 1)).lowercased()
                     if let openEnd = openingEnd(lowerNS: lowerNS, start: cursor, name: tagName) {
                         guard let closeEnd = closingEnd(lowerNS: lowerNS, cursor: openEnd, name: tagName, ranges: ranges) else {
                             break
@@ -749,12 +899,18 @@ public enum UserContextEngine {
             cursor += 1
         }
 
-        bodyParts.append(text.utf16Substring(from: kept, to: total))
+        if kept == 0 && bodyParts.isEmpty {
+            return UserMessageProjection(text: text, contextBlocks: blocks)
+        }
+        bodyParts.append(substring(kept, total))
         return UserMessageProjection(text: bodyParts.joined(), contextBlocks: blocks)
     }
 
     public static func userMessageSegments(_ text: String, contextBlocks: [UserContextBlock]? = nil) -> [UserMessageSegment] {
-        let projected = projectUserMessage(text, contextBlocks: contextBlocks).text
+        projectAndSegmentUserMessage(text, contextBlocks: contextBlocks).segments
+    }
+
+    private static func computeUserMessageSegments(fromProjectedText projected: String) -> [UserMessageSegment] {
         let ns = projected as NSString
         let total = ns.length
         var result: [UserMessageSegment] = []
@@ -766,18 +922,27 @@ public enum UserContextEngine {
             return "\(key):\(count)"
         }
 
-        let protectedRanges = projected.contains("<send_user_message_question_reply>")
+        let hasReplyTag = projected.contains("<send_user_message_question_reply>")
+        let protectedRanges = hasReplyTag
             ? VisibleMarkdownEngine.literalMarkdownRanges(projected, includeInline: true, includeQuotes: true)
             : []
         let envelopeRegex = MarkdownPatterns.replyEnvelope
 
         var cursor = 0
         let addText: (Int) -> Void = { end in
-            let slice = projected.utf16Substring(from: cursor, to: end)
+            guard end > cursor else { return }
+            let slice = (cursor == 0 && end == total)
+                ? projected
+                : ns.substring(with: NSRange(location: cursor, length: end - cursor))
             let cleaned = VisibleMarkdownEngine.visibleMarkdown(slice)
             if !cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result.append(.text(id: "text:\(cursor)", text: cleaned))
             }
+        }
+
+        guard hasReplyTag else {
+            addText(total)
+            return result
         }
 
         struct ReplyEnvelopeItem: Decodable {
@@ -825,11 +990,14 @@ public enum UserContextEngine {
         ch == 0x20 || ch == 0x09 || ch == 0x0A || ch == 0x0D || ch == 0x0B || ch == 0x0C
     }
 
-    private static func fileHeaderEnd(ns: NSString, start: Int) -> Int? {
+    private static func fileHeaderEnd(text: String, ns: NSString, start: Int) -> Int? {
         let total = ns.length
-        let rest = ns.substring(from: start)
         let headerRegex = MarkdownPatterns.fileHeader
-        guard let m = headerRegex.firstMatch(in: rest, range: NSRange(location: 0, length: min((rest as NSString).length, 64))) else {
+        guard let m = headerRegex.firstMatch(
+            in: text,
+            options: [.anchored],
+            range: NSRange(location: start, length: min(total - start, 64))
+        ) else {
             return nil
         }
         var cursor = start + m.range.length
@@ -1059,8 +1227,7 @@ public enum FileLinksAndPlanExport {
         let ns = text as NSString
         var out: [FileLinkSpan] = []
         // Match inline Markdown [label](href) and autolink <file:///...> outside code
-        let pattern = "(?:\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\))|(?:<(file:[^>\\s]+)>)"
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let regex = MarkdownPatterns.fileLinkSpan
         for m in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
             if m.range(at: 1).location != NSNotFound, m.range(at: 2).location != NSNotFound {
                 let label = ns.substring(with: m.range(at: 1))
