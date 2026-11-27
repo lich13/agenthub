@@ -77,6 +77,7 @@ pub fn evict_idle_detail_caches(max_idle: std::time::Duration) {
     codex::evict_idle_detail_cache(max_idle);
     claude::evict_idle_detail_cache(max_idle);
     grok::evict_idle_detail_cache(max_idle);
+    grokbot::evict_idle_cache(max_idle);
     native_probe::evict_idle_cache(max_idle);
     dsh::notifications::evict_idle_cache(max_idle);
     dsh::sessions::evict_idle_fold_cache(max_idle);

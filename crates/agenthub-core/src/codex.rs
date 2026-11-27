@@ -303,7 +303,7 @@ fn enrich_local_thread_row_with_home(
     }
     let (is_subagent, storage_valid) = enrich_thread_from_rollout_inner(
         &mut row.summary,
-        Some(&paths.home),
+        Some(paths),
         storage_canonical_home,
         cwd_already_resolved,
         compute_storage_immediately,
@@ -383,7 +383,7 @@ pub fn enrich_thread_from_rollout(row: &mut ThreadSummary) -> Result<bool> {
 
 fn enrich_thread_from_rollout_inner(
     row: &mut ThreadSummary,
-    root: Option<&Path>,
+    paths: Option<&CodexPaths>,
     canonical_root: Option<&Path>,
     cwd_already_resolved: bool,
     compute_storage_immediately: bool,
@@ -394,10 +394,10 @@ fn enrich_thread_from_rollout_inner(
     let scan = scan_rollout(path, 80)?;
     let storage_valid = !scan.identity_conflict && scan.session_id.as_deref() == Some(&row.id);
     if compute_storage_immediately {
-        if let Some(root) = root {
+        if let Some(paths) = paths {
             use crate::session_storage::{self, SessionStorageSize, StorageScope};
             row.storage_size = Some(if storage_valid {
-                session_storage::file_size_with_canonical_root(root, canonical_root, path)
+                session_storage::file_size_with_canonical_root(&paths.home, canonical_root, path)
             } else {
                 SessionStorageSize::unavailable(StorageScope::File)
             });
@@ -416,7 +416,7 @@ fn enrich_thread_from_rollout_inner(
         } else if scan.reply_needed {
             row.status = ThreadStatus::ReplyNeeded;
         } else if scan.running {
-            if codex_rollout_turn_can_be_live(root, path) {
+            if codex_rollout_turn_can_be_live(paths, &row.id, path) {
                 row.status = ThreadStatus::Running;
             } else {
                 row.status = ThreadStatus::Recoverable;
@@ -462,23 +462,62 @@ thread_local! {
     static TEST_CODEX_HOST_ALIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(bool, std::time::Instant)>> =
+type CodexHostSnapshot = (
+    bool,
+    std::collections::HashSet<(u64, u64)>,
+    std::time::Instant,
+);
+
+static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(u32, CodexHostSnapshot)>> =
     std::sync::Mutex::new(None);
 
-fn codex_rollout_turn_can_be_live(root: Option<&Path>, rollout_path: &Path) -> bool {
+fn is_managed_codex_home(root: &Path) -> bool {
+    root.file_name().and_then(|s| s.to_str()) == Some(".codex")
+        || root.join("thread-writer-locks").is_dir()
+        || root.join("auth.json").is_file()
+        || root.join("version.json").is_file()
+        || dirs::home_dir()
+            .is_some_and(|home| crate::platform::same_canonical_dir(root, &home.join(".codex")))
+}
+
+fn codex_rollout_turn_can_be_live(
+    paths: Option<&CodexPaths>,
+    id: &str,
+    rollout_path: &Path,
+) -> bool {
     #[cfg(test)]
     if let Some(override_alive) = TEST_CODEX_HOST_ALIVE.with(std::cell::Cell::get) {
         return override_alive;
     }
-    let Some(root) = root else {
+    let Some(paths) = paths else {
         return true;
     };
-    let is_default_home = dirs::home_dir()
-        .is_some_and(|home| crate::platform::same_canonical_dir(root, &home.join(".codex")));
-    if !is_default_home {
+    if crate::selected_codex::tree::probe_writer_locked(paths, id).unwrap_or(false) {
         return true;
     }
-    if !has_live_codex_host_process() {
+    if !is_managed_codex_home(&paths.home) {
+        return true;
+    }
+    #[cfg(unix)]
+    let (has_worker, open_inodes) = {
+        use std::os::unix::fs::MetadataExt;
+        let target_uid = fs::symlink_metadata(rollout_path)
+            .or_else(|_| fs::symlink_metadata(&paths.home))
+            .map(|m| m.uid())
+            .unwrap_or_else(|_| unsafe { libc::geteuid() });
+        let (has_worker, open_inodes) = codex_host_snapshot_for_uid(target_uid);
+        if let Ok(meta) = fs::metadata(rollout_path) {
+            if open_inodes.contains(&(meta.dev(), meta.ino())) {
+                return true;
+            }
+        }
+        (has_worker, open_inodes)
+    };
+    #[cfg(not(unix))]
+    let (has_worker, _open_inodes) = (true, std::collections::HashSet::<(u64, u64)>::new());
+
+    let _ = open_inodes;
+    if !has_worker {
         return false;
     }
     if let Ok(modified) = fs::metadata(rollout_path).and_then(|m| m.modified()) {
@@ -491,73 +530,129 @@ fn codex_rollout_turn_can_be_live(root: Option<&Path>, rollout_path: &Path) -> b
     true
 }
 
-fn has_live_codex_host_process() -> bool {
+#[cfg(unix)]
+fn codex_host_snapshot_for_uid(target_uid: u32) -> (bool, std::collections::HashSet<(u64, u64)>) {
     if let Ok(guard) = CODEX_HOST_PROCESS_CACHE.lock() {
-        if let Some((alive, ts)) = *guard {
-            if ts.elapsed() < std::time::Duration::from_secs(2) {
-                return alive;
+        if let Some((cached_uid, (alive, ref inodes, ts))) = *guard {
+            if cached_uid == target_uid && ts.elapsed() < std::time::Duration::from_secs(2) {
+                return (alive, inodes.clone());
             }
         }
     }
-    let alive = probe_live_codex_host_process();
+    let (alive, inodes) = probe_live_codex_host_for_uid(target_uid);
     if let Ok(mut guard) = CODEX_HOST_PROCESS_CACHE.lock() {
-        *guard = Some((alive, std::time::Instant::now()));
+        *guard = Some((
+            target_uid,
+            (alive, inodes.clone(), std::time::Instant::now()),
+        ));
     }
-    alive
+    (alive, inodes)
 }
 
-fn probe_live_codex_host_process() -> bool {
-    #[cfg(unix)]
-    {
-        let current_uid = unsafe { libc::geteuid() };
-        let Ok(output) = std::process::Command::new("/bin/ps")
-            .env("LC_ALL", "C")
-            .args(["-axo", "uid=,stat=,comm="])
-            .output()
-        else {
-            return true;
+pub(crate) fn is_codex_binary_name(base: &str) -> bool {
+    matches!(base, "codex" | "Codex" | "Codex Helper")
+        || base.starts_with("codex-aarch64-")
+        || base.starts_with("codex-x86_64-")
+}
+
+pub(crate) fn is_pure_codex_managed_daemon_args(args: &[String]) -> bool {
+    let has_app_server = args.iter().skip(1).any(|a| a == "app-server");
+    let has_managed_daemon = args.iter().skip(1).any(|a| a == "--managed-daemon");
+    has_app_server && has_managed_daemon
+}
+
+pub(crate) fn classify_codex_process(
+    exe: Option<&Path>,
+    fallback_comm: &str,
+    args: &[String],
+) -> (bool, bool) {
+    let exe_base = exe.and_then(|p| p.file_name()).and_then(|n| n.to_str());
+    let arg0_base = args
+        .first()
+        .and_then(|a| Path::new(a).file_name())
+        .and_then(|n| n.to_str());
+    let comm_base = Path::new(fallback_comm.trim())
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(fallback_comm.trim());
+
+    let is_node_wrapper = matches!(exe_base.or(arg0_base).unwrap_or(comm_base), "node" | "bun")
+        && args
+            .iter()
+            .skip(1)
+            .any(|a| a.contains("/@openai/codex") || a.ends_with("/bin/codex.js"));
+
+    let is_codex = is_node_wrapper
+        || exe_base.is_some_and(is_codex_binary_name)
+        || arg0_base.is_some_and(is_codex_binary_name)
+        || is_codex_binary_name(comm_base)
+        || comm_base.starts_with("codex-x86_64-")
+        || comm_base.starts_with("codex-aarch64-");
+    if !is_codex {
+        return (false, false);
+    }
+    let is_worker = !is_pure_codex_managed_daemon_args(args);
+    (true, is_worker)
+}
+
+#[cfg(unix)]
+fn probe_live_codex_host_for_uid(target_uid: u32) -> (bool, std::collections::HashSet<(u64, u64)>) {
+    let mut inodes = std::collections::HashSet::new();
+    let Ok(output) = std::process::Command::new("/bin/ps")
+        .env("LC_ALL", "C")
+        .args(["-ww", "-axo", "pid=,uid=,stat=,comm=,args="])
+        .output()
+    else {
+        return (true, inodes);
+    };
+    if !output.status.success() {
+        return (true, inodes);
+    }
+    let mut has_worker = false;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split_whitespace();
+        let Some(pid) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
+            continue;
         };
-        if !output.status.success() {
-            return true;
+        let Some(uid) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
+            continue;
+        };
+        if uid != target_uid {
+            continue;
         }
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let mut fields = line.split_whitespace();
-            let Some(uid) = fields.next().and_then(|v| v.parse::<u32>().ok()) else {
-                continue;
-            };
-            if uid != current_uid {
-                continue;
-            }
-            let Some(stat) = fields.next() else {
-                continue;
-            };
-            if stat.starts_with('Z') {
-                continue;
-            }
-            let comm = fields.collect::<Vec<_>>().join(" ");
-            let base = Path::new(comm.trim())
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(comm.trim());
-            if matches!(
-                base,
-                "codex"
-                    | "codex-aarch64-apple-darwin"
-                    | "codex-x86_64-apple-darwin"
-                    | "codex-x86_64-unknown-linux-gnu"
-                    | "codex-aarch64-unknown-linux-gnu"
-                    | "Codex"
-                    | "Codex Helper"
-            ) {
-                return true;
-            }
+        let Some(stat) = fields.next() else {
+            continue;
+        };
+        if stat.starts_with('Z') {
+            continue;
         }
-        false
+        let Some(comm) = fields.next() else {
+            continue;
+        };
+        let ps_args: Vec<String> = fields.map(str::to_owned).collect();
+        if !comm.contains("codex")
+            && !comm.contains("Codex")
+            && !matches!(comm, "node" | "bun")
+            && !ps_args
+                .iter()
+                .any(|a| a.contains("codex") || a.contains("Codex"))
+        {
+            continue;
+        }
+        let exe = crate::platform::resolve_kernel_exe(pid);
+        let args = crate::platform::resolve_kernel_args(pid).unwrap_or(ps_args);
+        let (is_codex, is_worker) = classify_codex_process(exe.as_deref(), comm, &args);
+        if !is_codex {
+            continue;
+        }
+        if is_worker {
+            has_worker = true;
+        }
+        if let Some((_, pid_inodes)) = crate::platform::collect_kernel_open_vnodes(pid) {
+            inodes.extend(pid_inodes);
+        }
     }
-    #[cfg(not(unix))]
-    {
-        true
-    }
+    (has_worker, inodes)
 }
 
 pub fn thread_detail_page(

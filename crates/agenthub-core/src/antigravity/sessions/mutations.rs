@@ -141,13 +141,41 @@ pub(crate) fn resolve_target_store_and_endpoint(
         return Ok((cli, None));
     }
     let primary = paths.primary_store();
-    let ep = connect_endpoint(&primary)?;
-    let store = paths.store_for_id(key, ep.as_ref().map(|(_, v)| v));
+    let endpoints = connect_all_endpoints(&primary)?;
+    let store = paths.store_for_id(key, endpoints.merged_payload.as_ref());
     if store.home == primary.home {
-        Ok((primary, ep))
+        Ok((primary, endpoints.owner_for_read(key).cloned()))
     } else {
         Ok((store, None))
     }
+}
+
+fn resolve_mutation_store_and_endpoint(
+    paths: &AntigravityPaths,
+    key: &str,
+    include_descendants: bool,
+) -> Result<(AntigravityPaths, Option<(LiveRpc, Value)>)> {
+    if let Some(cli) = paths.cli_store_for_id(key) {
+        return Ok((cli, None));
+    }
+    let primary = paths.primary_store();
+    let endpoints = connect_all_endpoints(&primary)?;
+    let store = paths.store_for_id(key, endpoints.merged_payload.as_ref());
+    if store.home != primary.home {
+        return Ok((store, None));
+    }
+    if endpoints.instances.is_empty() {
+        return Ok((primary, None));
+    }
+    let descendants = if include_descendants {
+        find_descendant_ids_with_live(&primary, endpoints.merged_payload.as_ref(), key)?
+    } else {
+        Vec::new()
+    };
+    let owner = endpoints.resolve_mutation_owner(
+        std::iter::once(key).chain(descendants.iter().map(String::as_str)),
+    )?;
+    Ok((primary, owner))
 }
 
 fn ensure_offline_unlocked(store: &AntigravityPaths, root_id: &str, verb: &str) -> Result<()> {
@@ -179,7 +207,7 @@ pub fn rename_session(
         .collect();
     ensure!(!title.is_empty(), "会话名称不能为空");
     let existing = session_summary_without_storage(paths, key)?;
-    let (store, endpoint) = resolve_target_store_and_endpoint(paths, key)?;
+    let (store, endpoint) = resolve_mutation_store_and_endpoint(paths, key, false)?;
 
     if let Some((rpc, _)) = endpoint {
         connect_rpc_post(
@@ -245,7 +273,7 @@ pub fn set_archived(
 ) -> Result<ProviderSessionSummary> {
     valid_cascade_id(key)?;
     let existing = session_summary_without_storage(paths, key)?;
-    let (store, endpoint) = resolve_target_store_and_endpoint(paths, key)?;
+    let (store, endpoint) = resolve_mutation_store_and_endpoint(paths, key, true)?;
 
     if let Some((rpc, _)) = endpoint {
         connect_rpc_post(
@@ -305,6 +333,35 @@ fn live_item_has_waiting_step(item: &Value) -> bool {
             .is_some_and(|arr| !arr.is_empty())
 }
 
+fn live_item_has_unfinished_executor(item: &Value) -> bool {
+    let run_status = item["status"].as_str().unwrap_or("");
+    if matches!(
+        run_status,
+        "CASCADE_RUN_STATUS_WAITING"
+            | "CASCADE_RUN_STATUS_ERROR"
+            | "CASCADE_RUN_STATUS_CANCELED"
+            | "CASCADE_RUN_STATUS_CANCELLED"
+    ) || live_item_has_waiting_step(item)
+    {
+        return false;
+    }
+    let Some(last_meta) = item["executorMetadatas"]
+        .as_array()
+        .or_else(|| item["trajectoryMetadata"]["executorMetadatas"].as_array())
+        .and_then(|arr| arr.last())
+    else {
+        return false;
+    };
+    let exec_id = last_meta["executionId"].as_str().unwrap_or("").trim();
+    if exec_id.is_empty() {
+        return false;
+    }
+    let reason = last_meta["terminationReason"].as_str().unwrap_or("").trim();
+    reason.is_empty()
+        || reason == "EXECUTOR_TERMINATION_REASON_UNSPECIFIED"
+        || last_meta["proceededWithAutoContinue"].as_bool() == Some(true)
+}
+
 pub fn live_item_is_actively_executing(item: &Value) -> bool {
     let run_status = item["status"].as_str().unwrap_or("");
     matches!(
@@ -312,6 +369,7 @@ pub fn live_item_is_actively_executing(item: &Value) -> bool {
         "CASCADE_RUN_STATUS_RUNNING" | "CASCADE_RUN_STATUS_BUSY" | "CASCADE_RUN_STATUS_CANCELING"
     ) || item["hasRunningSubagents"].as_bool() == Some(true)
         || (item["notFullyIdle"].as_bool() == Some(true) && !live_item_has_waiting_step(item))
+        || live_item_has_unfinished_executor(item)
 }
 
 pub fn live_item_is_waiting(item: &Value) -> bool {
@@ -664,12 +722,16 @@ pub fn preview_batch(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let context = (|| -> Result<_> {
-        let live = connect_endpoint(&primary)?.map(|(_, payload)| payload);
+        let live_set = connect_all_endpoints(&primary)?;
+        let live = live_set.merged_payload.clone();
         let summaries = list_summaries_from_source(paths, None, live.as_ref())?
             .into_iter()
             .map(|summary| (summary.id.clone(), summary))
             .collect::<BTreeMap<_, _>>();
-        let mut primary_children = if operation == SessionOperation::Delete || live.is_none() {
+        let mut primary_children = if operation == SessionOperation::Delete
+            || live.is_none()
+            || live_set.instances.len() > 1
+        {
             read_children_map(&primary, live.as_ref())?
         } else {
             BTreeMap::new()
@@ -678,7 +740,7 @@ pub fn preview_batch(
             Some(c) if c.home.is_dir() => read_children_map(c, None)?,
             _ => BTreeMap::new(),
         };
-        if operation == SessionOperation::Delete || live.is_none() {
+        if operation == SessionOperation::Delete || live.is_none() || live_set.instances.len() > 1 {
             let valid_keys: Vec<String> = keys
                 .iter()
                 .filter(|k| uuid::Uuid::parse_str(k).is_ok())
@@ -689,12 +751,12 @@ pub fn preview_batch(
                 expand_transcript_children_for_roots(c, &mut cli_children, &valid_keys);
             }
         }
-        Ok((live, summaries, primary_children, cli_children))
+        Ok((live_set, live, summaries, primary_children, cli_children))
     })();
     keys.iter()
         .map(|key| {
             valid_cascade_id(key)?;
-            let (live, summaries, primary_children, cli_children) = context
+            let (live_set, live, summaries, primary_children, cli_children) = context
                 .as_ref()
                 .map_err(|error| anyhow::anyhow!("{error:#}"))?;
             let summary = summaries
@@ -712,10 +774,21 @@ pub fn preview_batch(
                     include_descendants,
                 )
             } else {
+                let kids = descendant_ids(primary_children, key);
+                if live_set.has_multi_instance_conflict(
+                    std::iter::once(key.as_str()).chain(kids.iter().map(String::as_str)),
+                ) {
+                    bail!("该会话同时在多个 Antigravity 实例中加载，请先关闭重复窗口后再操作");
+                }
+                let owner_live = live_set
+                    .resolve_mutation_owner(
+                        std::iter::once(key.as_str()).chain(kids.iter().map(String::as_str)),
+                    )?
+                    .map(|(_, payload)| payload);
                 preview_from_summary(
                     &primary,
                     summary,
-                    live.as_ref(),
+                    owner_live.as_ref(),
                     primary_children,
                     operation,
                     include_descendants,
@@ -1002,22 +1075,26 @@ fn store_has_unclaimed_summary_row(
     parent != expected_root && !verified_set.contains(parent)
 }
 
-fn resolve_delete_store_and_endpoint(
+fn resolve_delete_store_and_endpoints(
     paths: &AntigravityPaths,
     key: &str,
-) -> Result<(AntigravityPaths, Option<(LiveRpc, Value)>)> {
+) -> Result<(AntigravityPaths, Option<LiveEndpointSet>)> {
     if let Some(cli) = paths.cli_store_for_id(key) {
         return Ok((cli, None));
     }
     let primary = paths.primary_store();
-    let ep = connect_endpoint(&primary)?;
-    if ep
+    let endpoints = connect_all_endpoints(&primary)?;
+    if endpoints
+        .merged_payload
         .as_ref()
-        .and_then(|(_, v)| v["trajectorySummaries"].get(key))
+        .and_then(|v| v["trajectorySummaries"].get(key))
         .is_some()
         || has_primary_session_storage(&primary, key)
     {
-        return Ok((primary, ep));
+        return Ok((
+            primary,
+            (!endpoints.instances.is_empty()).then_some(endpoints),
+        ));
     }
     if let Some(cli) = paths.cli_store() {
         if store_has_shared_session_entry(&cli, key)
@@ -1027,9 +1104,12 @@ fn resolve_delete_store_and_endpoint(
             return Ok((cli, None));
         }
     }
-    let store = paths.store_for_id(key, ep.as_ref().map(|(_, v)| v));
+    let store = paths.store_for_id(key, endpoints.merged_payload.as_ref());
     if store.home == primary.home {
-        Ok((primary, ep))
+        Ok((
+            primary,
+            (!endpoints.instances.is_empty()).then_some(endpoints),
+        ))
     } else {
         Ok((store, None))
     }
@@ -1347,24 +1427,18 @@ pub fn execute_batch_item(
             })
         }
         SessionOperation::Delete => {
-            let (store, endpoint) = resolve_delete_store_and_endpoint(paths, key)?;
-            let (live_rpc, all_live) = match endpoint {
-                Some((rpc, live)) => (Some(rpc), Some(live)),
-                None => (None, None),
-            };
-            let maybe_summary = super::list_summaries_from_source_filtered(
-                paths,
-                Some(key),
-                None,
-                all_live.as_ref(),
-            )?
-            .into_iter()
-            .next();
+            let (store, live_set) = resolve_delete_store_and_endpoints(paths, key)?;
+            let merged_live = live_set
+                .as_ref()
+                .and_then(|set| set.merged_payload.as_ref());
+            let maybe_summary =
+                super::list_summaries_from_source_filtered(paths, Some(key), None, merged_live)?
+                    .into_iter()
+                    .next();
             if maybe_summary.is_none() && paths.collect_all_known_subagents().contains(key) {
                 bail!("未找到 Antigravity 会话：{key}");
             }
-            let verified_descendants =
-                find_descendant_ids_with_live(&store, all_live.as_ref(), key)?;
+            let verified_descendants = find_descendant_ids_with_live(&store, merged_live, key)?;
             let verified_set: BTreeSet<&str> =
                 verified_descendants.iter().map(String::as_str).collect();
             for child in descendants {
@@ -1375,17 +1449,29 @@ pub fn execute_batch_item(
                         || !session_exists_or_claimed_by_other_root(
                             paths,
                             &store,
-                            all_live.as_ref(),
+                            merged_live,
                             key,
                             &verified_set,
                             child,
                         )?);
                 ensure!(allowed, "子会话 {child} 不属于当前主会话，拒绝删除");
             }
+            let target_owner = match &live_set {
+                Some(set) => set.resolve_mutation_owner(
+                    std::iter::once(key)
+                        .chain(verified_descendants.iter().map(String::as_str))
+                        .chain(descendants.iter().map(String::as_str)),
+                )?,
+                None => None,
+            };
+            let (live_rpc, owner_live) = match target_owner {
+                Some((rpc, live)) => (Some(rpc), Some(live)),
+                None => (None, None),
+            };
             if let Some(summary) = &maybe_summary {
                 ensure!(
                     !is_session_busy_status(&summary.status)
-                        && !is_cascade_running(all_live.as_ref(), key),
+                        && !is_cascade_running(merged_live, key),
                     "{}",
                     summary
                         .delete_block_reason
@@ -1394,7 +1480,7 @@ pub fn execute_batch_item(
                 );
             } else {
                 ensure!(
-                    !is_cascade_running(all_live.as_ref(), key),
+                    !is_cascade_running(merged_live, key),
                     "会话正在运行，请先在 Antigravity 中停止后再删除"
                 );
             }
@@ -1411,7 +1497,7 @@ pub fn execute_batch_item(
                     .filter(|id| !verified_set.contains(id.as_str())),
             ) {
                 ensure!(
-                    !is_cascade_running(all_live.as_ref(), child),
+                    !is_cascade_running(merged_live, child),
                     "子会话正在运行，请先在 Antigravity 中停止后再删除"
                 );
                 if live_rpc.is_none() {
@@ -1440,7 +1526,7 @@ pub fn execute_batch_item(
                 paths,
                 &store,
                 live_rpc.as_ref(),
-                all_live.as_ref(),
+                owner_live.as_ref(),
                 &ordered_ids,
             )?;
             Ok(SessionBatchItemResult {
@@ -1850,7 +1936,8 @@ pub fn preview_unified_cleanup_candidates(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let now_ms = super::now_epoch_ms();
-    let live = connect_endpoint(&primary)?.map(|(_, payload)| payload);
+    let live_set = connect_all_endpoints(&primary)?;
+    let live = live_set.merged_payload.clone();
     let archived_summaries: Vec<ProviderSessionSummary> =
         super::list_summaries_from_source_filtered(paths, None, Some(true), live.as_ref())?;
     let mut primary_children = read_children_map(&primary, live.as_ref())?;
@@ -1880,14 +1967,20 @@ pub fn preview_unified_cleanup_candidates(
                 true,
             )
         } else {
-            preview_from_summary(
-                &primary,
-                summary.clone(),
-                live.as_ref(),
-                &primary_children,
-                SessionOperation::Delete,
-                true,
-            )
+            let kids = descendant_ids(&primary_children, &summary.id);
+            match live_set.resolve_mutation_owner(
+                std::iter::once(summary.id.as_str()).chain(kids.iter().map(String::as_str)),
+            ) {
+                Ok(owner) => preview_from_summary(
+                    &primary,
+                    summary.clone(),
+                    owner.as_ref().map(|(_, v)| v),
+                    &primary_children,
+                    SessionOperation::Delete,
+                    true,
+                ),
+                Err(err) => Err(err),
+            }
         };
         match res {
             Ok(preview) => {
@@ -1961,11 +2054,8 @@ pub fn execute_unified_cleanup_targets(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let now_ms = super::now_epoch_ms();
-    let endpoint = connect_endpoint(&primary)?;
-    let (live_rpc, live_payload) = match endpoint {
-        Some((rpc, payload)) => (Some(rpc), Some(payload)),
-        None => (None, None),
-    };
+    let live_set = connect_all_endpoints(&primary)?;
+    let live_payload = live_set.merged_payload.clone();
     let archived_map: BTreeMap<String, ProviderSessionSummary> =
         super::list_summaries_from_source_filtered(paths, None, Some(true), live_payload.as_ref())?
             .into_iter()
@@ -2034,14 +2124,20 @@ pub fn execute_unified_cleanup_targets(
                     true,
                 )
             } else {
-                preview_from_summary(
-                    &primary,
-                    summary,
-                    live_payload.as_ref(),
-                    &primary_children,
-                    SessionOperation::Delete,
-                    true,
-                )
+                let kids = descendant_ids(&primary_children, id);
+                match live_set.resolve_mutation_owner(
+                    std::iter::once(id).chain(kids.iter().map(String::as_str)),
+                ) {
+                    Ok(owner) => preview_from_summary(
+                        &primary,
+                        summary,
+                        owner.as_ref().map(|(_, v)| v),
+                        &primary_children,
+                        SessionOperation::Delete,
+                        true,
+                    ),
+                    Err(err) => Err(err),
+                }
             };
             let preview = match preview_res {
                 Ok(p) if p.allowed => p,
@@ -2127,11 +2223,10 @@ pub fn execute_unified_cleanup_targets(
             } else {
                 primary.clone()
             };
+            let mut ordered_ids: Vec<String> = orphan.descendants.iter().rev().cloned().collect();
+            ordered_ids.push(orphan.id.clone());
             let store_live = (!orphan.is_cli_store)
                 .then_some(live_payload.as_ref())
-                .flatten();
-            let store_rpc = (!orphan.is_cli_store)
-                .then_some(live_rpc.as_ref())
                 .flatten();
             let mut anc_exists = false;
             let mut anc_err = None;
@@ -2165,8 +2260,23 @@ pub fn execute_unified_cleanup_targets(
                 ));
                 continue;
             }
-            let mut ordered_ids: Vec<String> = orphan.descendants.iter().rev().cloned().collect();
-            ordered_ids.push(orphan.id.clone());
+            let orphan_owner = if orphan.is_cli_store {
+                None
+            } else {
+                match live_set.resolve_mutation_owner(ordered_ids.iter().map(String::as_str)) {
+                    Ok(owner) => owner,
+                    Err(err) => {
+                        results.push((
+                            raw_id.clone(),
+                            UnifiedAntigravityStepOutcome::Failed(
+                                Some(err.to_string()),
+                                Vec::new(),
+                            ),
+                        ));
+                        continue;
+                    }
+                }
+            };
             let mut lock_check_failed = None;
             let mut active_or_open = false;
             for nid in &ordered_ids {
@@ -2205,8 +2315,8 @@ pub fn execute_unified_cleanup_targets(
             let step = match delete_ordered_ids_in_store(
                 paths,
                 &store,
-                store_rpc,
-                store_live,
+                orphan_owner.as_ref().map(|(r, _)| r),
+                orphan_owner.as_ref().map(|(_, v)| v),
                 &ordered_ids,
             ) {
                 Ok((_, residuals)) if residuals.is_empty() => {

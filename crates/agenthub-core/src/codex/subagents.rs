@@ -369,21 +369,23 @@ fn consume_native(state: &mut NativeState, line: &[u8]) -> Result<()> {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     let event_turn = field(event, &["turn_id", "turnId"]);
     match kind {
-        "task_started" | "turn_started" | "turn/started" => {
+        "task_started" | "turn_started" | "turn/started" | "TurnStarted" | "turn.started" => {
             turn = event_turn;
             pending.clear();
             status = SubagentStatus::Running;
         }
-        "task_complete" | "turn_completed" | "turn/completed" | "turn_aborted" | "turn/aborted"
-        | "turn_error" | "turn_failed"
+        "task_complete" | "turn_completed" | "turn/completed" | "TurnCompleted"
+        | "turn.completed" | "turn_aborted" | "turn/aborted" | "TurnAborted" | "turn.aborted"
+        | "turn_error" | "turn_failed" | "turn.failed"
             if event_turn.is_none() || turn.is_none() || event_turn == turn =>
         {
             let terminal = field(event, &["status", "turn_status"]).unwrap_or_default();
-            status = if kind.contains("aborted")
+            let kind_lower = kind.to_ascii_lowercase();
+            status = if kind_lower.contains("aborted")
                 || matches!(terminal.as_str(), "cancelled" | "canceled" | "interrupted")
             {
                 SubagentStatus::Interrupted
-            } else if matches!(kind, "turn_error" | "turn_failed")
+            } else if matches!(kind, "turn_error" | "turn_failed" | "turn.failed")
                 || matches!(terminal.as_str(), "failed" | "error")
             {
                 SubagentStatus::Failed
@@ -425,14 +427,60 @@ fn native_status(path: &Path) -> Result<SubagentStatus> {
         false,
         |state, line, _, _| consume_native(state, line),
         |state, info| {
-            Ok(if info.partial || state.invalid {
+            Ok(if state.invalid {
                 SubagentStatus::Unknown
+            } else if info.partial {
+                if state.status == SubagentStatus::Running {
+                    SubagentStatus::Running
+                } else {
+                    SubagentStatus::Unknown
+                }
             } else {
                 state.status
             })
         },
         |state| 256 + state.pending.len() as u64 * 128,
     )
+}
+
+fn capture_rollout_prefix_guard(
+    path: &Path,
+) -> Result<(crate::file_stamp::FileStamp, Option<[u8; 32]>)> {
+    let before = crate::file_stamp::FileStamp::of_followed(path).context("子智能体文件不可读")?;
+    let anchor = if super::rollout_file::is_compressed(path) {
+        None
+    } else {
+        let mut f = fs::File::open(path).context("子智能体文件不可读")?;
+        Some(crate::jsonl_cache::file_anchor(&mut f, before.len)?)
+    };
+    Ok((before, anchor))
+}
+
+fn verify_rollout_unchanged_or_appended(
+    before_path: &Path,
+    before: &crate::file_stamp::FileStamp,
+    before_anchor: Option<[u8; 32]>,
+    after_path: &Path,
+) -> Result<bool> {
+    if before.modified.is_none() {
+        return Ok(false);
+    }
+    let after =
+        crate::file_stamp::FileStamp::of_followed(after_path).context("子智能体文件不可读")?;
+    if before == &after {
+        return Ok(true);
+    }
+    if !super::rollout_file::is_compressed(after_path)
+        && after_path == before_path
+        && after.same_inode(before)
+        && after.len > before.len
+    {
+        if let Some(expected) = before_anchor {
+            let mut f = fs::File::open(after_path).context("子智能体文件不可读")?;
+            return Ok(crate::jsonl_cache::file_anchor(&mut f, before.len)? == expected);
+        }
+    }
+    Ok(false)
 }
 
 fn activity(
@@ -528,13 +576,11 @@ fn record_activity(
     let verified = (|| -> Result<SubagentStatus> {
         ensure!(record.parents.len() == 1, "子智能体父线程关联不明确");
         let path = validate_rollout(paths, record)?;
-        let before =
-            crate::file_stamp::FileStamp::of_followed(&path).context("子智能体文件不可读")?;
+        let (before, before_anchor) = capture_rollout_prefix_guard(&path)?;
         let status = native_status(&path)?;
-        let after = crate::file_stamp::FileStamp::of_followed(&validate_rollout(paths, record)?)
-            .context("子智能体文件不可读")?;
+        let after_path = validate_rollout(paths, record)?;
         ensure!(
-            before.modified.is_some() && before == after,
+            verify_rollout_unchanged_or_appended(&path, &before, before_anchor, &after_path)?,
             "子智能体身份或内容已变化"
         );
         Ok(status)
@@ -728,8 +774,8 @@ fn verified_detail(
         .unwrap_or_default();
     let mut current_agent = activity(record, status, None);
     current_agent.name = display_name(names.for_record(record), record);
-    let before =
-        crate::file_stamp::FileStamp::of_followed(&path).context("子智能体记录不可读，请重试")?;
+    let (before, before_anchor) =
+        capture_rollout_prefix_guard(&path).context("子智能体记录不可读，请重试")?;
     let summary = ThreadSummary {
         activity_updated_at: None,
         storage_size: None,
@@ -763,10 +809,10 @@ fn verified_detail(
         request.before.as_deref(),
         None,
     )?;
-    let after = crate::file_stamp::FileStamp::of_followed(&validate_rollout(paths, record)?)
-        .context("子智能体记录不可读，请重试")?;
+    let after_path = validate_rollout(paths, record)?;
     ensure!(
-        before.modified.is_some() && before == after,
+        verify_rollout_unchanged_or_appended(&path, &before, before_anchor, &after_path)
+            .context("子智能体记录不可读，请重试")?,
         "子智能体记录已变化，请重试"
     );
     let graph_stamp_after = crate::file_stamp::FileStamp::sqlite_pair(&state_db);

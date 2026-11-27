@@ -2377,3 +2377,53 @@ fn compressed_detail_history_is_stable_until_source_replacement() {
         Some("updated answer")
     );
 }
+
+#[test]
+fn streaming_open_turn_partial_tail_stays_running_and_dot_or_camel_turn_events_settle() {
+    let fixture = NativeFixture::new(&spawn("spawn-stream", "worker", json!({"agent_id":CHILD})));
+    let rollout = fixture.child(
+        CHILD,
+        ROOT,
+        "/root/worker",
+        &[
+            json!({"type":"event_msg","payload":{"type":"TurnStarted","turnId":"t-camel"}}),
+            message("assistant", "Streaming step 1"),
+        ],
+    );
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&rollout)
+        .unwrap()
+        .write_all(b"{\"type\":\"response_item\",\"payload\":")
+        .unwrap();
+
+    let mut detail = fixture.root_detail();
+    enrich_subagent_blocks(&fixture.paths, &mut detail);
+    assert!(cards(&detail)[0].available);
+    assert_eq!(cards(&detail)[0].status, SubagentStatus::Running);
+    let streaming_child = fixture.read(CHILD).unwrap();
+    assert!(streaming_child.agent.available);
+    assert_eq!(streaming_child.agent.status, SubagentStatus::Running);
+
+    for (terminal_kind, expected) in [
+        ("turn.completed", SubagentStatus::Completed),
+        ("TurnAborted", SubagentStatus::Interrupted),
+        ("turn.failed", SubagentStatus::Failed),
+    ] {
+        let f2 = NativeFixture::new(&spawn(
+            "spawn-variants",
+            "worker",
+            json!({"agent_id":CHILD}),
+        ));
+        f2.child(
+            CHILD,
+            ROOT,
+            "/root/worker",
+            &[
+                json!({"type":"event_msg","payload":{"type":"turn.started","turn_id":"t-v"}}),
+                json!({"type":"event_msg","payload":{"type":terminal_kind,"turn_id":"t-v"}}),
+            ],
+        );
+        assert_eq!(f2.read(CHILD).unwrap().agent.status, expected);
+    }
+}

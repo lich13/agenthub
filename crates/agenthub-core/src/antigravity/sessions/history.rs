@@ -1112,10 +1112,9 @@ pub fn load_all_events(
         return Ok(load_events_from_source(&cli, id, None)?.events.clone());
     }
     let primary = paths.primary_store();
-    let endpoint = connect_endpoint(&primary)?;
-    Ok(load_events_from_source(&primary, id, endpoint.as_ref())?
-        .events
-        .clone())
+    let endpoints = connect_all_endpoints(&primary)?;
+    let owner = endpoints.owner_for_read(id);
+    Ok(load_events_from_source(&primary, id, owner)?.events.clone())
 }
 
 fn read_live_events(rpc: &LiveRpc, id: &str) -> Result<Vec<ProviderHistoryEvent>> {
@@ -1193,14 +1192,14 @@ fn summary_and_events(paths: &AntigravityPaths, id: &str) -> Result<LoadedSessio
         });
     }
     let primary = paths.primary_store();
-    let endpoint = connect_endpoint(&primary)?;
-    let summary =
-        list_summaries_from_source(paths, Some(id), endpoint.as_ref().map(|(_, value)| value))?
-            .into_iter()
-            .next()
-            .context("未找到 Antigravity 会话")?;
-    let store = paths.store_for_id(id, endpoint.as_ref().map(|(_, value)| value));
-    let store_ep = (store.home == primary.home).then_some(endpoint).flatten();
+    let endpoints = connect_all_endpoints(&primary)?;
+    let owner = endpoints.owner_for_read(id).cloned();
+    let summary = list_summaries_from_source(paths, Some(id), endpoints.merged_payload.as_ref())?
+        .into_iter()
+        .next()
+        .context("未找到 Antigravity 会话")?;
+    let store = paths.store_for_id(id, endpoints.merged_payload.as_ref());
+    let store_ep = (store.home == primary.home).then_some(owner).flatten();
     let events = load_events_from_source(&store, id, store_ep.as_ref())?;
     Ok(LoadedSessionSource {
         summary,

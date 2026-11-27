@@ -103,7 +103,11 @@ pub(crate) fn same_canonical_dir(left: &std::path::Path, right: &std::path::Path
 pub(crate) fn resolve_kernel_exe(pid: u32) -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
-        std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+        let target = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
+        if let Some(stripped) = target.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+            return Some(PathBuf::from(stripped));
+        }
+        Some(target)
     }
     #[cfg(target_os = "macos")]
     {
@@ -126,5 +130,388 @@ pub(crate) fn resolve_kernel_exe(pid: u32) -> Option<PathBuf> {
     {
         let _ = pid;
         None
+    }
+}
+
+pub fn resolve_kernel_args(pid: u32) -> Option<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid.try_into().ok()?];
+        let mut size = 0usize;
+        // SAFETY: The three-element MIB is live; a null output buffer requests the length in `size`.
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                std::ptr::null_mut(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+            || !(4..=262_144).contains(&size)
+        {
+            return None;
+        }
+        let mut buffer = vec![0_u8; size];
+        // SAFETY: `buffer` has `size` writable bytes matching the kernel-reported capacity.
+        if unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        } != 0
+        {
+            return None;
+        }
+        buffer.truncate(size);
+        let argc = i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?);
+        if !(1..=16_384).contains(&argc) {
+            return None;
+        }
+        let data = buffer.get(4..)?;
+        let mut offset = data.iter().position(|byte| *byte == 0)?;
+        while data.get(offset) == Some(&0) {
+            offset += 1;
+        }
+        let mut args = Vec::with_capacity((argc as usize).min(256));
+        for _ in 0..argc {
+            let remaining = data.get(offset..)?;
+            let end = remaining.iter().position(|byte| *byte == 0)?;
+            args.push(std::str::from_utf8(&remaining[..end]).ok()?.to_owned());
+            offset += end + 1;
+        }
+        Some(args)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(format!("/proc/{pid}/cmdline"))
+            .ok()?
+            .take(262_145)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.is_empty() || bytes.len() > 262_144 || !bytes.ends_with(&[0]) {
+            return None;
+        }
+        bytes[..bytes.len() - 1]
+            .split(|byte| *byte == 0)
+            .map(|arg| std::str::from_utf8(arg).map(str::to_owned))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+pub(crate) fn resolve_kernel_process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
+    Some((resolve_kernel_exe(pid)?, resolve_kernel_args(pid)?))
+}
+
+#[cfg(target_os = "macos")]
+fn decode_vip_path(vip_path: &[[libc::c_char; 32]; 32]) -> Option<PathBuf> {
+    let len = std::mem::size_of_val(vip_path);
+    // SAFETY: `vip_path` is a contiguous `[[c_char; 32]; 32]` (1024-byte) array in memory.
+    let bytes = unsafe { std::slice::from_raw_parts(vip_path.as_ptr().cast::<u8>(), len) };
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(len);
+    if end == 0 {
+        return None;
+    }
+    let s = std::str::from_utf8(&bytes[..end]).ok()?;
+    s.starts_with('/').then(|| PathBuf::from(s))
+}
+
+pub(crate) fn resolve_kernel_cwd(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let pid_i32: libc::c_int = pid.try_into().ok()?;
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let expected = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        // SAFETY: `info` is zero-initialized and writable for `expected` bytes.
+        let count = unsafe {
+            libc::proc_pidinfo(
+                pid_i32,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+                expected,
+            )
+        };
+        if count < expected {
+            return None;
+        }
+        decode_vip_path(&info.pvi_cdir.vip_path)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ProcFileInfo {
+    fi_openflags: u32,
+    fi_status: u32,
+    fi_offset: libc::off_t,
+    fi_type: i32,
+    fi_guardflags: u32,
+}
+
+#[cfg(target_os = "macos")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct VnodeFdInfoWithPath {
+    pfi: ProcFileInfo,
+    pvip: libc::vnode_info_path,
+}
+
+#[cfg(target_os = "macos")]
+const PROC_PIDFDVNODEPATHINFO: libc::c_int = 2;
+
+pub(crate) type KernelOpenVnodes = (
+    std::collections::HashSet<PathBuf>,
+    std::collections::HashSet<(u64, u64)>,
+);
+
+pub(crate) fn collect_kernel_open_vnodes(pid: u32) -> Option<KernelOpenVnodes> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let entries = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+        let mut paths = std::collections::HashSet::new();
+        let mut inodes = std::collections::HashSet::new();
+        for entry in entries.flatten().take(4096) {
+            let fd_path = entry.path();
+            if let Ok(meta) = std::fs::metadata(&fd_path) {
+                inodes.insert((meta.dev(), meta.ino()));
+            }
+            if let Ok(target) = std::fs::read_link(&fd_path) {
+                if target.is_absolute() {
+                    paths.insert(target);
+                }
+            }
+        }
+        Some((paths, inodes))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let pid_i32: libc::c_int = pid.try_into().ok()?;
+        // SAFETY: Null buffer queries required byte size for `PROC_PIDLISTFDS`.
+        let needed = unsafe {
+            libc::proc_pidinfo(pid_i32, libc::PROC_PIDLISTFDS, 0, std::ptr::null_mut(), 0)
+        };
+        if needed <= 0 {
+            return None;
+        }
+        let fd_size = std::mem::size_of::<libc::proc_fdinfo>();
+        let cap = ((needed as usize) / fd_size + 32).min(8192);
+        let mut fds: Vec<libc::proc_fdinfo> = vec![unsafe { std::mem::zeroed() }; cap];
+        // SAFETY: `fds` holds `cap * fd_size` writable bytes.
+        let bytes = unsafe {
+            libc::proc_pidinfo(
+                pid_i32,
+                libc::PROC_PIDLISTFDS,
+                0,
+                fds.as_mut_ptr().cast(),
+                (cap * fd_size) as libc::c_int,
+            )
+        };
+        if bytes < 0 {
+            return None;
+        }
+        let count = (bytes as usize) / fd_size;
+        let mut paths = std::collections::HashSet::new();
+        let mut inodes = std::collections::HashSet::new();
+        let info_size = std::mem::size_of::<VnodeFdInfoWithPath>() as libc::c_int;
+        for fd in fds.iter().take(count) {
+            if fd.proc_fdtype != libc::PROX_FDTYPE_VNODE as u32 {
+                continue;
+            }
+            let mut info: VnodeFdInfoWithPath = unsafe { std::mem::zeroed() };
+            // SAFETY: `info` is zero-initialized and writable for `info_size` bytes.
+            let got = unsafe {
+                libc::proc_pidfdinfo(
+                    pid_i32,
+                    fd.proc_fd,
+                    PROC_PIDFDVNODEPATHINFO,
+                    (&mut info as *mut VnodeFdInfoWithPath).cast(),
+                    info_size,
+                )
+            };
+            if got >= info_size {
+                let st = &info.pvip.vip_vi.vi_stat;
+                if st.vst_ino != 0 {
+                    inodes.insert((u64::from(st.vst_dev), st.vst_ino));
+                }
+                if let Some(p) = decode_vip_path(&info.pvip.vip_path) {
+                    paths.insert(p);
+                }
+            }
+        }
+        Some((paths, inodes))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+pub fn pid_is_alive(pid: u32) -> bool {
+    if pid <= 1 || pid > i32::MAX as u32 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        // SAFETY: `kill(pid, 0)` performs a kernel existence/permission check without sending a signal.
+        let ok = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        #[cfg(target_os = "linux")]
+        if ok {
+            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                if let Some(after_comm) = stat.rsplit_once(')').map(|(_, rest)| rest.trim_start()) {
+                    if after_comm.starts_with('Z') {
+                        return false;
+                    }
+                }
+            }
+        }
+        ok
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+pub fn default_lsof_bin() -> &'static str {
+    if std::path::Path::new("/usr/sbin/lsof").is_file() {
+        "/usr/sbin/lsof"
+    } else if std::path::Path::new("/usr/bin/lsof").is_file() {
+        "/usr/bin/lsof"
+    } else {
+        "lsof"
+    }
+}
+
+pub fn sanitized_lsof_command(bin: &str) -> std::process::Command {
+    let mut cmd = std::process::Command::new(bin);
+    cmd.env_remove("LC_ALL")
+        .env_remove("LC_CTYPE")
+        .env("LC_ALL", "en_US.UTF-8")
+        .env("LANG", "en_US.UTF-8");
+    cmd
+}
+
+pub fn decode_lsof_path(raw: &str) -> PathBuf {
+    use std::os::unix::ffi::OsStringExt;
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 3 < bytes.len() && bytes[i + 1] == b'x' {
+            if let (Some(hi), Some(lo)) = (
+                (bytes[i + 2] as char).to_digit(16),
+                (bytes[i + 3] as char).to_digit(16),
+            ) {
+                out.push(((hi << 4) | lo) as u8);
+                i += 4;
+                continue;
+            }
+        } else if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            match bytes[i + 1] {
+                b'n' => {
+                    out.push(b'\n');
+                    i += 2;
+                    continue;
+                }
+                b't' => {
+                    out.push(b'\t');
+                    i += 2;
+                    continue;
+                }
+                b'\\' => {
+                    out.push(b'\\');
+                    i += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    PathBuf::from(std::ffi::OsString::from_vec(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    #[test]
+    fn lsof_hex_escape_decoder_restores_utf8_chinese_paths() {
+        let escaped =
+            r"/Users/example/Documents/\xe7\xa8\x8b\xe5\xba\x8f\xe5\xbc\x80\xe5\x8f\x91/AgentHub";
+        assert_eq!(
+            decode_lsof_path(escaped),
+            PathBuf::from("/Users/example/Documents/程序开发/AgentHub")
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn kernel_probes_read_utf8_cwd_args_and_open_vnode_inodes_without_locale_dependency() {
+        let pid = std::process::id();
+        assert!(pid_is_alive(pid));
+        assert!(!pid_is_alive(u32::MAX));
+
+        let cwd = resolve_kernel_cwd(pid).expect("kernel cwd");
+        assert_eq!(
+            cwd.canonicalize().unwrap(),
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        );
+        let args = resolve_kernel_args(pid).expect("kernel args");
+        assert!(!args.is_empty());
+
+        let dir = std::env::temp_dir().join(format!(
+            "agenthub-kernel-中文路径-{}-{}",
+            pid,
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("会话文件.jsonl");
+        std::fs::write(&target, b"{\"ok\":true}\n").unwrap();
+        let open_file = std::fs::File::open(&target).unwrap();
+        let meta = open_file.metadata().unwrap();
+
+        let (paths, inodes) = collect_kernel_open_vnodes(pid).expect("kernel open vnodes");
+        let canonical_target = target.canonicalize().unwrap();
+        assert!(
+            inodes.contains(&(meta.dev(), meta.ino())),
+            "kernel fd table must contain open (dev, ino)"
+        );
+        assert!(
+            paths.iter().any(|p| p == &canonical_target
+                || p.canonicalize().ok().as_ref() == Some(&canonical_target)),
+            "kernel fd paths must preserve UTF-8 Chinese filename without C-locale escaping"
+        );
+        drop(open_file);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

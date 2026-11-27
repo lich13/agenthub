@@ -134,27 +134,51 @@ async fn query(
     }
     serde_json::from_slice(&bytes).map_err(|_| anyhow::anyhow!("invalid Antigravity response"))
 }
-async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
+async fn connect_all() -> Result<(reqwest::Client, Vec<(Endpoint, u16, Value)>)> {
     if !cfg!(target_os = "macos") {
         anyhow::bail!("Antigravity notifications require the local Mac App");
     }
     let client = client()?;
-    match antigravity::sessions::get_cached_live_endpoint() {
-        Some(Ok(endpoint)) => {
-            for &port in &endpoint.ports {
-                if let Ok(value) = query(
-                    &client,
-                    port,
-                    &endpoint.token,
-                    "GetAllCascadeTrajectories",
-                    json!({"excludeSubtrajectories":false}),
-                )
-                .await
-                {
-                    if value["trajectorySummaries"].is_object() {
-                        return Ok((endpoint, client, port, value));
+    let normalize_summaries = |mut value: Value| -> Option<Value> {
+        if value.is_object() && value.get("trajectorySummaries").is_none() {
+            value["trajectorySummaries"] = json!({});
+        }
+        value["trajectorySummaries"].is_object().then_some(value)
+    };
+    match antigravity::sessions::get_cached_live_endpoints() {
+        Some(Ok(cached)) => {
+            let mut instances = Vec::new();
+            let mut all_alive = true;
+            for endpoint in cached {
+                if endpoint.pid > 0 && !agenthub_core::platform::pid_is_alive(endpoint.pid) {
+                    all_alive = false;
+                    break;
+                }
+                let mut connected = false;
+                for &port in &endpoint.ports {
+                    if let Ok(value) = query(
+                        &client,
+                        port,
+                        &endpoint.token,
+                        "GetAllCascadeTrajectories",
+                        json!({"excludeSubtrajectories":false}),
+                    )
+                    .await
+                    {
+                        if let Some(normalized) = normalize_summaries(value) {
+                            instances.push((endpoint.clone(), port, normalized));
+                            connected = true;
+                            break;
+                        }
                     }
                 }
+                if !connected {
+                    all_alive = false;
+                    break;
+                }
+            }
+            if all_alive && !instances.is_empty() {
+                return Ok((client, instances));
             }
         }
         Some(Err(())) => {
@@ -167,32 +191,39 @@ async fn connect() -> Result<(Endpoint, reqwest::Client, u16, Value)> {
             .await?;
     if candidates.is_empty() {
         antigravity::sessions::record_endpoint_failure(false);
-        anyhow::bail!("Antigravity native owner unavailable or ambiguous");
+        anyhow::bail!("Antigravity native owner unavailable");
     }
-    if candidates.len() > 1 {
-        antigravity::sessions::record_endpoint_failure(true);
-        anyhow::bail!("Antigravity native owner unavailable or ambiguous");
-    }
-    let endpoint = candidates.into_iter().next().unwrap();
-    for &port in &endpoint.ports {
-        if let Ok(value) = query(
-            &client,
-            port,
-            &endpoint.token,
-            "GetAllCascadeTrajectories",
-            json!({"excludeSubtrajectories":false}),
-        )
-        .await
-        {
-            if value["trajectorySummaries"].is_object() {
-                antigravity::sessions::record_verified_live_endpoint(
-                    endpoint.pid,
-                    port,
-                    endpoint.token.clone(),
-                );
-                return Ok((endpoint, client, port, value));
+    let mut instances = Vec::new();
+    let mut verified = Vec::new();
+    for endpoint in candidates {
+        if endpoint.pid > 0 && !agenthub_core::platform::pid_is_alive(endpoint.pid) {
+            continue;
+        }
+        for &port in &endpoint.ports {
+            if let Ok(value) = query(
+                &client,
+                port,
+                &endpoint.token,
+                "GetAllCascadeTrajectories",
+                json!({"excludeSubtrajectories":false}),
+            )
+            .await
+            {
+                if let Some(normalized) = normalize_summaries(value) {
+                    verified.push(Endpoint {
+                        pid: endpoint.pid,
+                        ports: vec![port],
+                        token: endpoint.token.clone(),
+                    });
+                    instances.push((endpoint, port, normalized));
+                    break;
+                }
             }
         }
+    }
+    if !instances.is_empty() {
+        antigravity::sessions::record_verified_live_endpoints(verified);
+        return Ok((client, instances));
     }
     antigravity::sessions::record_endpoint_failure(true);
     anyhow::bail!("Antigravity native API unavailable")
@@ -209,12 +240,7 @@ fn decode_local_file_uri(uri: &str) -> Option<std::path::PathBuf> {
 }
 
 fn has_open_file_handle(path: &std::path::Path) -> bool {
-    let bin = if std::path::Path::new("/usr/sbin/lsof").is_file() {
-        "/usr/sbin/lsof"
-    } else {
-        "lsof"
-    };
-    std::process::Command::new(bin)
+    agenthub_core::platform::sanitized_lsof_command(agenthub_core::platform::default_lsof_bin())
         .args(["-nP", "-Fp", "--"])
         .arg(path)
         .output()
@@ -712,17 +738,53 @@ async fn scan_offline_one_with_retry(
 }
 
 pub(crate) async fn scan() -> Result<NativeScan> {
-    match connect().await {
-        Ok((endpoint, client, port, summaries)) => {
-            let mut live_scan = scan_at(
-                &client,
-                port,
-                &endpoint.token,
-                endpoint.pid,
-                &summaries,
-                None,
-            )
-            .await?;
+    match connect_all().await {
+        Ok((client, instances)) => {
+            let mut id_counts: BTreeMap<String, usize> = BTreeMap::new();
+            for (_, _, summaries) in &instances {
+                if let Some(map) = summaries["trajectorySummaries"].as_object() {
+                    for (id, summary) in map {
+                        if !is_subtrajectory(id, summary) {
+                            *id_counts.entry(id.clone()).or_insert(0) += 1;
+                        }
+                    }
+                }
+            }
+            let ambiguous_ids: BTreeSet<String> = id_counts
+                .into_iter()
+                .filter_map(|(id, count)| (count > 1).then_some(id))
+                .collect();
+            let mut live_scan = NativeScan {
+                streams: Vec::new(),
+                errors: ambiguous_ids.len(),
+            };
+            for (endpoint, port, mut summaries) in instances {
+                if !ambiguous_ids.is_empty() {
+                    if let Some(map) = summaries["trajectorySummaries"].as_object_mut() {
+                        for amb in &ambiguous_ids {
+                            map.remove(amb);
+                        }
+                    }
+                }
+                match scan_at(
+                    &client,
+                    port,
+                    &endpoint.token,
+                    endpoint.pid,
+                    &summaries,
+                    None,
+                )
+                .await
+                {
+                    Ok(part) => {
+                        live_scan.streams.extend(part.streams);
+                        live_scan.errors += part.errors;
+                    }
+                    Err(_) => {
+                        live_scan.errors += 1;
+                    }
+                }
+            }
             let cli_scan = scan_offline_stores(None, false).await?;
             if !cli_scan.streams.is_empty() {
                 let cli_ids: BTreeSet<String> =
@@ -741,12 +803,23 @@ pub(crate) async fn scan_one(cascade_id: &str) -> Result<NativeScan> {
     if antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
         return scan_offline_one_with_retry(cascade_id, false).await;
     }
-    let Ok((endpoint, client, port, mut summaries)) = connect().await else {
+    let Ok((client, instances)) = connect_all().await else {
         return scan_offline_one_with_retry(cascade_id, !cfg!(target_os = "macos")).await;
     };
-    if summaries["trajectorySummaries"].get(cascade_id).is_none() {
+    let mut matching: Vec<(Endpoint, u16, Value)> = instances
+        .into_iter()
+        .filter(|(_, _, summaries)| summaries["trajectorySummaries"].get(cascade_id).is_some())
+        .collect();
+    if matching.is_empty() {
         return scan_offline_one_with_retry(cascade_id, !cfg!(target_os = "macos")).await;
     }
+    if matching.len() > 1 {
+        return Ok(NativeScan {
+            streams: Vec::new(),
+            errors: 1,
+        });
+    }
+    let (endpoint, port, mut summaries) = matching.remove(0);
     let mut last_scan = NativeScan::default();
     for attempt in 0..8 {
         if attempt > 0 {
@@ -1013,31 +1086,40 @@ pub(crate) async fn diagnose(cascade_id: &str, db: &agenthub_core::db::PanelDb) 
         cascade_id,
     )?;
     if !antigravity::sessions::AntigravityPaths::is_cli_only_session_default(cascade_id) {
-        if let Ok((endpoint, client, port, value)) = connect().await {
-            if let Some(summaries) = value["trajectorySummaries"].as_object() {
-                if let Some(summary) = summaries.get(cascade_id) {
-                    let subagents = collect_subagents_by_root(summaries)
-                        .get(cascade_id)
-                        .cloned()
-                        .unwrap_or_default();
-                    let now_ms = jiff::Timestamp::now().as_millisecond();
-                    let (response, ctx) = load_trajectory_with_context(
-                        &client,
-                        port,
-                        &endpoint.token,
-                        endpoint.pid,
-                        cascade_id,
-                        summary,
-                        summaries,
-                        &index_children_by_parent(summaries),
-                        subagents,
-                        now_ms,
-                        true,
-                    )
-                    .await?;
-                    return antigravity::diagnose_trajectory(
-                        cascade_id, summary, &response, &ctx, db_cursor,
-                    );
+        if let Ok((client, instances)) = connect_all().await {
+            let mut matching: Vec<(Endpoint, u16, Value)> = instances
+                .into_iter()
+                .filter(|(_, _, v)| v["trajectorySummaries"].get(cascade_id).is_some())
+                .collect();
+            if matching.len() > 1 {
+                anyhow::bail!("Antigravity session {cascade_id} is loaded in multiple instances");
+            }
+            if let Some((endpoint, port, value)) = matching.pop() {
+                if let Some(summaries) = value["trajectorySummaries"].as_object() {
+                    if let Some(summary) = summaries.get(cascade_id) {
+                        let subagents = collect_subagents_by_root(summaries)
+                            .get(cascade_id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let now_ms = jiff::Timestamp::now().as_millisecond();
+                        let (response, ctx) = load_trajectory_with_context(
+                            &client,
+                            port,
+                            &endpoint.token,
+                            endpoint.pid,
+                            cascade_id,
+                            summary,
+                            summaries,
+                            &index_children_by_parent(summaries),
+                            subagents,
+                            now_ms,
+                            true,
+                        )
+                        .await?;
+                        return antigravity::diagnose_trajectory(
+                            cascade_id, summary, &response, &ctx, db_cursor,
+                        );
+                    }
                 }
             }
         }
@@ -1071,7 +1153,17 @@ pub(crate) async fn source_current(delivery: &agenthub_core::db::NativeDelivery)
         .await?;
         return super::provider_monitor::native_event_current(&scan, delivery);
     }
-    let (endpoint, client, port, summaries) = connect().await?;
+    let (client, instances) = connect_all().await?;
+    let mut matching: Vec<(Endpoint, u16, Value)> = instances
+        .into_iter()
+        .filter(|(_, _, v)| v["trajectorySummaries"].get(&delivery.thread_id).is_some())
+        .collect();
+    if matching.len() > 1 {
+        anyhow::bail!("Antigravity native owner ambiguous across instances");
+    }
+    let Some((endpoint, port, summaries)) = matching.pop() else {
+        return Ok(false);
+    };
     let scan = scan_at(
         &client,
         port,

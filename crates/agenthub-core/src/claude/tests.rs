@@ -3732,3 +3732,62 @@ fn located_sessions_cache_handles_over_20k_insertions_with_o1_lru_eviction() {
     assert_eq!(partial.len(), 64);
     partial.assert_invariants();
 }
+
+#[test]
+fn verified_live_streaming_partial_tail_keeps_running_status_while_guarding_rename_and_notifications(
+) {
+    use std::io::Write;
+    let f = Fixture::new();
+    fs::write(
+        &f.file,
+        format!(
+            "{}\n",
+            json!({
+                "type": "user",
+                "sessionId": "native-fixture",
+                "cwd": "/workspace/claude-fixture",
+                "version": "2.1.76",
+                "uuid": "u-stream-1",
+                "promptId": "p-stream-1",
+                "timestamp": "2026-11-27T10:00:00Z",
+                "message": { "role": "user", "content": "开始流式生成" }
+            })
+        ),
+    )
+    .unwrap();
+    // Append an unterminated streaming JSON tail (no trailing '\n').
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&f.file)
+        .unwrap()
+        .write_all(br#"{"type":"assistant","sessionId":"native-fixture","uuid":"a-partial"#)
+        .unwrap();
+
+    // Simulate a verified live Claude owner reporting `busy`.
+    super::activity::test_owner_with_status(
+        Some("native-fixture"),
+        Path::new("/workspace/claude-fixture"),
+        Some("busy"),
+    );
+
+    let listed = list_claude_sessions(&f.paths, 10, None).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].status, "running",
+        "verified live owner must stay running across unterminated streaming tail"
+    );
+    assert!(
+        listed[0].read_error.is_none(),
+        "streaming partial tail on verified live session must not emit bogus read_error"
+    );
+    assert!(
+        !listed[0].can_rename,
+        "partial tail and active owner must continue to guard rename"
+    );
+
+    // Notification scan must still count partial tail as transient error so events wait for newline.
+    let scan = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(scan.errors, 1);
+
+    super::activity::test_owner(None, Path::new("/workspace/claude-fixture"));
+}

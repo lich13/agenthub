@@ -191,6 +191,160 @@ fn row_title(row: &Value) -> String {
         .unwrap_or("Grok Bot")
         .into()
 }
+#[derive(Default)]
+struct ReplicaInteractionSummary {
+    has_pending_auth: bool,
+    pending_reply_deadlines: Vec<Option<i64>>,
+    seen_ids: std::collections::HashSet<String>,
+}
+
+static REPLICA_INTERACTION_CACHE: crate::read_cache::ReadCache<ReplicaInteractionSummary> =
+    crate::read_cache::ReadCache::new(4 * 1024 * 1024)
+        .with_entry_limit(512)
+        .with_native_metadata();
+
+pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
+    REPLICA_INTERACTION_CACHE.evict_idle(max_idle);
+}
+
+impl ReplicaInteractionSummary {
+    fn from_replica(replica: &Value) -> Self {
+        let mut out = Self::default();
+        for entry in replica["entries"].as_array().into_iter().flatten() {
+            for candidate in [
+                entry["id"].as_str(),
+                entry["requestId"].as_str(),
+                entry["message"]["ask"]["requestId"].as_str(),
+                entry["message"]["approval"]["requestId"].as_str(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            {
+                out.seen_ids.insert(candidate.to_owned());
+            }
+            if entry["timestampMs"].as_i64().is_none_or(|t| t <= 0) {
+                continue;
+            }
+            if entry["kind"] != "send-message"
+                || entry.get("respondedValue").is_some_and(|v| !v.is_null())
+                || entry["widgetDismissed"] == true
+                || entry.get("formResolution").is_some_and(|v| !v.is_null())
+            {
+                continue;
+            }
+            let message = &entry["message"];
+            match message["type"].as_str() {
+                Some("local-tool-permission")
+                    if message["ask"]["status"] == "pending"
+                        && message["ask"]["requestId"].as_str().is_some() =>
+                {
+                    out.has_pending_auth = true;
+                }
+                Some(
+                    "auto-review-approval"
+                    | "meeting-join-consent"
+                    | "cookie-origin-approval"
+                    | "virtual-card-approval",
+                ) if message["approval"]["status"] == "pending"
+                    && message["approval"]["requestId"].as_str().is_some() =>
+                {
+                    out.has_pending_auth = true;
+                }
+                Some("user-form")
+                    if message["formRequest"].is_object() && entry["id"].as_str().is_some() =>
+                {
+                    let question = &message["phoneCallQuestion"];
+                    if question.is_object() && question.get("closed").is_some() {
+                        continue;
+                    }
+                    let deadline = if question.is_object() {
+                        question["deadlineAtMs"].as_i64()
+                    } else {
+                        None
+                    };
+                    out.pending_reply_deadlines.push(deadline);
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    fn weight(&self) -> u64 {
+        (std::mem::size_of::<Self>()
+            + self.pending_reply_deadlines.capacity() * std::mem::size_of::<Option<i64>>()
+            + self
+                .seen_ids
+                .iter()
+                .map(|s| std::mem::size_of::<String>() + s.capacity())
+                .sum::<usize>()) as u64
+    }
+}
+
+fn read_replica_interaction_summary(
+    paths: &GrokBotPaths,
+    scope: &str,
+    id: &str,
+    path: &Path,
+) -> Result<Option<Arc<ReplicaInteractionSummary>>> {
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink()) {
+        return Ok(None);
+    }
+    let k = replica_key(scope, id);
+    REPLICA_INTERACTION_CACHE
+        .read(
+            path,
+            |summary, _| summary.weight(),
+            || {
+                let value = read_slice(&paths.persistence, &k, 1)?;
+                if let Some(value) = &value {
+                    ensure!(value["entries"].is_array(), "Grok Bot 线程缓存格式错误");
+                }
+                Ok(value
+                    .as_ref()
+                    .map(ReplicaInteractionSummary::from_replica)
+                    .unwrap_or_default())
+            },
+        )
+        .map(Some)
+}
+
+fn derive_session_status(
+    row: &Value,
+    replica_summary: Option<&ReplicaInteractionSummary>,
+) -> &'static str {
+    if let Some(summary) = replica_summary {
+        if summary.has_pending_auth {
+            return "authorization";
+        }
+        let now_ms = jiff::Timestamp::now().as_millisecond();
+        if summary
+            .pending_reply_deadlines
+            .iter()
+            .any(|d| d.is_none_or(|deadline| deadline > now_ms))
+        {
+            return "reply_needed";
+        }
+    }
+    let awaiting = &row["awaitingUserResponse"];
+    if let (Some(request), Some(_ts)) = (
+        awaiting["id"].as_str(),
+        row["lastActivityAt"].as_i64().filter(|&t| t > 0),
+    ) {
+        if replica_summary.is_none_or(|s| !s.seen_ids.contains(request)) {
+            return "reply_needed";
+        }
+    } else if replica_summary.is_none()
+        && row
+            .get("awaitingUserResponse")
+            .is_some_and(|v| !v.is_null())
+    {
+        return "reply_needed";
+    }
+    "unknown"
+}
+
 fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSessionSummary> {
     summary_inner(paths, scope, row, true)
 }
@@ -208,7 +362,14 @@ fn summary_inner(
     let path = slice_path(&paths.persistence, &replica_key(scope, id));
     let available =
         fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink());
-    let pending = row.get("awaitingUserResponse").filter(|v| !v.is_null());
+    let replica_summary = if available {
+        read_replica_interaction_summary(paths, scope, id, &path)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+    let status = derive_session_status(row, replica_summary.as_deref());
     Ok(ProviderSessionSummary {
         storage_size: (include_storage && available)
             .then(|| crate::session_storage::file_size(&paths.persistence, &path)),
@@ -225,12 +386,7 @@ fn summary_inner(
             .and_then(timestamp),
         message_count: 0,
         last_message: row["lastEntry"]["text"].as_str().map(str::to_owned),
-        status: if pending.is_some() {
-            "reply_needed"
-        } else {
-            "unknown"
-        }
-        .into(),
+        status: status.into(),
         format_version: String::new(),
         can_rename: false,
         rename_block_reason: None,
@@ -246,13 +402,28 @@ pub fn list(
     paths: &GrokBotPaths,
     request: &ProviderListRequest,
 ) -> Result<Vec<ProviderSessionSummary>> {
+    list_inner(paths, request, true)
+}
+
+pub(crate) fn list_without_storage(
+    paths: &GrokBotPaths,
+    request: &ProviderListRequest,
+) -> Result<Vec<ProviderSessionSummary>> {
+    list_inner(paths, request, false)
+}
+
+fn list_inner(
+    paths: &GrokBotPaths,
+    request: &ProviderListRequest,
+    include_storage: bool,
+) -> Result<Vec<ProviderSessionSummary>> {
     let Some((scope, roster)) = roster(paths)? else {
         return Ok(vec![]);
     };
     let mut rows = roster_rows(&roster)?
         .iter()
         .filter(|r| r["isRemovedFromSidebar"] != true)
-        .map(|r| summary(paths, &scope, r))
+        .map(|r| summary_inner(paths, &scope, r, include_storage))
         .collect::<Result<Vec<_>>>()?;
     rows.retain(|r| provider_sessions::matches_query(r, request.q.as_deref()));
     rows.sort_by_cached_key(|r| {
@@ -691,12 +862,10 @@ pub fn detail(
     anyhow::ensure!(request.agent_id.is_none(), "Grok Bot 不支持子智能体详情");
     let (scope, row) = locate(paths, &request.session_key)?;
     let mut summary = summary(paths, &scope, &row)?;
-    let replica = read_slice(&paths.persistence, &replica_key(&scope, &summary.id), 1)?;
-    summary.status = pending_events(&row, replica.as_ref())
-        .first()
-        .map(|event| event.kind.as_str())
-        .unwrap_or("unknown")
-        .into();
+    let replica_path = slice_path(&paths.persistence, &replica_key(&scope, &summary.id));
+    let replica_summary =
+        read_replica_interaction_summary(paths, &scope, &summary.id, &replica_path)?;
+    summary.status = derive_session_status(&row, replica_summary.as_deref()).into();
     let snap = snapshot_for_id(paths, &scope, &summary.id)?;
     provider_sessions::paginate_provider_detail(summary, snap.as_ref(), request)
 }

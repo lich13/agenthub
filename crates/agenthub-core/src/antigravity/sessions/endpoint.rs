@@ -138,7 +138,16 @@ pub(super) fn resolve_daemon_hub_endpoint(
     None
 }
 
-fn is_antigravity_language_server_args(args: &[&str]) -> bool {
+fn is_antigravity_app_data_dir_value(value: &str) -> bool {
+    let trimmed = value.trim().trim_end_matches('/');
+    trimmed == "antigravity"
+        || Path::new(trimmed)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|name| name == "antigravity")
+}
+
+pub(crate) fn is_antigravity_language_server_args(args: &[&str]) -> bool {
     let Some(&exe) = args.first() else {
         return false;
     };
@@ -146,10 +155,15 @@ fn is_antigravity_language_server_args(args: &[&str]) -> bool {
         return true;
     }
     let bin = exe.rsplit('/').next().unwrap_or(exe);
-    (bin == "language_server" || bin.starts_with("language_server_"))
-        && args
-            .windows(2)
-            .any(|w| w[0] == "--app_data_dir" && w[1] == "antigravity")
+    if !(bin == "language_server" || bin.starts_with("language_server_")) {
+        return false;
+    }
+    args.windows(2)
+        .any(|w| w[0] == "--app_data_dir" && is_antigravity_app_data_dir_value(w[1]))
+        || args.iter().any(|arg| {
+            arg.strip_prefix("--app_data_dir=")
+                .is_some_and(is_antigravity_app_data_dir_value)
+        })
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -239,14 +253,11 @@ fn linux_pid_loopback_ports(pid: u32) -> Vec<u16> {
 }
 
 fn lsof_loopback_ports(pid: u32) -> Vec<u16> {
-    let lsof_bin = if Path::new("/usr/sbin/lsof").is_file() {
-        "/usr/sbin/lsof"
-    } else if Path::new("/usr/bin/lsof").is_file() {
-        "/usr/bin/lsof"
-    } else {
-        "lsof"
-    };
-    let Ok(lsof) = std::process::Command::new(lsof_bin)
+    if !crate::platform::pid_is_alive(pid) {
+        return Vec::new();
+    }
+    let mut cmd = crate::platform::sanitized_lsof_command(crate::platform::default_lsof_bin());
+    let Ok(lsof) = cmd
         .args([
             "-Pan",
             "-p",
@@ -271,6 +282,16 @@ fn lsof_loopback_ports(pid: u32) -> Vec<u16> {
     ports
 }
 
+fn extract_cli_csrf_token<'a>(args: &[&'a str]) -> Option<&'a str> {
+    args.windows(2)
+        .find(|w| w[0] == "--csrf_token")
+        .map(|w| w[1])
+        .or_else(|| {
+            args.iter()
+                .find_map(|arg| arg.strip_prefix("--csrf_token="))
+        })
+}
+
 fn push_discovered_candidate(
     pid: u32,
     uid: u32,
@@ -283,11 +304,7 @@ fn push_discovered_candidate(
     if ports.is_empty() || seen_pids.contains(&pid) {
         return;
     }
-    let cli_token = args
-        .windows(2)
-        .find(|w| w[0] == "--csrf_token")
-        .map(|w| w[1]);
-    if let Some(token) = cli_token {
+    if let Some(token) = extract_cli_csrf_token(args) {
         if is_valid_csrf_token(token) && ports.len() <= 8 {
             seen_pids.insert(pid);
             candidates.push(DiscoveredAntigravityEndpoint {
@@ -308,104 +325,199 @@ fn push_discovered_candidate(
     }
 }
 
+fn collect_live_daemon_hub_candidates(
+    daemon_dirs: &[PathBuf],
+    expected_uid: u32,
+    seen_pids: &mut BTreeSet<u32>,
+    candidates: &mut Vec<DiscoveredAntigravityEndpoint>,
+) {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    for dir in daemon_dirs {
+        let Ok(dir_meta) = fs::symlink_metadata(dir) else {
+            continue;
+        };
+        if !dir_meta.file_type().is_dir() || dir_meta.uid() != expected_uid {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            continue;
+        };
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("hub_") && n.ends_with(".json"))
+            })
+            .collect();
+        files.sort_by(|a, b| {
+            let ma = fs::symlink_metadata(a).ok().and_then(|m| m.modified().ok());
+            let mb = fs::symlink_metadata(b).ok().and_then(|m| m.modified().ok());
+            mb.cmp(&ma).then_with(|| b.cmp(a))
+        });
+        for path in files {
+            let Ok(file) = OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                .open(&path)
+            else {
+                continue;
+            };
+            let Ok(meta) = file.metadata() else {
+                continue;
+            };
+            if !meta.is_file()
+                || meta.uid() != expected_uid
+                || meta.len() == 0
+                || meta.len() > 16 * 1024
+            {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            if file.take(16 * 1024 + 1).read_to_end(&mut bytes).is_err() || bytes.len() > 16 * 1024
+            {
+                continue;
+            }
+            let Ok(json) = serde_json::from_slice::<Value>(&bytes) else {
+                continue;
+            };
+            let Some(pid) = json["pid"]
+                .as_u64()
+                .and_then(|p| u32::try_from(p).ok())
+                .filter(|&p| p > 0 && !seen_pids.contains(&p) && crate::platform::pid_is_alive(p))
+            else {
+                continue;
+            };
+            let Some(http_port) = json["httpPort"]
+                .as_u64()
+                .and_then(|p| u16::try_from(p).ok())
+                .filter(|&p| p > 0)
+            else {
+                continue;
+            };
+            let Some(token) = json["csrfToken"]
+                .as_str()
+                .filter(|t| is_valid_csrf_token(t))
+            else {
+                continue;
+            };
+            #[cfg(target_os = "linux")]
+            let listening = linux_pid_loopback_ports(pid);
+            #[cfg(not(target_os = "linux"))]
+            let listening = lsof_loopback_ports(pid);
+            if listening.contains(&http_port) {
+                seen_pids.insert(pid);
+                candidates.push(DiscoveredAntigravityEndpoint {
+                    pid,
+                    ports: vec![http_port],
+                    token: token.to_owned(),
+                });
+            }
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: Reading the process UID takes no pointers or arguments.
     let uid = unsafe { libc::getuid() };
     let daemon_dirs = candidate_daemon_dirs();
-    let Ok(proc_entries) = fs::read_dir("/proc") else {
-        return Vec::new();
-    };
     let mut seen_pids = BTreeSet::new();
     let mut candidates = Vec::new();
-    for entry in proc_entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
-            continue;
-        };
-        if meta.uid() != uid {
-            continue;
+    if let Ok(proc_entries) = fs::read_dir("/proc") {
+        for entry in proc_entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .filter(|&p| crate::platform::pid_is_alive(p))
+            else {
+                continue;
+            };
+            let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+                continue;
+            };
+            if meta.uid() != uid {
+                continue;
+            }
+            let Some(kernel_args) = crate::platform::resolve_kernel_args(pid) else {
+                continue;
+            };
+            let arg_refs: Vec<&str> = kernel_args.iter().map(String::as_str).collect();
+            if !is_antigravity_language_server_args(&arg_refs) {
+                continue;
+            }
+            let ports = linux_pid_loopback_ports(pid);
+            push_discovered_candidate(
+                pid,
+                uid,
+                &arg_refs,
+                ports,
+                &daemon_dirs,
+                &mut seen_pids,
+                &mut candidates,
+            );
         }
-        let mut cmdline = Vec::new();
-        let Ok(file) = fs::File::open(entry.path().join("cmdline")) else {
-            continue;
-        };
-        if file.take(32 * 1024).read_to_end(&mut cmdline).is_err() || cmdline.is_empty() {
-            continue;
-        }
-        let args: Vec<&str> = cmdline
-            .split(|&b| b == 0)
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| std::str::from_utf8(s).ok())
-            .collect();
-        if !is_antigravity_language_server_args(&args) {
-            continue;
-        }
-        let ports = linux_pid_loopback_ports(pid);
-        push_discovered_candidate(
-            pid,
-            uid,
-            &args,
-            ports,
-            &daemon_dirs,
-            &mut seen_pids,
-            &mut candidates,
-        );
     }
+    collect_live_daemon_hub_candidates(&daemon_dirs, uid, &mut seen_pids, &mut candidates);
     candidates
 }
 
 #[cfg(not(target_os = "linux"))]
 pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     use std::process::Command;
-    let Ok(output) = Command::new("/bin/ps")
-        .args(["-ww", "-axo", "pid=,uid=,command="])
-        .output()
-    else {
-        return Vec::new();
-    };
-    if !output.status.success() {
-        return Vec::new();
-    }
     // SAFETY: Reading the process UID takes no pointers or arguments.
     let uid = unsafe { libc::getuid() };
-    let text = String::from_utf8_lossy(&output.stdout);
     let daemon_dirs = candidate_daemon_dirs();
     let mut seen_pids = BTreeSet::new();
     let mut candidates = Vec::new();
-    for line in text.lines() {
-        let mut parts = line.split_whitespace();
-        let Some(pid) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-        let Some(owner) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
-            continue;
-        };
-        if owner != uid || seen_pids.contains(&pid) {
-            continue;
-        };
-        let args: Vec<&str> = parts.collect();
-        if !is_antigravity_language_server_args(&args) {
-            continue;
+    if let Ok(output) = Command::new("/bin/ps")
+        .env("LC_ALL", "C")
+        .args(["-ww", "-axo", "pid=,uid=,command="])
+        .output()
+    {
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let mut parts = line.split_whitespace();
+                let Some(pid) = parts
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .filter(|&p| crate::platform::pid_is_alive(p))
+                else {
+                    continue;
+                };
+                let Some(owner) = parts.next().and_then(|s| s.parse::<u32>().ok()) else {
+                    continue;
+                };
+                if owner != uid || seen_pids.contains(&pid) {
+                    continue;
+                }
+                let ps_args: Vec<&str> = parts.collect();
+                let kernel_args = crate::platform::resolve_kernel_args(pid);
+                let arg_refs: Vec<&str> = match &kernel_args {
+                    Some(kargs) if !kargs.is_empty() => kargs.iter().map(String::as_str).collect(),
+                    _ => ps_args,
+                };
+                if !is_antigravity_language_server_args(&arg_refs) {
+                    continue;
+                }
+                let ports = lsof_loopback_ports(pid);
+                push_discovered_candidate(
+                    pid,
+                    uid,
+                    &arg_refs,
+                    ports,
+                    &daemon_dirs,
+                    &mut seen_pids,
+                    &mut candidates,
+                );
+            }
         }
-        let ports = lsof_loopback_ports(pid);
-        push_discovered_candidate(
-            pid,
-            uid,
-            &args,
-            ports,
-            &daemon_dirs,
-            &mut seen_pids,
-            &mut candidates,
-        );
     }
+    collect_live_daemon_hub_candidates(&daemon_dirs, uid, &mut seen_pids, &mut candidates);
     candidates
 }
 
@@ -554,30 +666,48 @@ fn read_chunked_body<R: BufRead>(reader: &mut R, limit: usize) -> Result<Vec<u8>
     Ok(out)
 }
 
-type CachedEndpointSlot = (Option<DiscoveredAntigravityEndpoint>, std::time::Instant);
+type CachedEndpointSlot = (
+    Option<Vec<DiscoveredAntigravityEndpoint>>,
+    std::time::Instant,
+);
 
 static CACHED_LIVE_RPC: std::sync::Mutex<Option<CachedEndpointSlot>> = std::sync::Mutex::new(None);
 
-pub fn get_cached_live_endpoint() -> Option<Result<DiscoveredAntigravityEndpoint, ()>> {
+const POSITIVE_ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(3);
+const NEGATIVE_ENDPOINT_CACHE_TTL: Duration = Duration::from_secs(5);
+
+pub fn get_cached_live_endpoints() -> Option<Result<Vec<DiscoveredAntigravityEndpoint>, ()>> {
     let (entry, ts) = CACHED_LIVE_RPC.lock().ok().and_then(|g| g.clone())?;
     match entry {
-        Some(ep) => Some(Ok(ep)),
-        None if ts.elapsed() < Duration::from_secs(5) => Some(Err(())),
-        None => None,
+        Some(eps) if ts.elapsed() < POSITIVE_ENDPOINT_CACHE_TTL && !eps.is_empty() => Some(Ok(eps)),
+        None if ts.elapsed() < NEGATIVE_ENDPOINT_CACHE_TTL => Some(Err(())),
+        _ => None,
+    }
+}
+
+pub fn get_cached_live_endpoint() -> Option<Result<DiscoveredAntigravityEndpoint, ()>> {
+    match get_cached_live_endpoints() {
+        Some(Ok(mut eps)) if !eps.is_empty() => Some(Ok(eps.remove(0))),
+        Some(Err(())) => Some(Err(())),
+        _ => None,
+    }
+}
+
+pub fn record_verified_live_endpoints(endpoints: Vec<DiscoveredAntigravityEndpoint>) {
+    if endpoints.is_empty() {
+        return;
+    }
+    if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
+        *guard = Some((Some(endpoints), std::time::Instant::now()));
     }
 }
 
 pub fn record_verified_live_endpoint(pid: u32, port: u16, token: String) {
-    if let Ok(mut guard) = CACHED_LIVE_RPC.lock() {
-        *guard = Some((
-            Some(DiscoveredAntigravityEndpoint {
-                pid,
-                ports: vec![port],
-                token,
-            }),
-            std::time::Instant::now(),
-        ));
-    }
+    record_verified_live_endpoints(vec![DiscoveredAntigravityEndpoint {
+        pid,
+        ports: vec![port],
+        token,
+    }]);
 }
 
 pub fn record_endpoint_failure(had_candidate_processes: bool) {
@@ -692,7 +822,140 @@ pub(crate) fn service_unreachable(error: &anyhow::Error) -> bool {
         )
     })
 }
-pub(crate) fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
+fn should_prefer_live_summary(candidate: &Value, existing: &Value) -> bool {
+    let cand_active = super::live_item_is_running(candidate);
+    let exist_active = super::live_item_is_running(existing);
+    if cand_active != exist_active {
+        return cand_active;
+    }
+    let ts_of = |item: &Value| {
+        item["lastModifiedTime"]
+            .as_str()
+            .or_else(|| item["updatedTime"].as_str())
+            .or_else(|| item["createdTime"].as_str())
+            .and_then(super::parse_any_timestamp_ms)
+            .unwrap_or(i64::MIN)
+    };
+    ts_of(candidate) > ts_of(existing)
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct LiveEndpointSet {
+    pub(crate) instances: Vec<(LiveRpc, Value)>,
+    pub(crate) merged_payload: Option<Value>,
+    owners: BTreeMap<String, Vec<usize>>,
+}
+
+impl LiveEndpointSet {
+    pub(crate) fn from_instances(instances: Vec<(LiveRpc, Value)>) -> Self {
+        if instances.is_empty() {
+            return Self::default();
+        }
+        let mut owners: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        if instances.len() == 1 {
+            if let Some(map) = instances[0].1["trajectorySummaries"].as_object() {
+                for id in map.keys() {
+                    owners.insert(id.clone(), vec![0]);
+                }
+            }
+            let merged_payload = Some(instances[0].1.clone());
+            return Self {
+                instances,
+                merged_payload,
+                owners,
+            };
+        }
+        let mut merged_map = serde_json::Map::new();
+        for (idx, (_, payload)) in instances.iter().enumerate() {
+            let Some(map) = payload["trajectorySummaries"].as_object() else {
+                continue;
+            };
+            for (id, item) in map {
+                owners.entry(id.clone()).or_default().push(idx);
+                match merged_map.get(id) {
+                    Some(existing) if !should_prefer_live_summary(item, existing) => {}
+                    _ => {
+                        merged_map.insert(id.clone(), item.clone());
+                    }
+                }
+            }
+        }
+        Self {
+            instances,
+            merged_payload: Some(json!({ "trajectorySummaries": merged_map })),
+            owners,
+        }
+    }
+
+    pub(crate) fn owner_for_read(&self, id: &str) -> Option<&(LiveRpc, Value)> {
+        if let Some(indices) = self.owners.get(id) {
+            let mut best: Option<&(LiveRpc, Value)> = None;
+            for &idx in indices {
+                if let Some(candidate) = self.instances.get(idx) {
+                    match best {
+                        Some((_, prev_val))
+                            if !should_prefer_live_summary(
+                                &candidate.1["trajectorySummaries"][id],
+                                &prev_val["trajectorySummaries"][id],
+                            ) => {}
+                        _ => best = Some(candidate),
+                    }
+                }
+            }
+            return best;
+        }
+        if self.instances.len() == 1 {
+            self.instances.first()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn has_multi_instance_conflict<'a>(
+        &self,
+        target_ids: impl IntoIterator<Item = &'a str>,
+    ) -> bool {
+        let mut unique = BTreeSet::new();
+        for id in target_ids {
+            if let Some(indices) = self.owners.get(id) {
+                for &idx in indices {
+                    unique.insert(idx);
+                    if unique.len() > 1 {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    pub(crate) fn resolve_mutation_owner<'a>(
+        &self,
+        target_ids: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Option<(LiveRpc, Value)>> {
+        let mut unique = BTreeSet::new();
+        for id in target_ids {
+            if let Some(indices) = self.owners.get(id) {
+                for &idx in indices {
+                    unique.insert(idx);
+                }
+            }
+        }
+        if unique.len() > 1 {
+            bail!("该会话同时在多个 Antigravity 实例中加载，请先关闭重复窗口后再操作");
+        }
+        if let Some(&idx) = unique.iter().next() {
+            return Ok(self.instances.get(idx).cloned());
+        }
+        if self.instances.len() == 1 {
+            Ok(self.instances.first().cloned())
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndpointSet> {
     let try_endpoint = |port: u16, token: &str| match connect_rpc_post(
         port,
         token,
@@ -718,55 +981,115 @@ pub(crate) fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveR
         }
     };
     match &paths.rpc_mode {
-        RpcMode::OfflineOnly => Ok(None),
+        RpcMode::OfflineOnly => Ok(LiveEndpointSet::default()),
         #[cfg(test)]
         RpcMode::Fixed { port, token } => {
             if let Some(value) = try_endpoint(*port, token)? {
-                return Ok(Some((
+                return Ok(LiveEndpointSet::from_instances(vec![(
                     LiveRpc {
                         port: *port,
                         token: token.clone(),
                     },
                     value,
-                )));
+                )]));
             }
-            Ok(None)
+            Ok(LiveEndpointSet::default())
+        }
+        #[cfg(test)]
+        RpcMode::FixedMany(list) => {
+            let mut instances = Vec::new();
+            for (port, token) in list {
+                if let Some(value) = try_endpoint(*port, token)? {
+                    instances.push((
+                        LiveRpc {
+                            port: *port,
+                            token: token.clone(),
+                        },
+                        value,
+                    ));
+                }
+            }
+            Ok(LiveEndpointSet::from_instances(instances))
         }
         RpcMode::AutoDiscover => {
-            match get_cached_live_endpoint() {
-                Some(Ok(ep)) => {
-                    for &port in &ep.ports {
-                        if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
-                            return Ok(Some((
-                                LiveRpc {
-                                    port,
-                                    token: ep.token,
-                                },
-                                value,
-                            )));
+            match get_cached_live_endpoints() {
+                Some(Ok(cached)) => {
+                    let mut instances = Vec::new();
+                    let mut all_alive = true;
+                    for ep in cached {
+                        if ep.pid > 0 && !crate::platform::pid_is_alive(ep.pid) {
+                            all_alive = false;
+                            break;
+                        }
+                        let mut connected = false;
+                        for &port in &ep.ports {
+                            if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
+                                instances.push((
+                                    LiveRpc {
+                                        port,
+                                        token: ep.token.clone(),
+                                    },
+                                    value,
+                                ));
+                                connected = true;
+                                break;
+                            }
+                        }
+                        if !connected {
+                            all_alive = false;
+                            break;
                         }
                     }
+                    if all_alive && !instances.is_empty() {
+                        return Ok(LiveEndpointSet::from_instances(instances));
+                    }
                 }
-                Some(Err(())) => return Ok(None),
+                Some(Err(())) => return Ok(LiveEndpointSet::default()),
                 None => {}
             }
             let candidates = discover_host_endpoints();
+            let mut instances = Vec::new();
+            let mut verified = Vec::new();
             for ep in &candidates {
+                if ep.pid > 0 && !crate::platform::pid_is_alive(ep.pid) {
+                    continue;
+                }
                 for &port in &ep.ports {
                     if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
-                        record_verified_live_endpoint(ep.pid, port, ep.token.clone());
-                        return Ok(Some((
+                        verified.push(DiscoveredAntigravityEndpoint {
+                            pid: ep.pid,
+                            ports: vec![port],
+                            token: ep.token.clone(),
+                        });
+                        instances.push((
                             LiveRpc {
                                 port,
                                 token: ep.token.clone(),
                             },
                             value,
-                        )));
+                        ));
+                        break;
                     }
                 }
             }
+            if !instances.is_empty() {
+                record_verified_live_endpoints(verified);
+                return Ok(LiveEndpointSet::from_instances(instances));
+            }
             record_endpoint_failure(!candidates.is_empty());
-            Ok(None)
+            Ok(LiveEndpointSet::default())
         }
     }
+}
+
+pub(crate) fn connect_endpoint(paths: &AntigravityPaths) -> Result<Option<(LiveRpc, Value)>> {
+    let mut set = connect_all_endpoints(paths)?;
+    if set.instances.is_empty() {
+        return Ok(None);
+    }
+    let first_rpc = set.instances.remove(0).0;
+    let payload = set
+        .merged_payload
+        .unwrap_or_else(|| json!({ "trajectorySummaries": {} }));
+    Ok(Some((first_rpc, payload)))
 }

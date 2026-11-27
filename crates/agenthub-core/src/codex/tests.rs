@@ -3946,3 +3946,107 @@ fn compressed_rollout_supports_questions_completion_feedback_and_header_fallback
 
     let _ = fs::remove_dir_all(root);
 }
+
+#[cfg(unix)]
+#[test]
+fn writer_lock_and_codex_worker_classification_handle_truncated_comm_and_managed_daemon() {
+    use std::os::unix::io::AsRawFd;
+
+    // 1. Linux 15-byte truncated `comm` ("codex-x86_64-un" / "codex-aarch64-a") and Node wrapper
+    //    are recognized as real workers, while pure `codex app-server --managed-daemon` is excluded.
+    assert_eq!(
+        super::classify_codex_process(
+            Some(Path::new("/usr/local/bin/codex-x86_64-unknown-linux-gnu")),
+            "codex-x86_64-un",
+            &[
+                "/usr/local/bin/codex-x86_64-unknown-linux-gnu".into(),
+                "--full-auto".into(),
+            ],
+        ),
+        (true, true)
+    );
+    assert_eq!(
+        super::classify_codex_process(
+            None,
+            "codex-aarch64-a",
+            &["codex-aarch64-apple-darwin".into()],
+        ),
+        (true, true)
+    );
+    assert_eq!(
+        super::classify_codex_process(
+            Some(Path::new("/usr/bin/node")),
+            "node",
+            &[
+                "node".into(),
+                "/usr/lib/node_modules/@openai/codex/bin/codex.js".into(),
+            ],
+        ),
+        (true, true)
+    );
+    assert_eq!(
+        super::classify_codex_process(
+            Some(Path::new("/opt/homebrew/bin/codex")),
+            "codex",
+            &[
+                "/opt/homebrew/bin/codex".into(),
+                "app-server".into(),
+                "--managed-daemon".into(),
+            ],
+        ),
+        (true, false)
+    );
+
+    // 2. Active `thread-writer-locks/<id>.lock` in custom CODEX_HOME proves thread is `Running`
+    //    even before any host process scan.
+    let custom_home = std::env::temp_dir().join(format!(
+        "agenthub-codex-custom-home-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let id = "33333333-3333-4333-8333-333333333333";
+    let sessions_dir = custom_home.join("sessions");
+    let locks_dir = custom_home.join("thread-writer-locks");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    fs::create_dir_all(&locks_dir).unwrap();
+    let rollout = sessions_dir.join(format!("rollout-2026-11-27T00-00-00-{id}.jsonl"));
+    fs::write(
+        &rollout,
+        [
+            format!(r#"{{"timestamp":"2026-11-27T00:00:00Z","type":"session_meta","payload":{{"id":"{id}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#),
+            r#"{"timestamp":"2026-11-27T00:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t-1"}}"#.to_owned(),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let conn = Connection::open(custom_home.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived INTEGER, rollout_path TEXT, cwd TEXT, source TEXT, thread_source TEXT);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES (?1, 'Custom Home Running', 1732500000, 0, ?2, '/workspace/example.invalid', 'cli', 'user')",
+        [id, &rollout.display().to_string()],
+    )
+    .unwrap();
+    drop(conn);
+
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(locks_dir.join(format!("{id}.lock")))
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+
+    let paths = CodexPaths::new(&custom_home);
+    let summary = super::local_thread_summary(&paths, id).unwrap().unwrap();
+    assert_eq!(summary.status, ThreadStatus::Running);
+
+    drop(lock_file);
+    let _ = fs::remove_dir_all(custom_home);
+}

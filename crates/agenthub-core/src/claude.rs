@@ -201,6 +201,8 @@ struct Parsed {
     last_message: Option<String>,
     history: crate::jsonl_cache::HistoryJournal,
     issues: Vec<String>,
+    has_fatal_issues: bool,
+    has_partial_tail: bool,
     warnings: Vec<String>,
     last_turn_at: Option<i64>,
     last_terminal_at: Option<i64>,
@@ -332,6 +334,7 @@ fn read_or_warning(path: &Path, summary_only: bool) -> Arc<Parsed> {
             id,
             version: "unknown".into(),
             issues: vec!["会话无法读取或超出读取上限".into()],
+            has_fatal_issues: true,
             ..Default::default()
         })
     })
@@ -452,14 +455,20 @@ fn summary_with_root(
 ) -> Result<ClaudeSessionSummary> {
     let assessment = snapshot.assess(parsed, path);
     let owner = assessment.ownership;
-    let fatal_reason = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
+    let live_streaming_tail = !parsed.has_fatal_issues
+        && parsed.has_partial_tail
+        && (matches!(assessment.native_status(), Some("busy" | "waiting"))
+            || (owner == activity::Ownership::Open && parsed.turn_open));
+    let fatal_reason =
+        (!parsed.issues.is_empty() && !live_streaming_tail).then(|| parsed.issues.join("；"));
     let warning_reason = (!parsed.warnings.is_empty()).then(|| parsed.warnings.join("；"));
-    let reason = if let Some(reason) = fatal_reason.clone() {
+    let reason = if let Some(reason) = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"))
+    {
         Some(reason)
     } else {
         assessment.block_reason()
     };
-    let status = if !parsed.issues.is_empty() {
+    let status = if !parsed.issues.is_empty() && !live_streaming_tail {
         "unknown"
     } else if let Some(native) = assessment.native_status() {
         // The verified owner publishes the live state: main loop or delegated
@@ -494,7 +503,7 @@ fn summary_with_root(
      * Compatibility warnings are shown separately without blocking mutations,
      * while notification scanning may use their terminal evidence.
      */
-    let read_error = (!parsed.issues.is_empty()).then(|| parsed.issues.join("；"));
+    let read_error = fatal_reason;
     let read_warning = warning_reason;
     let rename_reason = reason
         .clone()

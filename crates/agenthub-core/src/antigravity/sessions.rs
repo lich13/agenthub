@@ -29,15 +29,19 @@ mod endpoint;
 #[cfg(test)]
 use endpoint::resolve_daemon_hub_endpoint;
 pub(crate) use endpoint::{
-    connect_endpoint, connect_rpc_post, fetch_live_trajectory_steps, ConnectRpcHttpError,
-    LiveHistoryUnavailable, LiveRpc,
+    connect_all_endpoints, connect_endpoint, connect_rpc_post, fetch_live_trajectory_steps,
+    ConnectRpcHttpError, LiveEndpointSet, LiveHistoryUnavailable, LiveRpc,
 };
 pub use endpoint::{
     discover_host_endpoints, evict_idle_endpoint_cache, get_cached_live_endpoint,
-    record_endpoint_failure, record_verified_live_endpoint, DiscoveredAntigravityEndpoint,
+    get_cached_live_endpoints, record_endpoint_failure, record_verified_live_endpoint,
+    record_verified_live_endpoints, DiscoveredAntigravityEndpoint,
 };
 #[cfg(test)]
-pub(crate) use endpoint::{parse_loopback_listener_port, parse_proc_net_tcp_loopback_ports};
+pub(crate) use endpoint::{
+    is_antigravity_language_server_args, parse_loopback_listener_port,
+    parse_proc_net_tcp_loopback_ports,
+};
 
 pub(super) mod annotations;
 #[cfg(test)]
@@ -94,6 +98,8 @@ pub enum RpcMode {
         port: u16,
         token: String,
     },
+    #[cfg(test)]
+    FixedMany(Vec<(u16, String)>),
 }
 
 impl AntigravityPaths {
@@ -158,6 +164,15 @@ impl AntigravityPaths {
                 port,
                 token: token.into(),
             },
+        }
+    }
+
+    #[cfg(test)]
+    pub fn with_fixed_rpcs(home: PathBuf, endpoints: Vec<(u16, String)>) -> Self {
+        Self {
+            home,
+            cli_home: None,
+            rpc_mode: RpcMode::FixedMany(endpoints),
         }
     }
 
@@ -655,23 +670,37 @@ fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'stat
         return Ok(None);
     }
     let mut stmt = conn
-        .prepare("SELECT step_type, COALESCE(status, 0) FROM steps ORDER BY idx DESC LIMIT 64")?;
+        .prepare("SELECT step_type, COALESCE(status, 0) FROM steps ORDER BY idx DESC LIMIT 256")?;
     let rows: Vec<(i64, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     if rows.is_empty() {
         return Ok(None);
     }
+    let first_meaningful_pos = rows
+        .iter()
+        .position(|&(step_type, status)| {
+            !(matches!(step_type, 0 | 18 | 19) && matches!(status, 0 | 3))
+        })
+        .unwrap_or(0);
+    if matches!(rows[first_meaningful_pos], (16, 3)) {
+        return Ok(Some("idle"));
+    }
     let mut saw_waiting = false;
-    for (pos, &(step_type, status)) in rows.iter().enumerate() {
+    let mut saw_internal_residual = false;
+    for (pos, &(step_type, status)) in rows.iter().enumerate().skip(first_meaningful_pos) {
         // Cortex step status enum: 1 = PENDING, 2 = RUNNING, 7 = ERROR, 8 = GENERATING, 9 = WAITING, 11 = QUEUED
         if matches!(status, 1 | 2 | 8 | 11) {
-            return Ok(Some("running"));
+            if step_type == 132 && pos > first_meaningful_pos {
+                saw_internal_residual = true;
+            } else {
+                return Ok(Some("running"));
+            }
         }
         if status == 9 {
             saw_waiting = true;
         }
-        if pos == 0 && (status == 7 || step_type == 17) {
+        if pos == first_meaningful_pos && (status == 7 || step_type == 17) {
             return Ok(Some("failed"));
         }
         if step_type == 14 || step_type == 101 {
@@ -681,7 +710,10 @@ fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'stat
     if saw_waiting {
         return Ok(Some("waiting"));
     }
-    if matches!(rows[0], (14 | 101 | 132, 3)) {
+    if saw_internal_residual {
+        return Ok(Some("running_internal_residual"));
+    }
+    if matches!(rows[first_meaningful_pos], (14 | 101 | 132, 3)) {
         return Ok(Some("between_steps"));
     }
     Ok(Some("idle"))
@@ -941,16 +973,27 @@ pub(crate) fn evaluate_node_status_offline_with_lock(
     now_ms: i64,
 ) -> &'static str {
     let db_step = inspect_conv_db_steps_status(paths, id);
-    let conv_db_active_fresh = matches!(db_step, Some("running" | "waiting"))
-        && conv_db_modified_within(paths, id, 60_000, now_ms);
+    let conv_db_active_fresh = matches!(
+        db_step,
+        Some("running" | "running_internal_residual" | "waiting")
+    ) && conv_db_modified_within(paths, id, 60_000, now_ms);
     let lock_held = inherited_lock
         || probe_presence_locked_shared(paths, id).unwrap_or(false)
         || conv_db_active_fresh;
     let transcript = inspect_transcript_tail_status(paths, id, now_ms, lock_held);
-    let node_settled =
-        matches!(transcript, Some("finished" | "settled_idle")) || db_step == Some("idle");
+    let transcript_settled = matches!(
+        transcript,
+        Some("finished" | "settled_idle" | "reply_needed" | "failed")
+    );
+    let effective_db_step = match db_step {
+        Some("running_internal_residual") if transcript_settled => Some("idle"),
+        Some("running_internal_residual") => Some("running"),
+        other => other,
+    };
+    let node_settled = matches!(transcript, Some("finished" | "settled_idle"))
+        || effective_db_step == Some("idle");
     if !lock_held {
-        if db_step == Some("failed")
+        if effective_db_step == Some("failed")
             || transcript == Some("failed")
             || (!node_settled && raw_summary.is_some_and(ParsedRawSummary::is_termination_failure))
         {
@@ -961,16 +1004,16 @@ pub(crate) fn evaluate_node_status_offline_with_lock(
         }
         return "idle";
     }
-    if db_step == Some("running") || transcript == Some("running") {
+    if effective_db_step == Some("running") || transcript == Some("running") {
         return "running";
     }
-    if db_step == Some("between_steps")
+    if effective_db_step == Some("between_steps")
         && !matches!(transcript, Some("finished" | "settled_idle" | "failed"))
         && conv_db_modified_within(paths, id, OFFLINE_INFLIGHT_WINDOW_MS, now_ms)
     {
         return "running";
     }
-    if db_step == Some("waiting")
+    if effective_db_step == Some("waiting")
         || transcript == Some("waiting")
         || (!node_settled && raw_summary.is_some_and(|r| !r.waiting_steps.is_empty()))
     {
@@ -986,7 +1029,7 @@ pub(crate) fn evaluate_node_status_offline_with_lock(
             return "waiting";
         }
     }
-    if db_step == Some("failed")
+    if effective_db_step == Some("failed")
         || transcript == Some("failed")
         || (!node_settled
             && (sqlite_status == Some("failed")
@@ -2052,12 +2095,12 @@ fn list_summaries_filtered_with_archive(
         }
     }
     let primary = paths.primary_store();
-    let endpoint = connect_endpoint(&primary)?;
+    let endpoints = connect_all_endpoints(&primary)?;
     list_summaries_from_source_filtered(
         paths,
         filter_id,
         archived_filter,
-        endpoint.as_ref().map(|(_, payload)| payload),
+        endpoints.merged_payload.as_ref(),
     )
 }
 
@@ -2296,9 +2339,11 @@ pub(crate) fn probe_live_stream_snapshots_batch(
         return out;
     }
     let primary = paths.primary_store();
-    let mut live_conn = None;
-    let mut live_subagents: Option<BTreeMap<String, BTreeMap<String, super::SubagentLiveness>>> =
-        None;
+    let mut live_set: Option<LiveEndpointSet> = None;
+    let mut live_subagents_by_port: BTreeMap<
+        u16,
+        BTreeMap<String, BTreeMap<String, super::SubagentLiveness>>,
+    > = BTreeMap::new();
 
     for item in candidates {
         let id = item.id.as_str();
@@ -2311,10 +2356,9 @@ pub(crate) fn probe_live_stream_snapshots_batch(
             }
             continue;
         }
-        let endpoint = live_conn
-            .get_or_insert_with(|| connect_endpoint(&primary).ok().flatten())
-            .as_ref();
-        let Some((rpc, all_live)) = endpoint else {
+        let endpoints =
+            live_set.get_or_insert_with(|| connect_all_endpoints(&primary).unwrap_or_default());
+        let Some((rpc, all_live)) = endpoints.owner_for_read(id) else {
             if let Some(snap) = build_offline_stream_snapshot(&primary, item) {
                 out.insert(id.to_owned(), snap);
             }
@@ -2337,8 +2381,9 @@ pub(crate) fn probe_live_stream_snapshots_batch(
             Err(_) => continue,
         };
         resp["trajectory"]["steps"] = Value::Array(steps);
-        let subagents = live_subagents
-            .get_or_insert_with(|| {
+        let subagents = live_subagents_by_port
+            .entry(rpc.port)
+            .or_insert_with(|| {
                 all_live["trajectorySummaries"]
                     .as_object()
                     .map(collect_subagents_by_root)
@@ -6358,6 +6403,130 @@ mod tests {
         assert!(!Arc::ptr_eq(&cached_1, &cached_3));
 
         drop(writer);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn antigravity_a1_a3_internal_step_residual_app_data_dir_and_multi_instance_routing() {
+        // 1. A2: `--app_data_dir=<path>` and `--app_data_dir <path>` accept Antigravity desktop
+        //    while rejecting `antigravity-cli`.
+        assert!(is_antigravity_language_server_args(&[
+            "/opt/antigravity/language_server_linux_x64",
+            "--app_data_dir=/home/example/.gemini/antigravity",
+        ]));
+        assert!(is_antigravity_language_server_args(&[
+            "language_server",
+            "--app_data_dir",
+            "/home/example/.gemini/antigravity/",
+        ]));
+        assert!(!is_antigravity_language_server_args(&[
+            "language_server",
+            "--app_data_dir=/home/example/.gemini/antigravity-cli",
+        ]));
+
+        // 2. A3: Unfinished latest `executorMetadatas` marks live summary actively executing.
+        assert!(live_item_is_actively_executing(&json!({
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "executorMetadatas": [
+                { "executionId": "exec-1", "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" },
+                { "executionId": "exec-2" }
+            ]
+        })));
+        assert!(!live_item_is_actively_executing(&json!({
+            "status": "CASCADE_RUN_STATUS_IDLE",
+            "executorMetadatas": [
+                { "executionId": "exec-2", "terminationReason": "EXECUTOR_TERMINATION_REASON_NO_TOOL_CALL" }
+            ]
+        })));
+
+        // 3. A1: Stale internal `(132, 2)` before settled transcript settles to `"idle"`,
+        //    and `(17, 3)` followed by `(0, 0)` checkpoint settles to `"failed"`.
+        let root = env::temp_dir().join(format!("agenthub-ag-a1-a3-{}", uuid::Uuid::new_v4()));
+        let settled_id = uuid::Uuid::new_v4().to_string();
+        let failed_id = uuid::Uuid::new_v4().to_string();
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        for (cid, steps_sql) in [
+            (
+                &settled_id,
+                "INSERT INTO steps VALUES (0, 14, 3, X''), (1, 132, 2, X''), (2, 15, 3, X''), (3, 16, 3, X'');",
+            ),
+            (
+                &failed_id,
+                "INSERT INTO steps VALUES (0, 14, 3, X''), (1, 17, 3, X''), (2, 0, 0, X'');",
+            ),
+        ] {
+            let db = root.join("conversations").join(format!("{cid}.db"));
+            let conn = Connection::open(&db).unwrap();
+            conn.execute_batch(&format!(
+                "CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB); {steps_sql}"
+            ))
+            .unwrap();
+        }
+        let offline = AntigravityPaths::offline(root.clone());
+        let now_ms = now_epoch_ms();
+        assert_eq!(
+            evaluate_node_status_offline(&offline, &settled_id, None, now_ms),
+            "idle"
+        );
+        assert_eq!(
+            evaluate_node_status_offline(&offline, &failed_id, None, now_ms),
+            "failed"
+        );
+
+        // 4. A3: Multi-instance `LiveEndpointSet` merges listings, routes owner mutations, and rejects conflicts.
+        let id_a = "11111111-1111-4111-8111-aaaaaaaaaaaa";
+        let id_b = "22222222-2222-4222-8222-bbbbbbbbbbbb";
+        let id_dup = "33333333-3333-4333-8333-cccccccccccc";
+        let set = LiveEndpointSet::from_instances(vec![
+            (
+                LiveRpc {
+                    port: 51001,
+                    token: "tok-1".into(),
+                },
+                json!({
+                    "trajectorySummaries": {
+                        id_a: { "summary": "Instance A", "status": "CASCADE_RUN_STATUS_IDLE" },
+                        id_dup: { "summary": "Dup 1", "status": "CASCADE_RUN_STATUS_IDLE" }
+                    }
+                }),
+            ),
+            (
+                LiveRpc {
+                    port: 51002,
+                    token: "tok-2".into(),
+                },
+                json!({
+                    "trajectorySummaries": {
+                        id_b: { "summary": "Instance B", "status": "CASCADE_RUN_STATUS_RUNNING" },
+                        id_dup: { "summary": "Dup 2", "status": "CASCADE_RUN_STATUS_RUNNING" }
+                    }
+                }),
+            ),
+        ]);
+        assert_eq!(set.owner_for_read(id_a).unwrap().0.port, 51001);
+        assert_eq!(set.owner_for_read(id_b).unwrap().0.port, 51002);
+        assert_eq!(
+            set.owner_for_read(id_dup).unwrap().0.port,
+            51002,
+            "active instance wins read tie-break"
+        );
+        assert_eq!(
+            set.resolve_mutation_owner([id_a]).unwrap().unwrap().0.port,
+            51001
+        );
+        assert_eq!(
+            set.resolve_mutation_owner([id_b]).unwrap().unwrap().0.port,
+            51002
+        );
+        assert!(
+            set.resolve_mutation_owner([id_dup]).is_err(),
+            "duplicate session across live instances must reject mutation"
+        );
+        assert!(
+            set.resolve_mutation_owner([id_a, id_b]).is_err(),
+            "root + descendant spanning two live instances must reject mutation"
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 }

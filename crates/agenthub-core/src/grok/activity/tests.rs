@@ -269,3 +269,46 @@ fn stale_large_pid_alongside_live_pid_stays_inactive_without_poisoning_process_s
     );
     assert_eq!(snap.ownership(&f.1), Ownership::Inactive);
 }
+
+#[test]
+fn open_empty_session_is_recent_and_integer_opened_at_plus_tail_window_cold_read_settle() {
+    let f = Fixture::new();
+    let active = f.snapshot(Some(live()));
+    // Newly opened Grok session without events.jsonl yet should report "recent", not "unknown".
+    assert_eq!(active.status(&f.1), "recent");
+
+    // Integer seconds and milliseconds in active_sessions.json are accepted.
+    let reg_path = f.0.home.join("active_sessions.json");
+    for opened in [
+        serde_json::json!(1_700_000_000_i64),
+        serde_json::json!(1_700_000_000_500_i64),
+    ] {
+        fs::write(
+            &reg_path,
+            serde_json::json!([{"session_id": f.1.id, "pid": 123, "cwd": f.1.cwd, "opened_at": opened}])
+                .to_string(),
+        )
+        .unwrap();
+        let rows = read_registrations(&reg_path).unwrap();
+        assert_eq!(rows[0].opened_at, Some(1_700_000_000));
+    }
+
+    // Interrupted / aborted / timeout outcomes close primary turn cleanly.
+    for outcome in ["interrupted", "aborted", "timeout"] {
+        f.events(
+            &(f.start() + &format!("{{\"type\":\"turn_ended\",\"outcome\":\"{outcome}\"}}\n")),
+        );
+        assert_eq!(active.status(&f.1), "recent");
+    }
+
+    // Cold read of >8 MiB multi-turn events.jsonl reconstructs latest primary turn in a single pass.
+    let cache = TurnCache(crate::lru::ByteBoundedLru::new(256, u64::MAX));
+    let pad = format!(
+        "{{\"type\":\"other\",\"text\":\"{}\"}}\n",
+        "y".repeat(60_000)
+    );
+    let path = f.1.path.join("events.jsonl");
+    f.events(&(f.start() + &pad.repeat(150) + END + &f.start()));
+    assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Running);
+    assert!(cache.0.with_entries(|entries, _| entries[0].caught_up));
+}

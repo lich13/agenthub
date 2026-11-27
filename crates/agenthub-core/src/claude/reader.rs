@@ -87,7 +87,8 @@ impl ReaderState {
         };
         let kind = field(&value, "type");
         let discarded = is_discarded_telemetry_kind(kind);
-        if !discarded {
+        let counts_retained = !discarded && !is_non_retained_snapshot_kind(kind);
+        if counts_retained {
             ensure!(
                 self.retained_records < 200_000,
                 "Claude 会话记录超出读取上限"
@@ -118,7 +119,7 @@ impl ReaderState {
             self.parser.push(&value, self.records, None);
         }
         self.records += 1;
-        if !discarded {
+        if counts_retained {
             self.retained_records += 1;
         }
         Ok(())
@@ -167,6 +168,8 @@ pub(super) struct ClaudeProbeSnapshot {
     pub(super) message_count: usize,
     pub(super) last_message: Option<String>,
     pub(super) issues: Vec<String>,
+    pub(super) has_fatal_issues: bool,
+    pub(super) has_partial_tail: bool,
     pub(super) warnings: Vec<String>,
     pub(super) last_turn_at: Option<i64>,
     pub(super) last_terminal_at: Option<i64>,
@@ -193,6 +196,8 @@ impl ClaudeProbeSnapshot {
             message_count: parsed.message_count,
             last_message: parsed.last_message.clone(),
             issues: parsed.issues.clone(),
+            has_fatal_issues: parsed.has_fatal_issues,
+            has_partial_tail: parsed.has_partial_tail,
             warnings: parsed.warnings.clone(),
             last_turn_at: parsed.last_turn_at,
             last_terminal_at: parsed.last_terminal_at,
@@ -219,6 +224,8 @@ impl ClaudeProbeSnapshot {
             message_count: self.message_count,
             last_message: self.last_message.clone(),
             issues: self.issues.clone(),
+            has_fatal_issues: self.has_fatal_issues,
+            has_partial_tail: self.has_partial_tail,
             warnings: self.warnings.clone(),
             last_turn_at: self.last_turn_at,
             last_terminal_at: self.last_terminal_at,
@@ -297,14 +304,12 @@ pub(super) fn read_probe_snapshot(path: &Path) -> Result<Arc<ClaudeProbeSnapshot
                 if state.inner.rebuild {
                     state.inner.rebuild(path, info.offset)?;
                 }
-                let mut issues = state.inner.issues.clone();
-                if info.partial {
-                    issues.push("会话尾行尚未写完，请稍后刷新".into());
-                }
-                let parsed = state
-                    .inner
-                    .parser
-                    .snapshot(path, issues, state.inner.records as u64);
+                let parsed = state.inner.parser.snapshot(
+                    path,
+                    state.inner.issues.clone(),
+                    info.partial,
+                    state.inner.records as u64,
+                );
                 let snap = ClaudeProbeSnapshot::from_parsed(&parsed);
                 state.inner.weight = 512
                     + (snap.id.capacity()
@@ -452,11 +457,12 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
                 if state.rebuild {
                     state.rebuild(path, info.offset)?;
                 }
-                let mut issues = state.issues.clone();
-                if info.partial {
-                    issues.push("会话尾行尚未写完，请稍后刷新".into());
-                }
-                let mut parsed = state.parser.snapshot(path, issues, state.records as u64);
+                let mut parsed = state.parser.snapshot(
+                    path,
+                    state.issues.clone(),
+                    info.partial,
+                    state.records as u64,
+                );
                 let previous: HashMap<_, _> = old_snapshot
                     .events
                     .iter()
@@ -599,11 +605,9 @@ fn read_summary_uncached(path: &Path) -> Result<Parsed> {
     if state.rebuild {
         state.rebuild(path, offset)?;
     }
-    let mut issues = state.issues;
-    if partial {
-        issues.push("会话尾行尚未写完，请稍后刷新".into());
-    }
-    let mut parsed = state.parser.snapshot(path, issues, state.records as u64);
+    let mut parsed = state
+        .parser
+        .snapshot(path, state.issues, partial, state.records as u64);
     parsed.events = Arc::default();
     parsed.native_events.clear();
     parsed.prompts.clear();
@@ -814,6 +818,13 @@ fn is_discarded_telemetry_kind(kind: &str) -> bool {
     matches!(
         kind,
         "progress"
+            | "hook_progress"
+            | "mcp_progress"
+            | "tool_progress"
+            | "rate_limit_event"
+            | "telemetry"
+            | "heartbeat"
+            | "stream-event"
             | "last-prompt"
             | "agent-name"
             | "tag"
@@ -827,6 +838,19 @@ fn is_discarded_telemetry_kind(kind: &str) -> bool {
             | "agent-setting"
             | "continued-in"
             | "tools-used"
+    )
+}
+
+fn is_non_retained_snapshot_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "file-history-snapshot"
+            | "file-history-delta"
+            | "queue-operation"
+            | "atis-latch"
+            | "cost-state"
+            | "custom-title"
+            | "ai-title"
     )
 }
 
@@ -1100,10 +1124,11 @@ impl Parser {
             | "cost-state" => {
                 self.read_auxiliary(record, key, kind);
             }
-            "progress" | "last-prompt" | "agent-name" | "tag" | "pr-link"
-            | "saved_hook_context" | "mode" | "permission-mode" | "api-request-shape"
-            | "api-request-blob" | "api-request" | "agent-setting" | "continued-in"
-            | "tools-used" => {}
+            "progress" | "hook_progress" | "mcp_progress" | "tool_progress"
+            | "rate_limit_event" | "telemetry" | "heartbeat" | "stream-event" | "last-prompt"
+            | "agent-name" | "tag" | "pr-link" | "saved_hook_context" | "mode"
+            | "permission-mode" | "api-request-shape" | "api-request-blob" | "api-request"
+            | "agent-setting" | "continued-in" | "tools-used" => {}
             _ => {
                 if self.summary_only {
                     self.saw_any_event = true;
@@ -1587,7 +1612,13 @@ impl Parser {
         }
         self.push_event(e);
     }
-    fn snapshot(&self, path: &Path, extra_issues: Vec<String>, record_count: u64) -> Parsed {
+    fn snapshot(
+        &self,
+        path: &Path,
+        extra_issues: Vec<String>,
+        partial_tail: bool,
+        record_count: u64,
+    ) -> Parsed {
         let mut issues = self.parsed.issues.clone();
         for message in extra_issues {
             if !issues.iter().any(|i| i == &message) {
@@ -1624,6 +1655,11 @@ impl Parser {
         {
             issues.push("此 Claude 版本尚未验证，改名已禁用".into());
         }
+        let has_fatal_issues = !issues.is_empty();
+        if partial_tail && !issues.iter().any(|i| i == "会话尾行尚未写完，请稍后刷新")
+        {
+            issues.push("会话尾行尚未写完，请稍后刷新".into());
+        }
         let keep_probe = !self.summary_only || self.retain_probe_events;
         let native_events = if !keep_probe {
             Vec::new()
@@ -1651,6 +1687,8 @@ impl Parser {
             last_message: self.summary_last_message.clone(),
             history: Default::default(),
             issues,
+            has_fatal_issues,
+            has_partial_tail: partial_tail,
             warnings: self.parsed.warnings.clone(),
             last_turn_at: self.parsed.last_turn_at,
             last_terminal_at: self.parsed.last_terminal_at,

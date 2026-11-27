@@ -226,8 +226,8 @@ struct LiveProviderSessionsCacheKey {
     grok_home: std::path::PathBuf,
     ag_home: std::path::PathBuf,
     ag_cli_home: Option<std::path::PathBuf>,
-    #[cfg(target_os = "macos")]
     dsh_home: std::path::PathBuf,
+    grokbot_persistence: Option<std::path::PathBuf>,
     per_bucket_limit: usize,
 }
 
@@ -236,8 +236,8 @@ struct ResolvedLiveProviderPaths {
     claude: crate::claude::ClaudePaths,
     grok: crate::grok::GrokPaths,
     ag: crate::antigravity::sessions::AntigravityPaths,
-    #[cfg(target_os = "macos")]
     dsh: crate::dsh::DshPaths,
+    grokbot: Option<crate::grokbot::GrokBotPaths>,
 }
 
 impl ResolvedLiveProviderPaths {
@@ -260,20 +260,31 @@ impl ResolvedLiveProviderPaths {
             Some(root) => crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
             None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
         };
-        #[cfg(target_os = "macos")]
         let dsh = match &sandbox_root {
             Some(root) => crate::dsh::DshPaths {
                 home: root.join(".dsh"),
             },
             None => crate::dsh::DshPaths::default_for_user()?,
         };
+        let grokbot =
+            if crate::platform::PlatformKind::current() == crate::platform::PlatformKind::Macos {
+                match &sandbox_root {
+                    Some(root) => Some(crate::grokbot::GrokBotPaths {
+                        persistence: root
+                            .join("Library/Application Support/Grok Bot/sand-client-persistence"),
+                    }),
+                    None => crate::grokbot::GrokBotPaths::default_for_user().ok(),
+                }
+            } else {
+                None
+            };
         Ok(Self {
             sandbox_root,
             claude,
             grok,
             ag,
-            #[cfg(target_os = "macos")]
             dsh,
+            grokbot,
         })
     }
 
@@ -289,8 +300,8 @@ impl ResolvedLiveProviderPaths {
             grok_home: self.grok.home.clone(),
             ag_home: self.ag.home.clone(),
             ag_cli_home: self.ag.cli_home.clone(),
-            #[cfg(target_os = "macos")]
             dsh_home: self.dsh.home.clone(),
+            grokbot_persistence: self.grokbot.as_ref().map(|p| p.persistence.clone()),
             per_bucket_limit,
         }
     }
@@ -434,7 +445,7 @@ fn aggregate_active_sessions_with_paths(
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
-                } else if item.status == "waiting"
+                } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
                     && is_updated_within_fresh_window(&item.updated_at, now_ms)
                 {
                     Some("reply_needed")
@@ -466,13 +477,18 @@ fn aggregate_active_sessions_with_paths(
     if grok_paths.sessions().is_dir() {
         if let Ok((items, scan)) =
             crate::grok::probe_sessions(grok_paths, per_bucket_limit, |item| {
-                item.status != "running" && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                !matches!(item.status.as_str(), "running" | "waiting")
+                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
             })
         {
             let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
             for item in items {
                 let bucket = if item.status == "running" {
                     Some("running")
+                } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
+                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                {
+                    Some("reply_needed")
                 } else {
                     stream_buckets.get(&item.id).copied()
                 };
@@ -550,42 +566,63 @@ fn aggregate_active_sessions_with_paths(
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let dsh_paths = &resolved.dsh;
-        if dsh_paths.home.join("sessions").is_dir() {
-            if let Ok((items, scan)) =
-                crate::dsh::sessions::probe_sessions(dsh_paths, &list_req, |item| {
-                    !matches!(item.status.as_str(), "running" | "waiting")
-                        && item.read_error.is_none()
-                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
-                })
-            {
-                let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
+    let dsh_paths = &resolved.dsh;
+    if dsh_paths.home.join("sessions").is_dir() {
+        if let Ok((items, scan)) =
+            crate::dsh::sessions::probe_sessions(dsh_paths, &list_req, |item| {
+                !matches!(
+                    item.status.as_str(),
+                    "running" | "waiting" | "reply_needed" | "failed"
+                ) && item.read_error.is_none()
+                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
+            })
+        {
+            let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
+            for item in items {
+                let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
+                let bucket = if item.status == "running" {
+                    Some("running")
+                } else if item.status == "waiting" || (item.status == "reply_needed" && fresh) {
+                    Some("reply_needed")
+                } else if item.status == "failed" && fresh {
+                    Some("recoverable")
+                } else if let Some(&b) = stream_buckets.get(&item.id) {
+                    Some(b)
+                } else if item.read_error.is_some() {
+                    Some("recoverable")
+                } else {
+                    None
+                };
+                if let Some(bucket) = bucket {
+                    sessions.push(live_session(
+                        "dsh",
+                        item.id,
+                        item.session_key,
+                        item.title,
+                        bucket,
+                        item.updated_at,
+                        Some(item.cwd),
+                    ));
+                }
+            }
+        }
+    }
+
+    if let Some(grokbot_paths) = &resolved.grokbot {
+        if grokbot_paths.persistence.is_dir() {
+            if let Ok(items) = crate::grokbot::list_without_storage(grokbot_paths, &list_req) {
                 for item in items {
-                    let bucket = if item.status == "running" {
-                        Some("running")
-                    } else if item.status == "waiting"
-                        || (item.status == "reply_needed"
-                            && is_updated_within_fresh_window(&item.updated_at, now_ms))
+                    if matches!(item.status.as_str(), "authorization" | "reply_needed")
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
                     {
-                        Some("reply_needed")
-                    } else if let Some(&b) = stream_buckets.get(&item.id) {
-                        Some(b)
-                    } else if item.read_error.is_some() {
-                        Some("recoverable")
-                    } else {
-                        None
-                    };
-                    if let Some(bucket) = bucket {
                         sessions.push(live_session(
-                            "dsh",
+                            "grokbot",
                             item.id,
                             item.session_key,
                             item.title,
-                            bucket,
+                            "reply_needed",
                             item.updated_at,
-                            Some(item.cwd),
+                            None,
                         ));
                     }
                 }

@@ -408,6 +408,7 @@ struct FoldedMetadata {
     updated_at_ms: Option<i64>,
     message_count: usize,
     open_turn: bool,
+    last_turn_failed: bool,
     waiting_approval: bool,
     waiting_question: bool,
 }
@@ -499,6 +500,7 @@ fn try_read_projcache(paths: &DshPaths, session: &DiscoveredSession) -> Option<F
         updated_at_ms,
         message_count,
         open_turn: false,
+        last_turn_failed: false,
         waiting_approval: false,
         waiting_question: false,
     })
@@ -581,14 +583,20 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
             }
             "session/end-seed" => {
                 meta.open_turn = false;
+                meta.last_turn_failed = false;
                 pending_approvals.clear();
                 pending_questions.clear();
             }
             "turn/start" if !is_inherited => {
                 meta.open_turn = true;
+                meta.last_turn_failed = false;
             }
             "turn/end" if !is_inherited => {
                 meta.open_turn = false;
+                meta.last_turn_failed = matches!(
+                    data["reason"]["kind"].as_str(),
+                    Some("error" | "max-tokens")
+                );
                 pending_approvals.clear();
                 pending_questions.retain(|_, continued| *continued);
             }
@@ -635,6 +643,7 @@ fn fold_log_metadata_uncached(session: &DiscoveredSession) -> Result<FoldedMetad
                 let src = data["source"]["kind"].as_str().unwrap_or("user");
                 if src == "user" {
                     if !is_inherited {
+                        meta.last_turn_failed = false;
                         pending_approvals.clear();
                         pending_questions.clear();
                     }
@@ -683,11 +692,19 @@ fn build_summary(
     let locked = probe_session_locked_readonly(&session.dir).unwrap_or(false);
     let folded: std::sync::Arc<FoldedMetadata> = if locked {
         fold_log_metadata(session).unwrap_or_default()
+    } else if let Some(mut proj) = try_read_projcache(paths, session) {
+        if let Ok(log_folded) = fold_log_metadata(session) {
+            proj.waiting_question = log_folded.waiting_question;
+            proj.last_turn_failed = log_folded.last_turn_failed;
+            if let (Some(log_ts), Some(proj_ts)) = (log_folded.updated_at_ms, proj.updated_at_ms) {
+                proj.updated_at_ms = Some(proj_ts.max(log_ts));
+            } else if proj.updated_at_ms.is_none() {
+                proj.updated_at_ms = log_folded.updated_at_ms;
+            }
+        }
+        std::sync::Arc::new(proj)
     } else {
-        try_read_projcache(paths, session)
-            .map(std::sync::Arc::new)
-            .or_else(|| fold_log_metadata(session).ok())
-            .unwrap_or_default()
+        fold_log_metadata(session).unwrap_or_default()
     };
     let archived = archived_set.contains(&session.id);
     let running = !archived && locked && folded.open_turn;
@@ -726,6 +743,8 @@ fn build_summary(
         "reply_needed"
     } else if running {
         "running"
+    } else if folded.last_turn_failed {
+        "failed"
     } else {
         "idle"
     };
@@ -841,7 +860,6 @@ pub(crate) fn list_sessions_without_storage(
     ))
 }
 
-#[cfg(any(target_os = "macos", test))]
 pub(crate) fn probe_sessions(
     paths: &DshPaths,
     request: &ProviderListRequest,
@@ -3268,6 +3286,75 @@ mod tests {
                 .unwrap_err()
                 .to_string();
         assert!(root_err.contains("无法校验 DSH 会话锁状态"), "{root_err}");
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn offline_projcache_preserves_reply_needed_and_failed_turn_statuses() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-proj-status-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        let proj = home.join("sessions/fixture");
+        let cache_dir = home.join("storages/session_projcache/sessions");
+        let reply_id = "66666666-7777-4888-8999-000000000001";
+        let fail_id = "66666666-7777-4888-8999-000000000002";
+        for id in [reply_id, fail_id] {
+            fs::create_dir_all(proj.join(id)).unwrap();
+        }
+        fs::create_dir_all(&cache_dir).unwrap();
+
+        write_zstd_frames(
+            &proj.join(reply_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":reply_id,"createdAt":10,"cwd":"/workspace/dsh"}),
+                json!({"type":"request/header","seq":0,"time":11,"data":{"header":{"tools":[{"name":"ask_user_question","parameters":{"properties":{"timeout":{}}}}]}}}),
+                json!({"type":"turn/start","seq":1,"time":12,"data":{"turn":1}}),
+                json!({"type":"tool/call","seq":2,"time":13,"data":{"turn":1,"callId":"q-1","name":"ask_user_question","arguments":{"questions":[{"question":"确认？"}]}}}),
+                json!({"type":"tool/result","seq":3,"time":14,"data":{"callId":"q-1","message":{"toolCallId":"q-1","content":[{"type":"text","text":"pending"}]}}}),
+                json!({"type":"turn/end","seq":4,"time":15,"data":{"turn":1,"reason":{"kind":"completed"}}}),
+            ],
+        );
+        write_zstd_frames(
+            &proj.join(fail_id).join("session.v4.jsonl.zstd"),
+            &[
+                json!({"type":"session","version":4,"id":fail_id,"createdAt":20,"cwd":"/workspace/dsh"}),
+                json!({"type":"turn/start","seq":1,"time":21,"data":{"turn":1}}),
+                json!({"type":"user/message","seq":2,"time":22,"data":{"source":{"kind":"user"},"content":"执行任务"}}),
+                json!({"type":"turn/end","seq":3,"time":23,"data":{"turn":1,"reason":{"kind":"max-tokens"}}}),
+            ],
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        for (id, created, title) in [
+            (reply_id, 10, "待回复缓存会话"),
+            (fail_id, 20, "超限失败会话"),
+        ] {
+            fs::write(
+                cache_dir.join(format!("{id}.json")),
+                json!({
+                    "version": 7,
+                    "record": {
+                        "identity": { "createdAt": created, "cwd": "/workspace/dsh" },
+                        "rows": {
+                            "title": { "val": title },
+                            "workingDirectory": { "val": "/workspace/dsh" },
+                            "sessionListMetadata": { "val": { "lastPromptAt": 30 } },
+                            "turnOutline": { "val": [{ "prompt": "执行任务" }] }
+                        }
+                    }
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let listed = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        let reply_row = listed.iter().find(|s| s.id == reply_id).unwrap();
+        assert_eq!(reply_row.title, "待回复缓存会话");
+        assert_eq!(reply_row.status, "reply_needed");
+        let fail_row = listed.iter().find(|s| s.id == fail_id).unwrap();
+        assert_eq!(fail_row.title, "超限失败会话");
+        assert_eq!(fail_row.status, "failed");
 
         fs::remove_dir_all(home).unwrap();
     }

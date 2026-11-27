@@ -17,6 +17,7 @@ struct Process {
     cwd: Option<PathBuf>,
     args: Vec<String>,
     files: HashSet<PathBuf>,
+    inodes: HashSet<(u64, u64)>,
     role: ProcessRole,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +126,7 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
                     cwd: Some(cwd.into()),
                     args: vec!["claude".into()],
                     files: HashSet::new(),
+                    inodes: HashSet::new(),
                     role: ProcessRole::Session,
                 }]),
                 process_canonical_cwds: vec![canonical.clone()],
@@ -138,6 +140,7 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
                     status: status.map(str::to_owned),
                     status_updated_at: None,
                     updated_at: None,
+                    file_matches_pid: true,
                 }],
                 registration_canonical_cwds: vec![canonical],
                 registrations_by_pid: HashMap::from([(42, vec![0])]),
@@ -145,6 +148,10 @@ pub(super) fn test_owner_with_status(id: Option<&str>, cwd: &Path, status: Optio
             }
         })
     });
+}
+
+fn default_file_matches_pid() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -164,6 +171,8 @@ struct Registration {
     status_updated_at: Option<i64>,
     #[serde(default)]
     updated_at: Option<i64>,
+    #[serde(skip, default = "default_file_matches_pid")]
+    file_matches_pid: bool,
 }
 
 fn pid_domain() -> Option<String> {
@@ -278,11 +287,13 @@ impl Snapshot {
                         meta.is_file() && !meta.file_type().is_symlink() && meta.len() <= 262_144,
                         "会话登记无法核验"
                     );
-                    let registration: Registration = serde_json::from_slice(&fs::read(&path)?)?;
+                    let mut registration: Registration = serde_json::from_slice(&fs::read(&path)?)?;
                     ensure!(
                         registration.pid > 1 && !registration.session_id.is_empty(),
                         "会话登记身份缺失"
                     );
+                    registration.file_matches_pid = path.file_stem().and_then(|s| s.to_str())
+                        == Some(&registration.pid.to_string());
                     Ok(registration)
                 })();
                 if let Ok(registration) = registration {
@@ -418,9 +429,36 @@ impl Snapshot {
                 });
             }
         }
+        let target_inodes: HashSet<(u64, u64)> = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                paths
+                    .iter()
+                    .filter_map(|p| fs::symlink_metadata(p).ok())
+                    .filter(|m| m.is_file())
+                    .map(|m| (m.dev(), m.ino()))
+                    .collect()
+            }
+            #[cfg(not(unix))]
+            {
+                HashSet::new()
+            }
+        };
+        let is_within_dir = |child: &Path,
+                             child_canon: Option<&Path>,
+                             parent: &Path,
+                             parent_canon: Option<&Path>| {
+            child.starts_with(parent)
+                || child_canon
+                    .zip(parent_canon)
+                    .is_some_and(|(c, p)| c.starts_with(p))
+        };
         for (p_idx, p) in processes.iter().enumerate() {
             let p_can = proc_canon(p_idx, p);
-            let open_file = paths.iter().any(|path| p.files.contains(path));
+            let open_file = paths.iter().any(|path| p.files.contains(path))
+                || (!target_inodes.is_empty()
+                    && target_inodes.iter().any(|ino| p.inodes.contains(ino)));
             let cwd_matches = p
                 .cwd
                 .as_ref()
@@ -438,6 +476,17 @@ impl Snapshot {
                 }
                 continue;
             }
+            let current_ids: Vec<_> = p
+                .args
+                .windows(2)
+                .filter(|pair| pair[0] == "--session-id")
+                .map(|pair| pair[1].as_str())
+                .chain(
+                    p.args
+                        .iter()
+                        .filter_map(|arg| arg.strip_prefix("--session-id=")),
+                )
+                .collect();
             let registrations: Vec<(usize, &Registration, Option<PathBuf>)> = self
                 .registrations_by_pid
                 .get(&p.pid)
@@ -452,23 +501,38 @@ impl Snapshot {
                 })
                 .filter(|(_, r, _)| domain_matches(r))
                 .collect();
-            let proc_start_verified = |r: &Registration| {
+            let proc_start_verified = |r: &Registration, r_can: Option<&Path>| {
                 if r.proc_start.is_empty() {
                     p.started_ms.is_some_and(|actual| r.started_at >= actual)
+                        && (open_file
+                            || p.cwd.as_ref().is_some_and(|cwd| {
+                                same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can)
+                            }))
                 } else {
                     started_ms(&r.proc_start).zip(p.started_ms).is_some_and(
                         |(registered, actual)| registered == actual && r.started_at >= actual,
                     )
                 }
             };
+            let cwd_verified_for_reg = |r: &Registration, r_can: Option<&Path>| {
+                p.cwd.as_ref().is_none_or(|cwd| {
+                    same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can)
+                        || (r.file_matches_pid
+                            && !r.proc_start.is_empty()
+                            && !r.pid_domain.is_empty()
+                            && domain.as_deref() == Some(r.pid_domain.as_str())
+                            && target_id(&r.session_id)
+                            && !current_ids.iter().any(|id| *id != r.session_id)
+                            && matches_session_cwd(&r.cwd, r_can)
+                            && is_within_dir(cwd, p_can.as_deref(), &r.cwd, r_can))
+                })
+            };
             let verified: Vec<&(usize, &Registration, Option<PathBuf>)> = registrations
                 .iter()
                 .filter(|(_, r, r_can)| {
                     p.role == ProcessRole::Session
-                        && proc_start_verified(r)
-                        && p.cwd.as_ref().is_none_or(|cwd| {
-                            same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can.as_deref())
-                        })
+                        && proc_start_verified(r, r_can.as_deref())
+                        && cwd_verified_for_reg(r, r_can.as_deref())
                 })
                 .collect();
             let owns = verified.len() == 1
@@ -506,9 +570,7 @@ impl Snapshot {
                 if p.started_ms.is_none_or(|start| r.started_at < start) {
                     mismatched.insert("startedAt");
                 }
-                if p.cwd.as_ref().is_some_and(|cwd| {
-                    !same_with_canon(cwd, p_can.as_deref(), &r.cwd, r_can.as_deref())
-                }) {
+                if !cwd_verified_for_reg(r, r_can.as_deref()) {
                     mismatched.insert("cwd");
                 }
             }
@@ -518,17 +580,6 @@ impl Snapshot {
             let conflicting_cwd = verified.iter().any(|(_, r, r_can)| {
                 r.session_id == parsed.id && !matches_session_cwd(&r.cwd, r_can.as_deref())
             });
-            let current_ids: Vec<_> = p
-                .args
-                .windows(2)
-                .filter(|pair| pair[0] == "--session-id")
-                .map(|pair| pair[1].as_str())
-                .chain(
-                    p.args
-                        .iter()
-                        .filter_map(|arg| arg.strip_prefix("--session-id=")),
-                )
-                .collect();
             let conflicting_id =
                 verified.len() == 1 && current_ids.iter().any(|id| *id != verified[0].1.session_id);
             if conflicting_id {
@@ -547,12 +598,12 @@ impl Snapshot {
                 registration_verified: verified.len() == 1,
                 mismatched_fields: mismatched.into_iter().map(str::to_owned).collect(),
             });
-            if owns {
+            if owns && !conflicting_id {
                 result.native_status = verified[0].1.status.clone();
                 result.native_status_updated_at =
                     verified[0].1.status_updated_at.or(verified[0].1.updated_at);
             }
-            if open_file || owns {
+            if open_file || (owns && !conflicting_id) {
                 result.ownership = Ownership::Open;
                 result.reason(if open_file {
                     "open_file"
@@ -569,24 +620,25 @@ impl Snapshot {
             if conflicting_cwd {
                 result.reason("evidence_conflict");
             }
-            if verified.len() == 1 {
+            if verified.len() == 1 && !conflicting_id {
                 continue;
             }
-            result.reason("registry_unverified");
             if verified.len() > 1 {
                 result.reason("evidence_conflict");
             }
-            if cwd_matches
-                && explicit
-                && p.role == ProcessRole::Session
-                && registrations.is_empty()
-                && p.started_ms
+            if cwd_matches && explicit && p.role == ProcessRole::Session && registrations.is_empty()
+            {
+                if p.started_ms
                     .zip(parsed.last_turn_at)
                     .is_some_and(|(start, turn)| start <= turn)
-            {
-                result.ownership = Ownership::Open;
+                {
+                    result.ownership = Ownership::Open;
+                }
                 result.reason("resume_owner");
                 continue;
+            }
+            if !registrations.is_empty() {
+                result.reason("registry_unverified");
             }
             if p.cwd.is_none() {
                 result.reason("cwd_unknown");
@@ -618,6 +670,50 @@ fn same_path(left: &Path, right: &Path) -> bool {
             .zip(right.canonicalize().ok())
             .is_some_and(|(a, b)| a == b)
 }
+fn is_claude_code_script(arg: &str) -> bool {
+    (arg.contains("/@anthropic-ai/claude-code/") || arg.contains(r"\@anthropic-ai\claude-code\"))
+        && (arg.ends_with("cli.js") || arg.ends_with("claude.exe"))
+}
+
+/// Finds `@anthropic-ai/claude-code/cli.js` after optional `node`/`bun` flags.
+/// If `has_argv0` is true (`args[0]` is `node`/`bun`), scanning starts at `args[1]`;
+/// otherwise (`parse_process_table` where `comm` is separate), scanning starts at `args[0]`.
+fn find_claude_script_index(args: &[String], has_argv0: bool) -> Option<usize> {
+    let start = usize::from(has_argv0);
+    let mut skip_next_flag_value = false;
+    for (idx, arg) in args.iter().enumerate().skip(start) {
+        if skip_next_flag_value {
+            skip_next_flag_value = false;
+            continue;
+        }
+        if arg == "--" {
+            return args
+                .get(idx + 1)
+                .filter(|next| is_claude_code_script(next))
+                .map(|_| idx + 1);
+        }
+        if arg.starts_with('-') {
+            if matches!(
+                arg.as_str(),
+                "-r" | "--require"
+                    | "--import"
+                    | "--loader"
+                    | "--experimental-loader"
+                    | "-C"
+                    | "--conditions"
+                    | "--env-file"
+                    | "--env-file-if-exists"
+                    | "--config"
+            ) {
+                skip_next_flag_value = true;
+            }
+            continue;
+        }
+        return is_claude_code_script(arg).then_some(idx);
+    }
+    None
+}
+
 fn native(command: &str, args: &[String]) -> bool {
     let name = Path::new(command)
         .file_name()
@@ -625,10 +721,8 @@ fn native(command: &str, args: &[String]) -> bool {
         .unwrap_or("");
     matches!(name, "claude" | "claude.exe")
         || (matches!(name, "node" | "bun")
-            && args.iter().any(|a| {
-                a.contains("/@anthropic-ai/claude-code/")
-                    && (a.ends_with("cli.js") || a.ends_with("claude.exe"))
-            }))
+            && (find_claude_script_index(args, false).is_some()
+                || find_claude_script_index(args, true).is_some()))
 }
 
 fn version_named(name: &str) -> bool {
@@ -639,19 +733,12 @@ fn version_named(name: &str) -> bool {
             .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
 }
 
-fn process_role(executable: &Path, args: &[String]) -> ProcessRole {
-    process_role_at_home(executable, args, dirs::home_dir().as_deref())
-}
-fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>) -> ProcessRole {
-    let executable_name = executable
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    let script = matches!(executable_name, "node" | "bun")
-        .then(|| args.get(1))
-        .flatten()
-        .filter(|arg| arg.contains("/@anthropic-ai/claude-code/") && arg.ends_with("cli.js"));
-    let installed = home.is_some_and(|home| {
+fn is_verified_claude_version_binary(
+    executable: &Path,
+    executable_name: &str,
+    home: Option<&Path>,
+) -> bool {
+    if home.is_some_and(|home| {
         executable
             .parent()
             .is_some_and(|parent| same_path(parent, &home.join(".local/share/claude/versions")))
@@ -661,11 +748,82 @@ fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>)
                 .ok()
                 .as_deref()
                 == Some(executable)
-    });
-    if !installed && !matches!(executable_name, "claude" | "claude.exe") && script.is_none() {
+    }) {
+        return true;
+    }
+    if !version_named(executable_name) {
+        return false;
+    }
+    let exec_canon = executable.canonicalize().ok();
+    let matches_exec = |candidate: &Path| {
+        candidate
+            .canonicalize()
+            .ok()
+            .is_some_and(|canon| Some(&canon) == exec_canon.as_ref() || canon == executable)
+    };
+    for fixed in [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/usr/bin/claude",
+    ] {
+        if matches_exec(Path::new(fixed)) {
+            return true;
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            if matches_exec(&dir.join("claude")) {
+                return true;
+            }
+        }
+    }
+    if let Some(parent) = executable.parent() {
+        let parent_is_versions = parent.file_name().and_then(|s| s.to_str()) == Some("versions");
+        let owner_is_claude = parent
+            .parent()
+            .and_then(|gp| gp.file_name())
+            .and_then(|s| s.to_str())
+            .is_some_and(|s| matches!(s, "claude" | "claude-code"));
+        let is_linuxbrew_prefix = {
+            let mut comps = executable.components();
+            matches!(
+                (comps.next(), comps.next(), comps.next()),
+                (
+                    Some(std::path::Component::RootDir),
+                    Some(std::path::Component::Normal(root_dir)),
+                    Some(std::path::Component::Normal(brew_user)),
+                ) if root_dir == "home" && brew_user == "linuxbrew"
+            )
+        };
+        let trusted_prefix = ["/opt/homebrew", "/usr/local", "/usr/lib"]
+            .iter()
+            .any(|p| executable.starts_with(p))
+            || is_linuxbrew_prefix
+            || home.is_some_and(|h| executable.starts_with(h));
+        if parent_is_versions && owner_is_claude && trusted_prefix {
+            return true;
+        }
+    }
+    false
+}
+
+fn process_role(executable: &Path, args: &[String]) -> ProcessRole {
+    process_role_at_home(executable, args, dirs::home_dir().as_deref())
+}
+fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>) -> ProcessRole {
+    let executable_name = executable
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let script_idx = matches!(executable_name, "node" | "bun")
+        .then(|| find_claude_script_index(args, true))
+        .flatten();
+    let installed = is_verified_claude_version_binary(executable, executable_name, home);
+    if !installed && !matches!(executable_name, "claude" | "claude.exe") && script_idx.is_none() {
         return ProcessRole::Unknown;
     }
-    let Some(options) = args.get(if script.is_some() { 2.. } else { 1.. }) else {
+    let option_start = script_idx.map_or(1, |idx| idx + 1);
+    let Some(options) = args.get(option_start..) else {
         return ProcessRole::Unknown;
     };
     if options.first().is_some_and(|s| s == "--bg-pty-host") {
@@ -681,83 +839,8 @@ fn process_role_at_home(executable: &Path, args: &[String], home: Option<&Path>)
     }
 }
 
-#[cfg(target_os = "macos")]
 fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
-    let executable = crate::platform::resolve_kernel_exe(pid)?;
-    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid.try_into().ok()?];
-    let mut size = 0;
-    // SAFETY: The three-element MIB is live; a null output buffer requests the length in size.
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            std::ptr::null_mut(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-        || !(4..=262_144).contains(&size)
-    {
-        return None;
-    }
-    let mut buffer = vec![0_u8; size];
-    // SAFETY: The live MIB and output buffer match their lengths; size starts at the allocated capacity.
-    if unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            3,
-            buffer.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    } != 0
-    {
-        return None;
-    }
-    buffer.truncate(size);
-    let argc = i32::from_ne_bytes(buffer.get(..4)?.try_into().ok()?);
-    if !(1..=16_384).contains(&argc) {
-        return None;
-    }
-    let data = buffer.get(4..)?;
-    let mut offset = data.iter().position(|byte| *byte == 0)?;
-    while data.get(offset) == Some(&0) {
-        offset += 1;
-    }
-    let mut args = Vec::new();
-    for _ in 0..argc {
-        let remaining = data.get(offset..)?;
-        let end = remaining.iter().position(|byte| *byte == 0)?;
-        args.push(std::str::from_utf8(&remaining[..end]).ok()?.into());
-        offset += end + 1;
-    }
-    Some((executable, args))
-}
-#[cfg(target_os = "linux")]
-fn process_identity(pid: u32) -> Option<(PathBuf, Vec<String>)> {
-    use std::io::Read;
-    let root = PathBuf::from(format!("/proc/{pid}"));
-    let mut bytes = Vec::new();
-    fs::File::open(root.join("cmdline"))
-        .ok()?
-        .take(262_145)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > 262_144 || !bytes.ends_with(&[0]) {
-        return None;
-    }
-    let args = bytes[..bytes.len() - 1]
-        .split(|byte| *byte == 0)
-        .map(|arg| std::str::from_utf8(arg).map(str::to_owned))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .ok()?;
-    Some((fs::read_link(root.join("exe")).ok()?, args))
-}
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
-fn process_identity(_pid: u32) -> Option<(PathBuf, Vec<String>)> {
-    None
+    crate::platform::resolve_kernel_process_identity(pid)
 }
 
 fn collect() -> Option<Vec<Process>> {
@@ -781,24 +864,25 @@ fn collect() -> Option<Vec<Process>> {
     if processes.is_empty() {
         return Some(processes);
     }
-    #[cfg(target_os = "linux")]
+    let mut missing_cwd_pids = Vec::new();
     for p in &mut processes {
-        let root = PathBuf::from(format!("/proc/{}", p.pid));
-        p.cwd = fs::read_link(root.join("cwd")).ok();
-        if let Ok(files) = fs::read_dir(root.join("fd")) {
-            p.files = files
-                .filter_map(|e| fs::read_link(e.ok()?.path()).ok())
-                .collect();
+        p.cwd = crate::platform::resolve_kernel_cwd(p.pid);
+        if let Some((files, inodes)) = crate::platform::collect_kernel_open_vnodes(p.pid) {
+            p.files = files;
+            p.inodes = inodes;
+        }
+        if p.cwd.is_none() {
+            missing_cwd_pids.push(p.pid);
         }
     }
     #[cfg(not(target_os = "linux"))]
-    {
-        let pids = processes
+    if !missing_cwd_pids.is_empty() {
+        let pids = missing_cwd_pids
             .iter()
-            .map(|p| p.pid.to_string())
+            .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        if let Ok(output) = Command::new("/usr/sbin/lsof")
+        if let Ok(output) = crate::platform::sanitized_lsof_command("/usr/sbin/lsof")
             .args(["-nP", "-p", &pids, "-Fpnf"])
             .output()
         {
@@ -811,10 +895,11 @@ fn collect() -> Option<Vec<Process>> {
                 } else if let Some(fd) = line.strip_prefix('f') {
                     descriptor = fd;
                 } else if let (Some(index), Some(name)) = (current, line.strip_prefix('n')) {
-                    if descriptor == "cwd" {
-                        processes[index].cwd = Some(PathBuf::from(name));
+                    let decoded = crate::platform::decode_lsof_path(name);
+                    if descriptor == "cwd" && processes[index].cwd.is_none() {
+                        processes[index].cwd = Some(decoded);
                     } else if name.starts_with('/') {
-                        processes[index].files.insert(PathBuf::from(name));
+                        processes[index].files.insert(decoded);
                     }
                 }
             }
@@ -824,8 +909,8 @@ fn collect() -> Option<Vec<Process>> {
     processes.retain(|p| {
         p.cwd.is_some()
             || !p.files.is_empty()
-            || unsafe { libc::kill(p.pid as libc::pid_t, 0) == 0 }
-            || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+            || !p.inodes.is_empty()
+            || crate::platform::pid_is_alive(p.pid)
     });
     Some(processes)
 }
@@ -891,6 +976,7 @@ fn parse_process_table(output: &[u8]) -> Option<Vec<Process>> {
             cwd: None,
             args,
             files: HashSet::new(),
+            inodes: HashSet::new(),
             role,
         });
     }
@@ -1092,6 +1178,7 @@ mod tests {
                 "target".into(),
             ],
             files: HashSet::new(),
+            inodes: HashSet::new(),
             role: ProcessRole::PtyHost,
         };
         let mut snapshot = Snapshot::new(
@@ -1206,6 +1293,7 @@ mod tests {
             cwd: None,
             args: vec!["claude".into()],
             files: HashSet::new(),
+            inodes: HashSet::new(),
             role: ProcessRole::Session,
         };
         let registration = Registration {
@@ -1218,6 +1306,7 @@ mod tests {
             status: None,
             status_updated_at: None,
             updated_at: None,
+            file_matches_pid: true,
         };
         let snapshot = Snapshot::new(Some(vec![process.clone()]), vec![registration.clone()]);
         assert_eq!(
@@ -1265,6 +1354,7 @@ mod tests {
             cwd: Some("/fixture/elsewhere".into()),
             args: vec!["claude".into()],
             files: HashSet::new(),
+            inodes: HashSet::new(),
             role: ProcessRole::Session,
         };
         let mut snapshot = Snapshot::new(Some(vec![process]), vec![]);
@@ -1297,23 +1387,24 @@ mod tests {
             cwd: Some(PathBuf::from(&p.cwd)),
             args: vec!["claude".into(), "--resume".into(), p.id.clone()],
             files: HashSet::new(),
+            inodes: HashSet::new(),
             role: ProcessRole::Session,
         };
         assert_eq!(
             Snapshot::new(Some(vec![owner.clone()]), vec![]).ownership(&p, file),
             Ownership::Open
         );
-        assert_eq!(
-            Snapshot::new(
-                Some(vec![Process {
-                    started_ms: Some(3000),
-                    ..owner.clone()
-                }]),
-                vec![],
-            )
-            .ownership(&p, file),
-            Ownership::Unknown
+        let idle_resume = Snapshot::new(
+            Some(vec![Process {
+                started_ms: Some(3000),
+                ..owner.clone()
+            }]),
+            vec![],
         );
+        let idle_assessment = idle_resume.assess(&p, file);
+        assert_eq!(idle_assessment.ownership, Ownership::Unknown);
+        assert!(idle_assessment.reasons.contains("resume_owner"));
+        assert!(!idle_assessment.reasons.contains("registry_unverified"));
         assert_eq!(
             Snapshot::new(
                 Some(vec![Process {
@@ -1330,5 +1421,62 @@ mod tests {
             Ownership::Unknown
         );
         assert!(!native("zsh", &["claude".into()]));
+    }
+
+    #[test]
+    fn chinese_paths_subdir_drift_and_node_flags_keep_verified_claude_owner() {
+        let date = "Tue Oct 20 08:00:00 2026";
+        let chinese_cwd = PathBuf::from("/Users/example/Documents/程序开发/AgentHub");
+        let subdir_cwd = chinese_cwd.join("crates/agenthub-core");
+        let parsed = Parsed {
+            id: "1102f538-0000-4000-8000-000000000000".into(),
+            cwd: chinese_cwd.display().to_string(),
+            ..Default::default()
+        };
+        let proc_in_subdir = Process {
+            pid: 42,
+            started_ms: started_ms(date),
+            cwd: Some(subdir_cwd),
+            args: vec![
+                "node".into(),
+                "--no-warnings".into(),
+                "/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js".into(),
+            ],
+            files: HashSet::new(),
+            inodes: HashSet::new(),
+            role: process_role(
+                Path::new("/usr/local/bin/node"),
+                &[
+                    "node".into(),
+                    "--no-warnings".into(),
+                    "/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js".into(),
+                ],
+            ),
+        };
+        assert_eq!(proc_in_subdir.role, ProcessRole::Session);
+        assert!(native(
+            "/usr/local/bin/node",
+            &[
+                "--no-warnings".into(),
+                "/opt/lib/node_modules/@anthropic-ai/claude-code/cli.js".into(),
+            ]
+        ));
+        let reg = Registration {
+            pid: 42,
+            session_id: parsed.id.clone(),
+            cwd: chinese_cwd,
+            proc_start: date.into(),
+            started_at: started_ms(date).unwrap() + 200,
+            pid_domain: pid_domain().unwrap(),
+            status: Some("busy".into()),
+            status_updated_at: None,
+            updated_at: None,
+            file_matches_pid: true,
+        };
+        let snapshot = Snapshot::new(Some(vec![proc_in_subdir]), vec![reg]);
+        let assessment = snapshot.assess(&parsed, Path::new("/fixture/1102f538.jsonl"));
+        assert_eq!(assessment.ownership, Ownership::Open);
+        assert_eq!(assessment.native_status(), Some("busy"));
+        assert!(!assessment.reasons.contains("registry_unverified"));
     }
 }

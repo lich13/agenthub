@@ -898,3 +898,52 @@ fn search_prevents_cross_account_metadata_leak_on_mid_read_or_mid_search_switch_
         })
         .is_err());
 }
+
+#[test]
+fn list_and_detail_share_authorization_and_resolved_awaiting_status() {
+    let f = Fixture::new("fixture");
+    // 1. Pending permission in replica surfaces "authorization" in both list() and detail().
+    f.rows(json!([{"id":"bot-a", "lastActivityAt":2000}]));
+    f.replica(json!([{
+        "id": "perm-1",
+        "kind": "send-message",
+        "timestampMs": 2000,
+        "message": {
+            "type": "local-tool-permission",
+            "ask": { "status": "pending", "requestId": "req-auth", "title": "Allow tool" }
+        }
+    }]));
+    let listed = list(&f.paths, &Default::default()).unwrap();
+    assert_eq!(listed[0].status, "authorization");
+    let d1 = detail(
+        &f.paths,
+        &ProviderDetailRequest {
+            session_key: f.session(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(d1.summary.status, "authorization");
+
+    // 2. Stale awaitingUserResponse pointing to a resolved form or widget card settles to "unknown" in both list() and detail().
+    f.rows(
+        json!([{"id":"bot-a", "lastActivityAt":3000, "awaitingUserResponse":{"id":"widget-1"}}]),
+    );
+    f.replica(json!([{
+        "id": "widget-1",
+        "kind": "send-message",
+        "timestampMs": 3000,
+        "message": { "type": "widget", "widget": { "text": "card" } }
+    }]));
+    let listed_resolved = list(&f.paths, &Default::default()).unwrap();
+    assert_eq!(listed_resolved[0].status, "unknown");
+    let d2 = detail(
+        &f.paths,
+        &ProviderDetailRequest {
+            session_key: f.session(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(d2.summary.status, "unknown");
+}
