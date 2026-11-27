@@ -578,15 +578,6 @@ struct ProbeWorkspaceView: View {
                         labeledField("通知事件保留天数", placeholder: "1..3650", value: d.eventRetentionDaysText) { v in
                             updateDraft { $0.eventRetentionDaysText = v }
                         }
-                        labeledField("Hook 事件行数", placeholder: "10..10000", value: d.hookEventMaxLinesText) { v in
-                            updateDraft { $0.hookEventMaxLinesText = v }
-                        }
-                        labeledField("冷却行数", placeholder: "10..10000", value: d.hookCooldownMaxLinesText) { v in
-                            updateDraft { $0.hookCooldownMaxLinesText = v }
-                        }
-                        labeledField("日志上限 MiB", placeholder: "0.00390625..8", value: d.logMaxMiBText) { v in
-                            updateDraft { $0.logMaxMiBText = v }
-                        }
                     }
 
                     if let firstError = settingsValidationErrors.first {

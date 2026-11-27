@@ -219,231 +219,7 @@ fn field<'a>(value: &'a Value, key: &str) -> &'a str {
 }
 const MAX_LOCATED_SESSIONS: usize = 20_000;
 type LocatedSessionKey = (PathBuf, String);
-
-struct LocatedNode {
-    key: LocatedSessionKey,
-    path: PathBuf,
-    accessed: std::time::Instant,
-    prev: Option<usize>,
-    next: Option<usize>,
-}
-
-struct LocatedSessionsCache {
-    max_entries: usize,
-    index: HashMap<LocatedSessionKey, usize>,
-    nodes: Vec<Option<LocatedNode>>,
-    free: Vec<usize>,
-    head: Option<usize>,
-    tail: Option<usize>,
-}
-
-impl LocatedSessionsCache {
-    fn new(max_entries: usize) -> Self {
-        Self {
-            max_entries,
-            index: HashMap::new(),
-            nodes: Vec::new(),
-            free: Vec::new(),
-            head: None,
-            tail: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.index.len()
-    }
-
-    fn detach(&mut self, idx: usize) {
-        let (prev, next) = {
-            let Some(node) = self.nodes[idx].as_ref() else {
-                return;
-            };
-            (node.prev, node.next)
-        };
-        if let Some(p) = prev {
-            if let Some(pn) = self.nodes[p].as_mut() {
-                pn.next = next;
-            }
-        } else {
-            self.head = next;
-        }
-        if let Some(n) = next {
-            if let Some(nn) = self.nodes[n].as_mut() {
-                nn.prev = prev;
-            }
-        } else {
-            self.tail = prev;
-        }
-        if let Some(node) = self.nodes[idx].as_mut() {
-            node.prev = None;
-            node.next = None;
-        }
-    }
-
-    fn attach_tail(&mut self, idx: usize) {
-        let old_tail = self.tail;
-        if let Some(node) = self.nodes[idx].as_mut() {
-            node.prev = old_tail;
-            node.next = None;
-        }
-        if let Some(t) = old_tail {
-            if let Some(tn) = self.nodes[t].as_mut() {
-                tn.next = Some(idx);
-            }
-        } else {
-            self.head = Some(idx);
-        }
-        self.tail = Some(idx);
-    }
-
-    fn pop_head(&mut self) -> Option<LocatedNode> {
-        let h = self.head?;
-        self.detach(h);
-        let removed = self.nodes[h].take()?;
-        self.index.remove(&removed.key);
-        self.free.push(h);
-        Some(removed)
-    }
-
-    #[cfg(test)]
-    fn remove(&mut self, key: &LocatedSessionKey) -> Option<PathBuf> {
-        let idx = self.index.remove(key)?;
-        self.detach(idx);
-        let removed = self.nodes[idx].take()?;
-        self.free.push(idx);
-        Some(removed.path)
-    }
-
-    fn get(&mut self, key: &LocatedSessionKey) -> Option<PathBuf> {
-        let &idx = self.index.get(key)?;
-        let now = std::time::Instant::now();
-        let path = {
-            let node = self.nodes[idx].as_mut()?;
-            node.accessed = now;
-            node.path.clone()
-        };
-        if self.tail != Some(idx) {
-            self.detach(idx);
-            self.attach_tail(idx);
-        }
-        Some(path)
-    }
-
-    fn insert(&mut self, key: LocatedSessionKey, path: PathBuf) {
-        self.insert_at(key, path, std::time::Instant::now());
-    }
-
-    fn insert_at(&mut self, key: LocatedSessionKey, path: PathBuf, now: std::time::Instant) {
-        if let Some(&idx) = self.index.get(&key) {
-            if let Some(node) = self.nodes[idx].as_mut() {
-                node.path = path;
-                node.accessed = now;
-            }
-            if self.tail != Some(idx) {
-                self.detach(idx);
-                self.attach_tail(idx);
-            }
-            return;
-        }
-        if self.max_entries == 0 {
-            return;
-        }
-        if self.index.len() >= self.max_entries {
-            let _ = self.pop_head();
-        }
-        let idx = if let Some(slot) = self.free.pop() {
-            self.nodes[slot] = Some(LocatedNode {
-                key: key.clone(),
-                path,
-                accessed: now,
-                prev: None,
-                next: None,
-            });
-            slot
-        } else {
-            let slot = self.nodes.len();
-            self.nodes.push(Some(LocatedNode {
-                key: key.clone(),
-                path,
-                accessed: now,
-                prev: None,
-                next: None,
-            }));
-            slot
-        };
-        self.index.insert(key, idx);
-        self.attach_tail(idx);
-    }
-
-    fn evict_idle(&mut self, max_idle: std::time::Duration) -> bool {
-        self.evict_idle_at(std::time::Instant::now(), max_idle)
-    }
-
-    fn evict_idle_at(&mut self, now: std::time::Instant, max_idle: std::time::Duration) -> bool {
-        let before = self.index.len();
-        while let Some(h) = self.head {
-            let expired = self.nodes[h]
-                .as_ref()
-                .is_some_and(|n| now.saturating_duration_since(n.accessed) >= max_idle);
-            if expired {
-                let _ = self.pop_head();
-            } else {
-                break;
-            }
-        }
-        if self.index.len() < before {
-            if self.nodes.capacity() > self.index.len().saturating_mul(4).max(16) {
-                let mut compacted = Vec::with_capacity(self.index.len());
-                self.index.clear();
-                self.free.clear();
-                let mut cur = self.head;
-                while let Some(idx) = cur {
-                    let mut node = self.nodes[idx].take().expect("active located node");
-                    cur = node.next;
-                    let new_idx = compacted.len();
-                    node.prev = new_idx.checked_sub(1);
-                    node.next = cur.map(|_| new_idx + 1);
-                    self.index.insert(node.key.clone(), new_idx);
-                    compacted.push(Some(node));
-                }
-                self.head = (!compacted.is_empty()).then_some(0);
-                self.tail = compacted.len().checked_sub(1);
-                self.nodes = compacted;
-                self.nodes.shrink_to_fit();
-                self.free.shrink_to_fit();
-                self.index.shrink_to_fit();
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    #[cfg(test)]
-    fn assert_invariants(&self) {
-        let mut seen = Vec::new();
-        let mut prev = None;
-        let mut cur = self.head;
-        while let Some(idx) = cur {
-            let node = self.nodes[idx].as_ref().expect("linked slot must be Some");
-            assert_eq!(node.prev, prev, "broken prev link at {idx}");
-            assert_eq!(self.index.get(&node.key), Some(&idx), "index mismatch");
-            prev = Some(idx);
-            seen.push(idx);
-            cur = node.next;
-        }
-        assert_eq!(self.tail, prev, "tail mismatch");
-        assert_eq!(seen.len(), self.index.len(), "list length != index length");
-        let live_slots = self.nodes.iter().filter(|n| n.is_some()).count();
-        assert_eq!(live_slots, self.index.len(), "leaked Some slot in arena");
-        assert_eq!(
-            live_slots + self.free.len(),
-            self.nodes.len(),
-            "free list + live slots != arena len"
-        );
-    }
-}
+type LocatedSessionsCache = crate::lru::BoundedLruMap<LocatedSessionKey, PathBuf>;
 
 static LOCATED_SESSIONS: std::sync::LazyLock<std::sync::Mutex<LocatedSessionsCache>> =
     std::sync::LazyLock::new(|| {
@@ -786,9 +562,10 @@ pub(crate) fn list_claude_sessions_without_storage(
             continue;
         }
         let s = summary_with_root(&canonical_projects, &path, &parsed, &snapshot)?;
-        if [&s.title, &s.id, &s.cwd]
-            .iter()
-            .any(|v| v.to_lowercase().contains(&needle))
+        if needle.is_empty()
+            || [&s.title, &s.id, &s.cwd]
+                .iter()
+                .any(|v| crate::services::search::contains_folded_str(v, &needle))
         {
             result.push(s);
         }
@@ -872,26 +649,14 @@ pub(crate) fn claude_session_detail_without_storage(
         return subagents::detail(paths, request, agent_id);
     }
     let (path, parsed) = resolve(paths, &request.session_key)?;
-    let limit = request.limit.unwrap_or(160).clamp(1, 500);
-    let (start, end) = match crate::history_navigation::seek_window(
-        parsed.events.iter().map(|event| event.id.as_str()),
+    let page = crate::history_navigation::paginate_window(
+        &parsed.events,
+        |event| event.id.as_str(),
         request.before.as_deref(),
-        limit,
-    )? {
-        Some(window) => window,
-        None => {
-            let end = match &request.before {
-                None => parsed.events.len(),
-                Some(id) => parsed
-                    .events
-                    .iter()
-                    .position(|event| &event.id == id)
-                    .context("历史位置已变化，请刷新会话")?,
-            };
-            (end.saturating_sub(limit), end)
-        }
-    };
-    let mut events: Vec<_> = parsed.events[start..end]
+        request.limit,
+        false,
+    )?;
+    let mut events: Vec<_> = parsed.events[page.start..page.end]
         .iter()
         .map(|event| (**event).clone())
         .collect();
@@ -910,20 +675,13 @@ pub(crate) fn claude_session_detail_without_storage(
         agent: None,
         subagents: Some(subagents::collection(paths, &path, &parsed)),
         timeline: request.before.is_none().then(|| parsed.timeline.clone()),
-        after_cursor: crate::history_navigation::after_cursor(
-            end,
-            parsed.events.len(),
-            parsed
-                .events
-                .get(end.saturating_sub(1))
-                .map(|event| event.id.as_str()),
-        ),
+        after_cursor: page.after_cursor,
         history: Some(parsed.history.metadata(None)),
         summary,
         events,
-        total_events: parsed.events.len(),
-        has_more: start > 0,
-        before_cursor: (start > 0).then(|| parsed.events[start].id.clone()),
+        total_events: page.total,
+        has_more: page.has_more,
+        before_cursor: page.before_cursor,
     })
 }
 /// Visit the same newest-first pages as search without constructing UI detail.

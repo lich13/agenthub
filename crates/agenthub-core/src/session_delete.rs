@@ -30,7 +30,21 @@ pub(crate) fn valid_id(id: &str) -> Result<()> {
 
 /// A database path is a location hint, never permission to traverse another storage root.
 pub(crate) fn within(root: &Path, path: &Path) -> bool {
-    let Ok(relative) = path.strip_prefix(root) else {
+    within_with_canonical_root(root, None, path)
+}
+
+pub(crate) fn within_with_canonical_root(
+    root: &Path,
+    canonical_root: Option<&Path>,
+    path: &Path,
+) -> bool {
+    let relative = match path.strip_prefix(root) {
+        Ok(rel) => Some((root, rel)),
+        Err(_) => {
+            canonical_root.and_then(|croot| path.strip_prefix(croot).ok().map(|rel| (croot, rel)))
+        }
+    };
+    let Some((base, relative)) = relative else {
         return false;
     };
     if relative.as_os_str().is_empty()
@@ -40,7 +54,7 @@ pub(crate) fn within(root: &Path, path: &Path) -> bool {
     {
         return false;
     }
-    let mut parent = root.to_path_buf();
+    let mut parent = base.to_path_buf();
     let components: Vec<_> = relative.components().collect();
     for part in components.iter().take(components.len().saturating_sub(1)) {
         parent.push(part);
@@ -154,35 +168,45 @@ pub(crate) fn same_source(before: &fs::Metadata, after: &fs::Metadata) -> bool {
     )
 }
 
-fn replace(
+pub(crate) fn atomic_replace_file(
     path: &Path,
-    source: &fs::Metadata,
+    prefix: &str,
+    source: Option<&fs::Metadata>,
+    permissions: Option<fs::Permissions>,
     write: impl FnOnce(&mut fs::File) -> Result<()>,
+    before_rename: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let temporary = path.with_file_name(format!(".agenthub-index-{}", uuid::Uuid::new_v4()));
+    let temporary = path.with_file_name(format!(".{prefix}-{}", uuid::Uuid::new_v4()));
     let result = (|| {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
         let mut file = options.open(&temporary)?;
         write(&mut file)?;
-        use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
-        let current = file.metadata()?;
-        if (current.uid(), current.gid()) != (source.uid(), source.gid()) {
-            // SAFETY: File owns the descriptor and both IDs come from the source file metadata.
-            let result = unsafe { libc::fchown(file.as_raw_fd(), source.uid(), source.gid()) };
-            if result != 0 {
-                return Err(std::io::Error::last_os_error().into());
+        if let Some(source) = source {
+            #[cfg(unix)]
+            {
+                use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
+                let current = file.metadata()?;
+                if (current.uid(), current.gid()) != (source.uid(), source.gid()) {
+                    // SAFETY: File owns the descriptor and both IDs come from the source file metadata.
+                    let rc = unsafe { libc::fchown(file.as_raw_fd(), source.uid(), source.gid()) };
+                    if rc != 0 {
+                        return Err(std::io::Error::last_os_error().into());
+                    }
+                }
             }
+            // chown may clear mode bits, so restore permissions afterwards.
+            file.set_permissions(source.permissions())?;
+        } else if let Some(perms) = permissions {
+            file.set_permissions(perms)?;
         }
-        // chown may clear mode bits, so restore permissions afterwards.
-        file.set_permissions(source.permissions())?;
         file.sync_all()?;
-        ensure!(
-            same_source(source, &fs::symlink_metadata(path)?),
-            "共享索引已变化，请重试"
-        );
+        before_rename()?;
         fs::rename(&temporary, path)?;
         Ok(())
     })();
@@ -190,6 +214,20 @@ fn replace(
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+fn replace(
+    path: &Path,
+    source: &fs::Metadata,
+    write: impl FnOnce(&mut fs::File) -> Result<()>,
+) -> Result<()> {
+    atomic_replace_file(path, "agenthub-index", Some(source), None, write, || {
+        ensure!(
+            same_source(source, &fs::symlink_metadata(path)?),
+            "共享索引已变化，请重试"
+        );
+        Ok(())
+    })
 }
 
 fn open_shared(path: &Path) -> Result<Option<fs::File>> {

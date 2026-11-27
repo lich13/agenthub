@@ -126,12 +126,16 @@ impl ArchiveInventory {
                 }
             }
         }
+        let canonical_home = (!fs::symlink_metadata(&paths.home)?.file_type().is_symlink())
+            .then(|| fs::canonicalize(&paths.home))
+            .transpose()?
+            .context("Codex 数据目录不能是符号链接")?;
         let mut files = Vec::new();
         for root in [paths.sessions_dir(), paths.home.join("archived_sessions")] {
             if !root.exists() {
                 continue;
             }
-            ensure_safe_path(&paths.home, &root)?;
+            ensure_safe_path_with_canonical_root(&paths.home, &canonical_home, &root)?;
             for entry in walkdir::WalkDir::new(root).follow_links(false) {
                 let entry = entry?;
                 if entry.file_name().to_string_lossy().starts_with("rollout-") {
@@ -265,14 +269,17 @@ fn snapshot_from_inventory(
             digest.update(serde_json::to_vec(entry)?);
         }
     }
+    let canonical_home = (!fs::symlink_metadata(&paths.home)?.file_type().is_symlink())
+        .then(|| fs::canonicalize(&paths.home))
+        .transpose()?
+        .context("Codex 数据目录不能是符号链接")?;
     for file in &files {
         ensure!(
             file.starts_with(paths.sessions_dir())
                 || file.starts_with(paths.home.join("archived_sessions")),
             "线程文件超出原生会话目录"
         );
-        ensure_safe_path(&paths.home, file)?;
-        let actual = fs::canonicalize(file)?;
+        let actual = ensure_safe_path_with_canonical_root(&paths.home, &canonical_home, file)?;
 
         ensure!(
             session_header_id(file)?.as_deref() == Some(id),
@@ -350,6 +357,33 @@ fn snapshot_from_inventory(
         bytes,
         fingerprint: hex::encode(digest.finalize()),
     })
+}
+
+pub fn set_thread_archived(paths: &CodexPaths, id: &str, archived: bool) -> Result<()> {
+    let _guard = MUTATION_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("线程管理锁不可用"))?;
+    let mut conn = open(paths, true)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let columns = crate::db::table_columns(&tx, "threads")?;
+    ensure!(
+        columns.contains("archived_at"),
+        "threads.archived_at column not found"
+    );
+    let archived_at = archived.then(|| jiff::Timestamp::now().as_second());
+    if columns.contains("archived") {
+        tx.execute(
+            "UPDATE threads SET archived=?2, archived_at=?3 WHERE id=?1",
+            rusqlite::params![id, i32::from(archived), archived_at],
+        )?;
+    } else {
+        tx.execute(
+            "UPDATE threads SET archived_at=?2 WHERE id=?1",
+            rusqlite::params![id, archived_at],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn preview_archives(
@@ -466,12 +500,22 @@ fn session_header_id(path: &Path) -> Result<Option<String>> {
 }
 
 fn ensure_safe_path(root: &Path, path: &Path) -> Result<()> {
-    let relative = path.strip_prefix(root).context("目标超出 Codex 数据目录")?;
-    let mut current = root.to_path_buf();
     ensure!(
-        !fs::symlink_metadata(&current)?.file_type().is_symlink(),
+        !fs::symlink_metadata(root)?.file_type().is_symlink(),
         "Codex 数据目录不能是符号链接"
     );
+    let canonical_root = fs::canonicalize(root)?;
+    let _ = ensure_safe_path_with_canonical_root(root, &canonical_root, path)?;
+    Ok(())
+}
+
+fn ensure_safe_path_with_canonical_root(
+    root: &Path,
+    canonical_root: &Path,
+    path: &Path,
+) -> Result<PathBuf> {
+    let relative = path.strip_prefix(root).context("目标超出 Codex 数据目录")?;
+    let mut current = root.to_path_buf();
     for component in relative.components() {
         ensure!(
             matches!(component, std::path::Component::Normal(_)),
@@ -483,11 +527,12 @@ fn ensure_safe_path(root: &Path, path: &Path) -> Result<()> {
             "线程管理不接受符号链接"
         );
     }
+    let canonical_path = fs::canonicalize(path)?;
     ensure!(
-        fs::canonicalize(path)?.starts_with(fs::canonicalize(root)?),
+        canonical_path.starts_with(canonical_root),
         "目标超出 Codex 数据目录"
     );
-    Ok(())
+    Ok(canonical_path)
 }
 
 fn read_index(paths: &CodexPaths) -> Result<String> {

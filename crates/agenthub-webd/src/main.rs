@@ -11,7 +11,6 @@ use monitor_start::*;
 
 mod api;
 mod async_question_monitor;
-mod audit;
 mod bark;
 mod github_ci_monitor;
 mod linux_adapter;
@@ -410,13 +409,14 @@ fn build_probe_event(
 
 async fn probe_thread_snapshot(
     config: &Config,
-    db: &PanelDb,
+    _db: &PanelDb,
     status: &'static str,
     limit: usize,
 ) -> Result<Value> {
     let status = status.trim();
-    let state = AppState::new(config.clone(), db.clone());
-    let threads = api::load_probe_threads(&state, status, limit).await?;
+    let paths = resolve_codex_paths(&config.codex.home).codex_paths();
+    let threads =
+        agenthub_core::services::probe::probe_threads_for_status_with_paths(&paths, status, limit)?;
     Ok(json!({
         "status": status,
         "count": threads.len(),
@@ -978,8 +978,6 @@ struct ProbeBarkOutcome {
     skipped: bool,
     reason: Option<String>,
     http_status: Option<u16>,
-    server_url: Option<String>,
-    request_url: Option<String>,
     request_count: usize,
     chunk_count: usize,
     notifications_enabled: bool,
@@ -1002,8 +1000,6 @@ impl ProbeBarkOutcome {
             skipped: false,
             reason: None,
             http_status: Some(status),
-            server_url: None,
-            request_url: None,
             request_count: 0,
             chunk_count: 0,
             notifications_enabled,
@@ -1026,8 +1022,6 @@ impl ProbeBarkOutcome {
             skipped: true,
             reason: Some(reason.to_string()),
             http_status: None,
-            server_url: None,
-            request_url: None,
             request_count: 0,
             chunk_count: 0,
             notifications_enabled,
@@ -1051,8 +1045,6 @@ impl ProbeBarkOutcome {
             skipped: false,
             reason: Some(reason.to_string()),
             http_status: None,
-            server_url: None,
-            request_url: None,
             request_count: 0,
             chunk_count: 0,
             notifications_enabled,
@@ -1579,10 +1571,7 @@ fn store_probe_error_monitor_status(
 
 fn safe_probe_monitor_error(value: &str) -> String {
     let redacted = agenthub_core::security::redact_output(value.trim());
-    let mut end = redacted.len().min(512);
-    while !redacted.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = redacted.floor_char_boundary(redacted.len().min(512));
     if end < redacted.len() {
         format!("{} [truncated]", &redacted[..end])
     } else {

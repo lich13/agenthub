@@ -9,9 +9,11 @@ use crate::{
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(test)]
+use std::fs::OpenOptions;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::Command,
@@ -539,24 +541,22 @@ fn save_registry(
     if value == &index.value {
         return Ok(());
     }
-    let tmp = index
-        .path
-        .with_file_name(format!(".agenthub-index-{}", uuid::Uuid::new_v4()));
-    let result = (|| {
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        file.set_permissions(fs::metadata(&index.path)?.permissions())?;
-        serde_json::to_writer(&mut file, value)?;
-        file.write_all(b"\n")?;
-        file.sync_all()?;
-        check_stopped()?;
-        unchanged(index)?;
-        fs::rename(&tmp, &index.path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    result
+    let perms = fs::metadata(&index.path)?.permissions();
+    crate::session_delete::atomic_replace_file(
+        &index.path,
+        "agenthub-index",
+        None,
+        Some(perms),
+        |file| {
+            serde_json::to_writer(&mut *file, value)?;
+            file.write_all(b"\n")?;
+            Ok(())
+        },
+        || {
+            check_stopped()?;
+            unchanged(index)
+        },
+    )
 }
 
 fn remove_cache(paths: &DshPaths, id: &str, outcome: &mut Outcome) -> Result<bool> {

@@ -386,24 +386,6 @@ enum ProjectWorkspaceEngine {
         idOf: (Item) -> String,
         cwdOf: (Item) -> String,
         workspaceRootOf: (Item) -> String?,
-        updatedAtOf: (Item) -> String?,
-        statusOf: (Item) -> ProjectWorkspaceAggregateStatus
-    ) -> [ProjectWorkspaceGroup<Item>] {
-        buildGroups(
-            items: items,
-            idOf: idOf,
-            cwdOf: cwdOf,
-            workspaceRootOf: workspaceRootOf,
-            updatedAtMsOf: { parseTimestampMs(updatedAtOf($0)) },
-            statusOf: statusOf
-        )
-    }
-
-    static func buildGroups<Item: Equatable & Sendable>(
-        items: [Item],
-        idOf: (Item) -> String,
-        cwdOf: (Item) -> String,
-        workspaceRootOf: (Item) -> String?,
         updatedAtMsOf: (Item) -> Int64,
         statusOf: (Item) -> ProjectWorkspaceAggregateStatus
     ) -> [ProjectWorkspaceGroup<Item>] {

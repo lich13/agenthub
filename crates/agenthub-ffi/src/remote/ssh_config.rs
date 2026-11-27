@@ -4,7 +4,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
-pub fn valid_alias(alias: &str) -> bool {
+pub(crate) fn valid_alias(alias: &str) -> bool {
     !alias.is_empty()
         && !alias.starts_with(['-', '!'])
         && !alias
@@ -135,7 +135,7 @@ fn scan(
     }
     Ok(())
 }
-pub fn list() -> Result<Vec<SshHost>, String> {
+pub(crate) fn list() -> Result<Vec<SshHost>, String> {
     let home = dirs::home_dir().ok_or("无法定位 SSH 配置")?;
     list_at(&home, &PathBuf::from("/etc/ssh"))
 }
@@ -221,7 +221,7 @@ fn replace(edit: &Edit, text: &str) -> Result<(), String> {
     .map_err(|error| format!("无法保存 SSH 配置：{error}"))
 }
 
-pub fn delete_with<T>(
+pub(crate) fn delete_with<T>(
     alias: &str,
     commit: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {

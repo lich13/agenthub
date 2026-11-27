@@ -1,7 +1,9 @@
 use super::{
-    load_probe_threads,
     rpc_dispatch::rpc_dispatch,
-    test_support::{sandboxed_test_config, write_executable_fixture, AsyncEnvGuard},
+    test_support::{
+        sandboxed_test_config, write_executable_fixture, AsyncEnvGuard, TestHttpResponse,
+        TestHttpRouter,
+    },
     update_service, UpdateAction,
 };
 use agenthub_core::codex::CodexPaths;
@@ -11,11 +13,14 @@ use agenthub_core::{
     jobs::ProcessCommand,
     platform::PlatformPaths,
     services::{
-        probe::{probe_process_command, ProbeAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS},
+        probe::{
+            probe_process_command, probe_threads_for_status_with_paths, ProbeAction,
+            PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS,
+        },
         threads as thread_service,
     },
 };
-use axum::http::StatusCode;
+use reqwest::StatusCode;
 use rusqlite::{params, Connection};
 use serde_json::json;
 use std::{
@@ -359,44 +364,12 @@ async fn probe_threads_use_local_state_when_app_server_socket_is_missing() {
     let (state, home) = app_server_missing_socket_state();
     seed_local_codex_thread(&home, "thread-a", "local title");
 
-    let rows = load_probe_threads(&state, "recent", 10).await.unwrap();
+    let rows = probe_threads_for_status_with_paths(&state.codex_paths(), "recent", 10).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "thread-a");
     assert_eq!(rows[0].title, "local title");
     let _ = fs::remove_dir_all(home);
-}
-
-#[tokio::test]
-async fn rpc_probe_typed_commands_start_matching_jobs() {
-    let _env_guard = AsyncEnvGuard::lock_read_only().await;
-    for (command, kind) in [
-        ("probe.barkTest", "probe_bark_test"),
-        ("probe.installHooks", "probe_hooks_install"),
-        ("probe.removeHooks", "probe_hooks_remove"),
-    ] {
-        let state = rpc_test_state();
-        let app = state.clone();
-        let payload = request_rpc_json(app, command, "{}").await;
-        let job_id = payload["job_id"].as_str().unwrap();
-        let job = state.db.job(job_id).unwrap().unwrap();
-        assert_eq!(job.kind, kind, "{command}");
-    }
-}
-
-#[tokio::test]
-async fn rpc_update_typed_commands_start_update_jobs() {
-    for (command, kind) in [
-        ("updates.check", "agenthub_update_check"),
-        ("updates.install", "agenthub_update_install"),
-        ("updates.prune", "agenthub_update_prune"),
-    ] {
-        let rpc_state = rpc_test_state();
-        let rpc = request_rpc_json(rpc_state.clone(), command, "{}").await;
-        let job_id = rpc["job_id"].as_str().unwrap();
-        let job = rpc_state.db.job(job_id).unwrap().unwrap();
-        assert_eq!(job.kind, kind, "{command}");
-    }
 }
 
 #[test]
@@ -426,49 +399,6 @@ fn linux_probe_process_command_preserves_paths_as_literal_arguments() {
             )
         );
     }
-}
-
-#[tokio::test]
-async fn rpc_runtime_capabilities_has_minimal_dto_shape() {
-    let state = rpc_test_state();
-    let app = state;
-
-    let rpc = request_rpc_json(app, "system.capabilities", "{}").await;
-
-    assert_eq!(rpc["api_version"], 2);
-    assert_eq!(rpc["host_surface"], "linux_server_api");
-    assert_eq!(rpc["capabilities"]["threads"], true);
-    assert!(rpc["capabilities"].get("web_auth").is_none());
-    assert!(rpc["capabilities"].get("turnstile").is_none());
-    assert_eq!(rpc["capabilities"]["systemd"], true);
-    assert!(rpc["capabilities"].get("nginx").is_none());
-    assert_eq!(rpc["capabilities"]["linux_update_job"], true);
-}
-
-#[tokio::test]
-async fn rpc_update_typed_actions_start_jobs() {
-    for (command, kind) in [
-        ("updates.check", "agenthub_update_check"),
-        ("updates.install", "agenthub_update_install"),
-        ("updates.prune", "agenthub_update_prune"),
-    ] {
-        let state = rpc_test_state();
-        let rpc = request_rpc_json(state.clone(), command, "{}").await;
-        let job_id = rpc["job_id"].as_str().unwrap();
-        let job = state.db.job(job_id).unwrap().unwrap();
-        assert_eq!(job.kind, kind, "{command}");
-    }
-}
-
-#[tokio::test]
-async fn rpc_update_status_uses_shared_update_status_shape() {
-    let state = rpc_test_state();
-    let app = state;
-
-    let rpc = request_rpc_json(app, "updates.status", "{}").await;
-
-    assert_eq!(rpc["method"], "linux_systemd_job");
-    assert_eq!(rpc["state"], "idle");
 }
 
 #[tokio::test]
@@ -722,9 +652,8 @@ async fn probe_reply_needed_bucket_only_includes_fresh_pending_actions() {
     config.codex.home = codex_home;
     state.replace_config(config);
 
-    let rows = load_probe_threads(&state, "reply-needed", 20)
-        .await
-        .unwrap();
+    let rows =
+        probe_threads_for_status_with_paths(&state.codex_paths(), "reply-needed", 20).unwrap();
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "fresh-thread");
@@ -1399,23 +1328,19 @@ mod maintenance_security {
     }
 
     async fn bark_echo_server(status: u16, code: i64, prefix: &'static str) -> BarkEchoServer {
-        let app = axum::Router::new().route(
-            "/push",
-            axum::routing::post(
-                move |axum::Json(request): axum::Json<serde_json::Value>| async move {
-                    let echoed = request["device_key"]
-                        .as_str()
-                        .expect("fixture request omitted its device key");
-                    (
-                        StatusCode::from_u16(status).unwrap(),
-                        axum::Json(json!({"code":code,"message":format!("{prefix} {echoed}")})),
-                    )
-                },
-            ),
-        );
+        let router = TestHttpRouter::new().post("/push", move |req| async move {
+            let request = req.json();
+            let echoed = request["device_key"]
+                .as_str()
+                .expect("fixture request omitted its device key");
+            TestHttpResponse::json(
+                StatusCode::from_u16(status).unwrap(),
+                json!({"code":code,"message":format!("{prefix} {echoed}")}),
+            )
+        });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let task = router.serve_on(listener).await;
         BarkEchoServer { base, task }
     }
 

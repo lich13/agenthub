@@ -1302,8 +1302,8 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 aliases: group.stateAliases,
                 initiallyOpen: group.initiallyOpen
             )
-            if !isOpen { return 34 }
-            return 34 + 16 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))
+            if !isOpen { return ProcessRowLayoutMetrics.collapsedGroupRowHeight }
+            return ProcessRowLayoutMetrics.collapsedGroupRowHeight + 16 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))
 
         case let .processGroup(proc):
             let isOpen = disclosureStore.isOpen(
@@ -1312,7 +1312,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 aliases: proc.stateAliases,
                 initiallyOpen: proc.initiallyOpen
             )
-            if !isOpen { return 34 }
+            if !isOpen { return ProcessRowLayoutMetrics.collapsedGroupRowHeight }
             let bodyW = max(120, width - 22)
             let wrapThinking = proc.toolCount > 0 || proc.thoughtCount > 1
             var bodyH: CGFloat = 14
@@ -1329,8 +1329,8 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                             initiallyOpen: false
                         )
                         bodyH += thinkOpen
-                            ? (32 + 6 + measureThoughtMarkdownHeight(markdown: text, width: bodyW))
-                            : 32
+                            ? (ProcessRowLayoutMetrics.thoughtDisclosureHeaderHeight + 6 + measureThoughtMarkdownHeight(markdown: text, width: bodyW))
+                            : ProcessRowLayoutMetrics.thoughtDisclosureHeaderHeight
                     } else {
                         bodyH += measureThoughtMarkdownHeight(markdown: text, width: bodyW)
                     }
@@ -1338,10 +1338,12 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                     bodyH += 4 + measureExecutionCommandsHeight(commands: group.commands, width: max(100, bodyW - 20))
                 case let .detail(id, sids, _, detail, running, failed, _):
                     let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: id, aliases: sids, initiallyOpen: running || failed)
-                    bodyH += open ? (30 + 6 + Self.measureMonospaceBoxHeight(text: detail, width: bodyW)) : 30
+                    bodyH += open
+                        ? (ProcessRowLayoutMetrics.compactRowHeight + 6 + Self.measureMonospaceBoxHeight(text: detail, width: bodyW))
+                        : ProcessRowLayoutMetrics.compactRowHeight
                 }
             }
-            return 34 + bodyH
+            return ProcessRowLayoutMetrics.collapsedGroupRowHeight + bodyH
 
         case let .claudeProcessGroup(proc):
             let aliases = proc.sourceIds.map { "claude-process:\(proc.turnId):\($0)" }
@@ -1351,9 +1353,9 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 aliases: aliases,
                 initiallyOpen: false
             )
-            if !isOpen { return 34 }
+            if !isOpen { return ProcessRowLayoutMetrics.collapsedGroupRowHeight }
             let bodyW = max(120, width - 22)
-            return 34 + 14 + measureClaudeEntriesHeight(
+            return ProcessRowLayoutMetrics.collapsedGroupRowHeight + 14 + measureClaudeEntriesHeight(
                 entries: proc.entries,
                 width: bodyW,
                 wrapThinkingDisclosures: proc.wrapsThinkingDisclosures
@@ -1362,9 +1364,9 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         case let .claudeMetadataGroup(meta):
             let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
             let isOpen = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
-            if !isOpen { return 34 }
+            if !isOpen { return ProcessRowLayoutMetrics.collapsedGroupRowHeight }
             let bodyW = max(100, width - 22)
-            return 34 + 14 + measureClaudeEntriesHeight(entries: meta.renderItems, width: bodyW, wrapThinkingDisclosures: false)
+            return ProcessRowLayoutMetrics.collapsedGroupRowHeight + 14 + measureClaudeEntriesHeight(entries: meta.renderItems, width: bodyW, wrapThinkingDisclosures: false)
 
         case let .thinking(_, text, _):
             let open = disclosureStore.isOpen(
@@ -1373,8 +1375,8 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 aliases: row.timelineAliases,
                 initiallyOpen: false
             )
-            if !open { return 34 }
-            return 34 + 14 + measureThoughtMarkdownHeight(markdown: text, width: max(120, width - 22))
+            if !open { return ProcessRowLayoutMetrics.collapsedGroupRowHeight }
+            return ProcessRowLayoutMetrics.collapsedGroupRowHeight + 14 + measureThoughtMarkdownHeight(markdown: text, width: max(120, width - 22))
 
         case let .plan(markdown, _, _):
             let innerWidth = max(120, width - 35)
@@ -1417,7 +1419,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 aliases: cmd.sourceIds,
                 initiallyOpen: !cmd.instructionFile && (cmd.status == .running || cmd.status == .failed)
             )
-            h += 30
+            h += ProcessRowLayoutMetrics.compactRowHeight
             if cmdOpen {
                 let detail = cmd.sections.map { sec in
                     sec.label.isEmpty ? sec.text : "\(sec.label)\n\(sec.text)"
@@ -1450,21 +1452,23 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
             case let .group(group):
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: group.id, aliases: group.stateAliases, initiallyOpen: group.initiallyOpen)
                 appendRenderedHeight(
-                    open ? (46 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20))) : 30
+                    open
+                        ? (ProcessRowLayoutMetrics.compactRowHeight + 16 + measureExecutionCommandsHeight(commands: group.commands, width: max(120, width - 20)))
+                        : ProcessRowLayoutMetrics.compactRowHeight
                 )
             case let .metadata(meta):
                 let aliases = meta.sourceIds.map { "claude-metadata:\($0)" }
                 let open = disclosureStore.isOpen(scope: sessionScopeKey, stateKey: meta.id, aliases: aliases, initiallyOpen: false)
                 if open {
                     appendRenderedHeight(
-                        46 + measureClaudeEntriesHeight(
+                        ProcessRowLayoutMetrics.compactRowHeight + 16 + measureClaudeEntriesHeight(
                             entries: meta.renderItems,
                             width: max(100, width - 22),
                             wrapThinkingDisclosures: false
                         )
                     )
                 } else {
-                    appendRenderedHeight(30)
+                    appendRenderedHeight(ProcessRowLayoutMetrics.compactRowHeight)
                 }
             case let .item(ev, key, sids):
                 if ClaudeProcessGroupingEngine.isThoughtOrCommentary(ev) {
@@ -1480,8 +1484,8 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                         )
                         appendRenderedHeight(
                             thinkOpen
-                                ? (32 + 6 + measureThoughtMarkdownHeight(markdown: markdown, width: width))
-                                : 32
+                                ? (ProcessRowLayoutMetrics.thoughtDisclosureHeaderHeight + 6 + measureThoughtMarkdownHeight(markdown: markdown, width: width))
+                                : ProcessRowLayoutMetrics.thoughtDisclosureHeaderHeight
                         )
                     } else {
                         appendRenderedHeight(measureThoughtMarkdownHeight(markdown: markdown, width: width))
@@ -1494,7 +1498,11 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                         aliases: sids,
                         initiallyOpen: status == .running || status == .failed
                     )
-                    appendRenderedHeight(open ? (30 + 6 + Self.measureMonospaceBoxHeight(text: detail, width: width)) : 30)
+                    appendRenderedHeight(
+                        open
+                            ? (ProcessRowLayoutMetrics.compactRowHeight + 6 + Self.measureMonospaceBoxHeight(text: detail, width: width))
+                            : ProcessRowLayoutMetrics.compactRowHeight
+                    )
                 } else if let text = ev.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     appendRenderedHeight(measureThoughtMarkdownHeight(markdown: text, width: width))
                 }

@@ -171,7 +171,7 @@ pub fn resolve_codex_paths_with_options(
             selected = Some((path.clone(), *source));
             break;
         }
-        if matches!(*source, "configured" | "env:CODEX_HOME" | "socket") {
+        if matches!(*source, "configured" | "env:CODEX_HOME") {
             warnings.push(format!("{invalid_message}: {}", path.display()));
         }
     }

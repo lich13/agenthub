@@ -3,53 +3,34 @@ use super::*;
 use crate::native_probe::{
     self, NativeProvider, NativeScan, NativeStreamSnapshot, NativeTurnEvent,
 };
-use sha2::{Digest, Sha256};
 use std::{
     collections::VecDeque,
     io::{Seek, SeekFrom},
-    sync::Mutex,
 };
 
 const FILE_LIMIT: u64 = 128 * 1024 * 1024;
 const LINE_LIMIT: usize = 8 * 1024 * 1024;
 const EVENT_LIMIT: usize = 1024;
-struct NotificationCache {
-    entries: VecDeque<Cached>,
-    bytes: usize,
-}
-static CACHE: Mutex<NotificationCache> = Mutex::new(NotificationCache {
-    entries: VecDeque::new(),
-    bytes: 0,
-});
+static CACHE: crate::lru::ByteBoundedLru<Cached> =
+    crate::lru::ByteBoundedLru::new(usize::MAX, crate::resource_limits::NATIVE_PROBE_CACHE_BYTES);
 
 struct Cached {
     path: PathBuf,
     stamp: FileStamp,
     identity: String,
     offset: u64,
-    anchor: Vec<u8>,
+    anchor: [u8; 32],
     state: State,
     bytes: usize,
     last_accessed: std::time::Instant,
 }
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
-    if let Ok(mut cache) = CACHE.lock() {
-        let before = cache.entries.len();
-        let now = std::time::Instant::now();
-        let mut removed = 0;
-        cache.entries.retain(|entry| {
-            let keep = now.saturating_duration_since(entry.last_accessed) < max_idle;
-            if !keep {
-                removed += entry.bytes;
-            }
-            keep
-        });
-        cache.bytes -= removed;
-        if cache.entries.len() < before {
-            crate::note_cache_eviction();
-        }
-    }
+    CACHE.evict_idle(
+        max_idle,
+        |entry| entry.last_accessed,
+        |entry| entry.bytes as u64,
+    );
 }
 #[derive(Default)]
 struct State {
@@ -375,18 +356,6 @@ impl State {
     }
 }
 
-fn anchor(file: &mut File, offset: u64) -> Result<Vec<u8>> {
-    let mut hash = Sha256::new();
-    let n = offset.min(4096) as usize;
-    let mut b = vec![0; n];
-    file.seek(SeekFrom::Start(0))?;
-    file.read_exact(&mut b)?;
-    hash.update(&b);
-    file.seek(SeekFrom::Start(offset.saturating_sub(n as u64)))?;
-    file.read_exact(&mut b)?;
-    hash.update(&b);
-    Ok(hash.finalize().to_vec())
-}
 fn read(path: &Path, id: &str, key: &str) -> Result<Option<NativeStreamSnapshot>> {
     read_with_limit(path, id, key, FILE_LIMIT)
 }
@@ -403,19 +372,12 @@ fn read_with_limit(
         "DSH notification source exceeds size limit"
     );
     let identity = native_probe::file_identity(path)?;
-    let mut cache = CACHE
-        .lock()
-        .map_err(|_| anyhow::anyhow!("DSH reader unavailable"))?;
-    let old = crate::lru::take_first(&mut cache.entries, |c| c.path == path);
-    if let Some(old) = &old {
-        cache.bytes -= old.bytes;
-    }
+    let old = CACHE.take(|c| c.path == path, |c| c.bytes as u64);
     let old = match old {
         Some(mut old) if old.stamp == before && old.identity == identity => {
             old.last_accessed = std::time::Instant::now();
             let result = old.state.snapshot(id, key, &identity);
-            cache.bytes += old.bytes;
-            cache.entries.push_back(old);
+            CACHE.insert(old, |c| c.path == path, |c| c.bytes as u64);
             return result;
         }
         other => other,
@@ -425,14 +387,14 @@ fn read_with_limit(
         .filter(|c| {
             c.identity == identity
                 && before.len > c.stamp.len
-                && anchor(&mut file, c.offset).ok().as_ref() == Some(&c.anchor)
+                && crate::jsonl_cache::file_anchor(&mut file, c.offset).ok() == Some(c.anchor)
         })
         .unwrap_or_else(|| Cached {
             path: path.into(),
             stamp: before,
             identity: identity.clone(),
             offset: 0,
-            anchor: vec![],
+            anchor: [0; 32],
             state: State::default(),
             bytes: 0,
             last_accessed: std::time::Instant::now(),
@@ -480,7 +442,7 @@ fn read_with_limit(
     }
     current.offset += consumed as u64;
     let mut file = regular_file(path)?;
-    current.anchor = anchor(&mut file, current.offset)?;
+    current.anchor = crate::jsonl_cache::file_anchor(&mut file, current.offset)?;
     let after = file_stamp(path)?;
     ensure!(
         after == before && native_probe::file_identity(path)? == identity,
@@ -507,16 +469,7 @@ fn read_with_limit(
             .header
             .as_ref()
             .map_or(0, |h| h.to_string().len());
-    let total = (cache.bytes + current.bytes) as u64;
-    cache.entries.push_back(current);
-    cache.bytes = crate::lru::trim(
-        &mut cache.entries,
-        usize::MAX,
-        total,
-        crate::resource_limits::NATIVE_PROBE_CACHE_BYTES,
-        |_| true,
-        |entry| entry.bytes as u64,
-    ) as usize;
+    CACHE.insert(current, |c| c.path == path, |c| c.bytes as u64);
     Ok(result)
 }
 fn consume_lines(state: &mut State, bytes: &[u8]) -> Result<()> {

@@ -156,13 +156,13 @@ fn queued_candidate(
     })
 }
 
-pub fn codex_key(event: &ProbeBuiltEvent) -> String {
+pub(crate) fn codex_key(event: &ProbeBuiltEvent) -> String {
     async_question_monitor::delivery_key(event)
         .or_else(|| question_monitor::delivery_key(event))
         .unwrap_or_else(|| format!("codex:{}:{}", event.dedupe_namespace, event.dedupe_key))
 }
 
-pub async fn github_ci(
+pub(crate) async fn github_ci(
     load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     event: agenthub_core::github_ci::Event,
@@ -274,7 +274,7 @@ fn existing_codex_outcome(db: &PanelDb, key: &str, enabled: bool) -> Result<Prob
         .unwrap_or_else(|| ProbeBarkOutcome::skipped("dedupe", enabled, true, true)))
 }
 
-pub async fn codex_with_claims(
+pub(crate) async fn codex_with_claims(
     load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     event: &ProbeBuiltEvent,
@@ -385,7 +385,7 @@ pub async fn codex_with_claims(
     Ok((feedback_claimed, dedupe_claimed, bark))
 }
 
-pub async fn native(
+pub(crate) async fn native(
     load_config: &ConfigLoader<'_>,
     db: &PanelDb,
     delivery: &NativeDelivery,
@@ -1001,7 +1001,7 @@ async fn process(
 }
 
 /// Explicit user tests get a fresh identity and use the same durable queue.
-pub async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> {
+pub(crate) async fn test(config_path: &Path, db: &PanelDb) -> Result<ProbeBarkOutcome> {
     let cache = super::monitor_start::DaemonMonitorCache::default();
     let load_config = || cache.load_config(config_path);
     let config = db.sync_notification_channels_from_config(&load_config)?;
@@ -1382,7 +1382,10 @@ fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) 
     }
 }
 
-pub async fn retry_pending_with_config(db: &PanelDb, load_config: &ConfigLoader<'_>) -> Result<()> {
+pub(crate) async fn retry_pending_with_config(
+    db: &PanelDb,
+    load_config: &ConfigLoader<'_>,
+) -> Result<()> {
     db.sync_notification_channels_from_config(&|| latest_config(load_config))?;
     for job in db.due_notification_deliveries(10)? {
         let candidate = match serde_json::from_value::<Candidate>(job.payload) {

@@ -70,15 +70,9 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertFalse(draft.validationErrors().isEmpty)
         draft.pollSecondsText = "15"
 
-        draft.logMaxMiBText = "1e30"
-        XCTAssertFalse(draft.validationErrors().isEmpty, "Huge float must fail range validation without trapping")
-        draft.logMaxMiBText = "-1e30"
+        draft.eventRetentionDaysText = "0"
         XCTAssertFalse(draft.validationErrors().isEmpty)
-
-        draft.logMaxMiBText = "0.001"
-        XCTAssertFalse(draft.validationErrors().isEmpty)
-        draft.logMaxMiBText = "0.00390625" // 4 KiB lower bound
-        XCTAssertTrue(draft.validationErrors().isEmpty)
+        draft.eventRetentionDaysText = "2"
 
         draft.codexHome = "auto"
         draft.barkDeviceKey = "fixture-bark-key"
@@ -94,6 +88,14 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         }
         if case let .object(probe)? = settingsPayload["probe"] {
             XCTAssertNil(probe["hooks"], "Settings scope must not overwrite probe.hooks.* managed by Hooks / Account Scope")
+            if case let .object(obs)? = probe["observability"] {
+                XCTAssertEqual(obs["event_retention_days"], .number(2))
+                XCTAssertNil(obs["hook_event_max_lines"], "Retired observability fields must not be patched from App")
+                XCTAssertNil(obs["hook_cooldown_max_lines"], "Retired observability fields must not be patched from App")
+                XCTAssertNil(obs["log_max_bytes"], "Retired observability fields must not be patched from App")
+            } else {
+                XCTFail("Missing observability object")
+            }
         } else {
             XCTFail("Missing probe object")
         }
@@ -588,7 +590,7 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
 
         // Verify every sub-group in `.settings` equality participates independently
         let mutations: [(inout ProbeSettingsDraft) -> Void] = [
-            { $0.logMaxMiBText = "64" },
+            { $0.eventRetentionDaysText = "7" },
             { $0.notifyCodex.toggle() },
             { $0.notifyGrokbot.toggle() },
             { $0.notifyClaudeReplyNeeded.toggle() },

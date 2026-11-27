@@ -193,29 +193,14 @@ pub(super) fn detail(
             )
         })
         .transpose()?;
-    let limit = request.limit.unwrap_or(160).clamp(1, 500);
-    let (start, end) = match crate::history_navigation::seek_window(
-        parsed.events.iter().map(|event| event.id.as_str()),
+    let page = crate::history_navigation::paginate_window(
+        &parsed.events,
+        |event| event.id.as_str(),
         native_cursor.as_deref(),
-        limit,
-    )? {
-        Some(window) => window,
-        None => {
-            let end = native_cursor
-                .as_ref()
-                .map(|id| {
-                    parsed
-                        .events
-                        .iter()
-                        .position(|e| &e.id == id)
-                        .context("历史位置已变化，请刷新会话")
-                })
-                .transpose()?
-                .unwrap_or(parsed.events.len());
-            (end.saturating_sub(limit), end)
-        }
-    };
-    let events = parsed.events[start..end]
+        request.limit,
+        false,
+    )?;
+    let events = parsed.events[page.start..page.end]
         .iter()
         .map(|event| {
             let mut event = (**event).clone();
@@ -245,14 +230,7 @@ pub(super) fn detail(
         parent_stamp == reader::stamp(&parent)? && before == reader::stamp(&path)?,
         "子智能体来源已变化，请重试"
     );
-    let mut after_cursor = crate::history_navigation::after_cursor(
-        end,
-        parsed.events.len(),
-        parsed
-            .events
-            .get(end.saturating_sub(1))
-            .map(|e| e.id.as_str()),
-    );
+    let mut after_cursor = page.after_cursor;
     crate::history_navigation::prefix_after_cursor(&mut after_cursor, &prefix);
     Ok(ClaudeSessionDetail {
         summary,
@@ -261,9 +239,9 @@ pub(super) fn detail(
         events,
         timeline,
         history: Some(history),
-        total_events: parsed.events.len(),
-        has_more: start > 0,
-        before_cursor: (start > 0).then(|| format!("{prefix}{}", parsed.events[start].id)),
+        total_events: page.total,
+        has_more: page.has_more,
+        before_cursor: page.before_cursor.map(|id| format!("{prefix}{id}")),
         after_cursor,
     })
 }

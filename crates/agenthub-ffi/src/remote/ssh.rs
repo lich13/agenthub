@@ -15,7 +15,7 @@ use tokio::{
 };
 const DISCONNECTED: &str = "SSH 连接已断开，下一次读取将自动重连；已提交操作不会自动重发";
 #[derive(Debug, Clone)]
-pub enum CallError {
+pub(crate) enum CallError {
     Disconnected,
     TimedOut,
     Remote(String),
@@ -30,12 +30,12 @@ impl std::fmt::Display for CallError {
     }
 }
 impl CallError {
-    pub fn is_transport(&self) -> bool {
+    pub(crate) fn is_transport(&self) -> bool {
         !matches!(self, Self::Remote(_))
     }
 }
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CallError>>>>>;
-pub struct Client {
+pub(crate) struct Client {
     input: AsyncMutex<ChildStdin>,
     pending: Pending,
     next: AtomicU64,
@@ -43,7 +43,7 @@ pub struct Client {
     reader: tokio::task::JoinHandle<()>,
     connected: Arc<AtomicBool>,
 }
-pub fn command(alias: &str) -> Result<Command, String> {
+pub(crate) fn command(alias: &str) -> Result<Command, String> {
     if !super::ssh_config::valid_alias(alias) {
         return Err("请选择有效的 SSH Host".into());
     }
@@ -81,7 +81,7 @@ pub fn command(alias: &str) -> Result<Command, String> {
     Ok(command)
 }
 impl Client {
-    pub fn connect(alias: &str, sudo: bool) -> Result<Arc<Self>, String> {
+    pub(crate) fn connect(alias: &str, sudo: bool) -> Result<Arc<Self>, String> {
         let mut command = command(alias)?;
         command.arg(if sudo {
             "sudo -n /usr/local/bin/agenthub-webd rpc-stdio"
@@ -129,10 +129,10 @@ impl Client {
             connected,
         }))
     }
-    pub fn is_connected(&self) -> bool {
+    pub(crate) fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
-    pub fn close(&self) {
+    pub(crate) fn close(&self) {
         self.connected.store(false, Ordering::Release);
         self.reader.abort();
         for (_, reply) in self.pending.lock().expect("SSH replies").drain() {
@@ -198,7 +198,7 @@ impl Client {
             }
         }
     }
-    pub async fn call(&self, command: &str, args: Value) -> Result<Value, CallError> {
+    pub(crate) async fn call(&self, command: &str, args: Value) -> Result<Value, CallError> {
         self.call_with_timeout(command, args, Duration::from_secs(60))
             .await
     }

@@ -233,10 +233,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         return [.delete]
     }
 
-    var batchOperations: [SessionOperation] {
-        batchOperations(for: activeSelectionPartition)
-    }
-
     var filteredActiveItems: [UnifiedSessionSummaryItem] {
         refreshedSidebarCache().filteredActiveItems
     }
@@ -617,7 +613,12 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: DetailArgs(id: item.sessionKey, options: .init(limit: 120))
                 ) else { return }
                 guard isCurrentDetail(item, generation: generation) else { return }
-                let mappedCodex = mapCodexSummary(detail.summary, archived: detail.summary.status == "Archived")
+                let mappedCodex = Self.mapCodexSummaryStatic(
+                    detail.summary,
+                    archived: detail.summary.status == "Archived",
+                    store: store,
+                    threadStore: threadStore
+                )
                 syncSidebarItem(mappedCodex)
                 incomingHistory = detail.history
                 let effectiveTitle = threadStore.effectiveTitle(threadId: detail.summary.id, serverTitle: detail.summary.title)
@@ -664,7 +665,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: Req(sessionKey: item.sessionKey, limit: 160)
                 )
                 guard isCurrentDetail(item, generation: generation) else { return }
-                let mappedClaude = mapClaudeSummary(detail.summary)
+                let mappedClaude = Self.mapClaudeSummaryStatic(detail.summary)
                 syncSidebarItem(mappedClaude)
                 incomingHistory = detail.history
                 let candidateSig = makePollSignature(
@@ -710,7 +711,7 @@ final class ProviderWorkspaceStore: ObservableObject {
                     args: Req(id: item.sessionKey, limit: 160)
                 )
                 guard isCurrentDetail(item, generation: generation) else { return }
-                let mappedGrok = mapGrokSummary(detail.summary)
+                let mappedGrok = Self.mapGrokSummaryStatic(detail.summary)
                 syncSidebarItem(mappedGrok)
                 incomingHistory = detail.history
                 let candidateSig = makePollSignature(
@@ -761,7 +762,9 @@ final class ProviderWorkspaceStore: ObservableObject {
                     localOnly: provider == .grokbot
                 )
                 guard isCurrentDetail(item, generation: generation) else { return }
-                let mappedSummary = provider == .grokbot ? mapGrokBotSummary(detail.summary) : mapProviderSummary(detail.summary)
+                let mappedSummary = provider == .grokbot
+                    ? Self.mapGrokBotSummary(detail.summary)
+                    : Self.mapProviderSummaryStatic(detail.summary)
                 syncSidebarItem(mappedSummary)
                 incomingHistory = detail.history
                 let candidateSig = makePollSignature(
@@ -1492,10 +1495,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         return "最近"
     }
 
-    func mapClaudeSummary(_ item: ClaudeSessionSummary) -> UnifiedSessionSummaryItem {
-        Self.mapClaudeSummaryStatic(item)
-    }
-
     static func mapClaudeSummaryStatic(_ item: ClaudeSessionSummary) -> UnifiedSessionSummaryItem {
         let stLabel = providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false)
         let chip: (String?, StatusChipTone) = if item.status == "running" {
@@ -1531,10 +1530,6 @@ final class ProviderWorkspaceStore: ObservableObject {
         )
     }
 
-    func mapGrokSummary(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
-        Self.mapGrokSummaryStatic(item)
-    }
-
     static func mapGrokSummaryStatic(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
         UnifiedSessionSummaryItem(
             sessionKey: item.id,
@@ -1555,10 +1550,6 @@ final class ProviderWorkspaceStore: ObservableObject {
             canDelete: true,
             storageSize: item.storageSize
         )
-    }
-
-    func mapGrokBotSummary(_ item: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
-        Self.mapGrokBotSummary(item)
     }
 
     static func mapGrokBotSummary(_ item: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
@@ -1583,10 +1574,6 @@ final class ProviderWorkspaceStore: ObservableObject {
             canDelete: false,
             storageSize: item.storageSize
         )
-    }
-
-    func mapCodexSummary(_ s: ThreadSummary, archived: Bool) -> UnifiedSessionSummaryItem {
-        Self.mapCodexSummaryStatic(s, archived: archived, store: store, threadStore: threadStore)
     }
 
     static func mapCodexSummaryStatic(
@@ -1641,10 +1628,6 @@ final class ProviderWorkspaceStore: ObservableObject {
             canDelete: true,
             storageSize: s.storageSize
         )
-    }
-
-    func mapProviderSummary(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {
-        Self.mapProviderSummaryStatic(s)
     }
 
     static func mapProviderSummaryStatic(_ s: ProviderSessionSummary) -> UnifiedSessionSummaryItem {

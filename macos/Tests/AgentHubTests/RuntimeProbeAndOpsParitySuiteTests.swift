@@ -368,11 +368,11 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
         XCTAssertFalse(draft.validationErrors().isEmpty, "Out-of-range pollSeconds (<5) rejected")
 
         draft.pollSecondsText = "15"
-        draft.logMaxMiBText = "16"
-        XCTAssertFalse(draft.validationErrors().isEmpty, "Log max MiB >8 rejected")
+        draft.recentLimitText = "999"
+        XCTAssertFalse(draft.validationErrors().isEmpty, "Recent limit >500 rejected")
 
-        draft.logMaxMiBText = "5"
-        XCTAssertTrue(draft.validationErrors().isEmpty, "Valid 8-parameter advanced settings pass validation")
+        draft.recentLimitText = "50"
+        XCTAssertTrue(draft.validationErrors().isEmpty, "Valid advanced settings pass validation")
 
         for plat in SessionProvider.allCases {
             XCTAssertFalse(plat.id.isEmpty)
@@ -543,18 +543,7 @@ final class RuntimeProbeAndOpsParitySuiteTests: XCTestCase {
         }
     }
 
-    // MARK: - 17, 18, 19. CodexAccountScope (4), query/jobs (1), query/ops (3)
-
-    func testPorted_codexAccountScope() throws {
-        try runAsyncParityCheck {
-            // Verify 100-per-page pagination math across 0, 100, 101, and 250 items
-            func pageCount(_ count: Int) -> Int { max(1, (count + 99) / 100) }
-            XCTAssertEqual(pageCount(0), 1)
-            XCTAssertEqual(pageCount(100), 1)
-            XCTAssertEqual(pageCount(101), 2)
-            XCTAssertEqual(pageCount(250), 3)
-        }
-    }
+    // MARK: - 17, 18. query/jobs (1), query/ops (3)
 
     func testPorted_jobsQuery() throws {
         let jobJson = """

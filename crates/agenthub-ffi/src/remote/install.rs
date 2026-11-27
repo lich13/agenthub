@@ -1,5 +1,5 @@
 use tokio::io::AsyncWriteExt;
-pub async fn run(alias: &str, sudo: bool) -> Result<(), String> {
+pub(crate) async fn run(alias: &str, sudo: bool) -> Result<(), String> {
     let mut command = super::ssh::command(alias)?;
     command.arg(if sudo { "sudo -n bash -s" } else { "bash -s" });
     let mut child = command.spawn().map_err(|_| "无法启动 SSH 安装")?;

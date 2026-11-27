@@ -698,10 +698,6 @@ final class ReaderSelectableTextView: NSTextView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    convenience init() {
-        self.init(frame: NSRect(x: 0, y: 0, width: 200, height: 24), textContainer: nil)
-    }
-
     func applyAttributedText(_ attributed: NSAttributedString, width: CGFloat? = nil) {
         if let width, width > 1 {
             textContainer?.containerSize = NSSize(

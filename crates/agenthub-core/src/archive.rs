@@ -425,8 +425,8 @@ fn hidden_visibility_rows(
     conn: &Connection,
     work: &crate::scan_work::ScanWork,
 ) -> Result<Vec<HiddenVisibilityRow>> {
-    let columns = table_columns(conn, "threads")?;
-    let spawn_cols = table_columns(conn, "thread_spawn_edges")?;
+    let columns = crate::db::table_columns(conn, "threads")?;
+    let spawn_cols = crate::db::table_columns(conn, "thread_spawn_edges")?;
     let spawned_children: HashSet<String> = if spawn_cols.contains("child_thread_id") {
         let mut stmt = conn.prepare("SELECT DISTINCT child_thread_id FROM thread_spawn_edges")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
@@ -453,11 +453,7 @@ fn hidden_visibility_rows(
     Ok(result)
 }
 
-pub(crate) fn table_columns(conn: &Connection, table: &str) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    Ok(rows.collect::<rusqlite::Result<HashSet<_>>>()?)
-}
+pub(crate) use crate::db::table_columns;
 
 pub(crate) fn first_existing<'a>(columns: &HashSet<String>, names: &'a [&str]) -> Option<&'a str> {
     names.iter().copied().find(|name| columns.contains(*name))

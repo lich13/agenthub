@@ -3,13 +3,9 @@ use agenthub_core::services::updates::{self as update_service, UpdateAction};
 use serde::Serialize;
 use serde_json::value::RawValue;
 
-mod claude;
-mod cleanup;
-mod grok;
 mod payload;
 mod probe;
 pub(crate) mod rpc_dispatch;
-mod sessions;
 mod system;
 mod threads;
 
@@ -18,18 +14,9 @@ mod integration_tests;
 #[cfg(test)]
 pub(crate) mod test_support;
 
-pub(crate) use claude::{
-    claude_delete_execute, claude_delete_preview, claude_detail, claude_list, claude_rename,
-};
-pub(crate) use cleanup::{
-    hidden_threads_delete_dry_run, unified_cleanup_dry_run, unified_cleanup_execute,
-};
-pub(crate) use grok::{
-    grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
-};
 pub(crate) use probe::{
-    get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
-    patch_probe_settings, spawn_probe_status_refresh, start_probe_action,
+    get_probe_events, get_probe_settings, get_probe_status, patch_probe_settings,
+    spawn_probe_status_refresh, start_probe_action,
 };
 pub(crate) use system::{start_update_action, system_capabilities, system_update_status};
 pub(crate) use threads::{

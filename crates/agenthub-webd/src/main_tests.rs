@@ -2813,8 +2813,6 @@ async fn send_bark_success_reports_redacted_request_metadata() {
     assert_eq!(result.http_status, Some(200));
     assert_eq!(result.request_count, 1);
     assert_eq!(result.chunk_count, 1);
-    assert!(result.server_url.is_none());
-    assert!(result.request_url.is_none());
     assert!(!serde_json::to_string(&result)
         .unwrap()
         .contains("device-key-secret"));

@@ -442,22 +442,16 @@ impl ProbeRuntime {
     }
 
     fn hook_command(&self) -> String {
-        format!(
-            "{} --config {} probe hook-stop",
-            shell_quote(
-                &self.paths.daemon_binary().display().to_string(),
-                QuoteStyle::Minimal
-            ),
-            shell_quote(
-                &self.paths.config_file.display().to_string(),
-                QuoteStyle::Minimal
-            )
-        )
+        self.probe_hook_subcommand("hook-stop")
     }
 
     fn request_user_input_hook_command(&self) -> String {
+        self.probe_hook_subcommand("hook-request-user-input")
+    }
+
+    fn probe_hook_subcommand(&self, subcommand: &str) -> String {
         format!(
-            "{} --config {} probe hook-request-user-input",
+            "{} --config {} probe {subcommand}",
             shell_quote(
                 &self.paths.daemon_binary().display().to_string(),
                 QuoteStyle::Minimal
@@ -1431,10 +1425,7 @@ fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
     }
     let marker = "\n[truncated]";
     let limit = max_bytes.saturating_sub(marker.len());
-    let mut end = limit.min(value.len());
-    while end > 0 && !value.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = value.floor_char_boundary(limit.min(value.len()));
     let mut truncated = value[..end].to_string();
     truncated.push_str(marker);
     truncated

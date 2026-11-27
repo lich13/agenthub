@@ -121,7 +121,7 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             readError: "索引读取异常",
             readWarning: "部分步骤未加载"
         )
-        let mapped = wsStore.mapProviderSummary(summary)
+        let mapped = ProviderWorkspaceStore.mapProviderSummaryStatic(summary)
         XCTAssertEqual(mapped.renameBlockReason, "禁止改名原因")
         XCTAssertEqual(mapped.archiveBlockReason, "禁止归档原因")
         XCTAssertEqual(mapped.deleteBlockReason, "禁止删除原因")
@@ -868,9 +868,9 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
             actions: menuActions,
             palette: palette
         )
-        XCTAssertTrue(AgentHubTaskMenuPresenter.shared.isPresented)
+        XCTAssertEqual(hostWin.childWindows?.count, 1)
         AgentHubTaskMenuPresenter.shared.dismiss()
-        XCTAssertFalse(AgentHubTaskMenuPresenter.shared.isPresented)
+        XCTAssertTrue((hostWin.childWindows ?? []).isEmpty)
 
         // Upward scroll: verify alias-merged anchor restoration + canLoadOlder gating
         let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }

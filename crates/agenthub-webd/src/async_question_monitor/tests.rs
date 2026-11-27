@@ -1,5 +1,6 @@
 use super::*;
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use crate::api::test_support::{TestHttpResponse, TestHttpRouter};
+use reqwest::StatusCode;
 use serde_json::Value;
 use std::{
     fs,
@@ -19,23 +20,17 @@ struct Fixture {
 impl Fixture {
     async fn new(status: StatusCode) -> Self {
         let requests = Arc::new(Mutex::new(Vec::new()));
-        let router = Router::new()
-            .route(
-                "/push",
-                post(
-                    move |State(requests): State<Arc<Mutex<Vec<Value>>>>,
-                          Json(body): Json<Value>| async move {
-                        requests.lock().unwrap().push(body);
-                        (status, Json(json!({"code":status.as_u16()})))
-                    },
-                ),
-            )
-            .with_state(requests.clone());
+        let requests_handler = requests.clone();
+        let router = TestHttpRouter::new().post("/push", move |req| {
+            let requests = requests_handler.clone();
+            async move {
+                requests.lock().unwrap().push(req.json());
+                TestHttpResponse::json(status, json!({"code": status.as_u16()}))
+            }
+        });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
-        });
+        let server = router.serve_on(listener).await;
         let root =
             std::env::temp_dir().join(format!("agenthub-async-questions-{}", uuid::Uuid::new_v4()));
         let home = root.join(".codex");

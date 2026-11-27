@@ -1012,28 +1012,17 @@ fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
 
 fn write_atomic(path: &Path, updated: &[u8], permissions: Option<fs::Permissions>) -> Result<()> {
     use std::io::Write;
-    let candidate = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&candidate)?;
-    let result = (|| -> Result<()> {
-        if let Some(permissions) = permissions {
-            file.set_permissions(permissions)?;
-        }
-        file.write_all(updated)?;
-        file.sync_all()?;
-        fs::rename(&candidate, path)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&candidate);
-    }
-    result
+    crate::session_delete::atomic_replace_file(
+        path,
+        "agenthub-cfg",
+        None,
+        permissions,
+        |file| {
+            file.write_all(updated)?;
+            Ok(())
+        },
+        || Ok(()),
+    )
 }
 
 struct TomlPatchEditor {

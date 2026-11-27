@@ -400,66 +400,21 @@ pub(crate) fn read_children_map(
             }
         }
     };
-    let db_path = paths.summaries_db();
-    let mut open_conn: Option<Connection> = None;
-    if db_path.is_file() {
-        let conn = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .context("无法打开 Antigravity 索引数据库校验子会话")?;
-        let cols = super::summaries_table_columns(&conn);
-        let raw_expr = if cols.contains("raw_summary") {
-            "raw_summary"
-        } else {
-            "NULL"
-        };
+    let aux = super::load_store_auxiliary_index_checked(paths)?;
+    for row in &aux.summary_rows {
+        if !row.parent_conversation_id.is_empty() {
+            insert_edge(row.parent_conversation_id.clone(), row.id.clone());
+        } else if let Some(eff_p) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.effective_parent(&row.id))
         {
-            let mut stmt = conn
-                .prepare(&format!(
-                    "SELECT conversation_id, COALESCE(parent_conversation_id, ''), {raw_expr} FROM conversation_summaries"
-                ))
-                .context("无法读取 Antigravity 索引数据库子会话表")?;
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<Vec<u8>>>(2).ok().flatten(),
-                    ))
-                })
-                .context("无法查询 Antigravity 子会话关系")?;
-            for row in rows {
-                let (cid, pid, raw_blob) = row.context("解码 Antigravity 子会话索引行失败")?;
-                if !pid.is_empty() {
-                    insert_edge(pid, cid);
-                } else if let Some(blob) = raw_blob {
-                    let parsed = super::annotations::parse_raw_summary(&blob);
-                    if let Some(eff_p) = parsed.trajectory_meta.effective_parent(&cid) {
-                        insert_edge(eff_p.to_owned(), cid);
-                    }
-                }
-            }
+            insert_edge(eff_p.to_owned(), row.id.clone());
         }
-        if super::has_conversation_parents_table(&conn) {
-            let mut pstmt = conn
-                .prepare(
-                    "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-                )
-                .context("无法读取 Antigravity conversation_parents 子会话表")?;
-            let prows = pstmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .context("无法查询 Antigravity conversation_parents 关系")?;
-            for row in prows {
-                let (cid, pid) = row.context("解码 Antigravity conversation_parents 行失败")?;
-                insert_edge(pid, cid);
-            }
-        }
-        open_conn = Some(conn);
     }
-    let aux = super::load_store_auxiliary_index(paths, open_conn.as_ref());
+    for (cid, pid) in &aux.db_parent_edges {
+        insert_edge(pid.clone(), cid.clone());
+    }
     for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
             insert_edge(pid.clone(), cid.clone());
@@ -1577,112 +1532,74 @@ fn scan_store_orphan_subagents(
     let mut titles: BTreeMap<String, String> = BTreeMap::new();
     let mut sqlite_statuses: BTreeMap<String, &'static str> = BTreeMap::new();
 
-    let db_path = store.summaries_db();
-    let mut open_conn: Option<Connection> = None;
-    if db_path.is_file() {
-        let conn = Connection::open_with_flags(
-            &db_path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
+    let aux = super::load_store_auxiliary_index_checked(store)
         .context("无法打开 Antigravity 索引数据库扫描孤立子会话")?;
-        if super::has_conversation_parents_table(&conn) {
-            let mut stmt = conn.prepare(
-                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                let (cid, pid) = row?;
-                if !pid.is_empty() && cid != pid && uuid::Uuid::parse_str(&cid).is_ok() {
-                    parent_sets.entry(cid).or_default().insert(pid);
-                }
-            }
+    for (cid, pid) in &aux.db_parent_edges {
+        if !pid.is_empty() && cid != pid && uuid::Uuid::parse_str(cid).is_ok() {
+            parent_sets
+                .entry(cid.clone())
+                .or_default()
+                .insert(pid.clone());
         }
-        let (_, status_cols_sql) = super::summaries_status_sql_exprs(&conn);
-        let sql = format!(
-            "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
-             COALESCE(parent_conversation_id, ''), COALESCE(nesting_depth, 0), \
-             {status_cols_sql} FROM conversation_summaries"
-        );
-        {
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map([], |row| {
-                let (status_str, not_fully_idle, raw_blob) =
-                    super::read_summary_status_cols(row, 5)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, i64>(4)?,
-                    status_str,
-                    not_fully_idle,
-                    raw_blob,
-                ))
-            })?;
-            for row in rows {
-                let (cid, title, preview, parent, depth, status_str, not_fully_idle, raw_blob) =
-                    row?;
-                if uuid::Uuid::parse_str(&cid).is_err() {
-                    continue;
-                }
-                let (parsed_raw, st) = super::parse_summary_status_and_raw(
-                    &status_str,
-                    not_fully_idle,
-                    raw_blob.as_deref(),
-                );
-                if let Some(st) = st {
-                    sqlite_statuses.insert(cid.clone(), st);
-                }
-                let display = parsed_raw
-                    .as_ref()
-                    .and_then(|r| r.annotations.title.as_deref())
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| {
-                        if !title.trim().is_empty() {
-                            title.trim().to_owned()
-                        } else if !preview.trim().is_empty() {
-                            preview.trim().chars().take(80).collect()
-                        } else {
-                            String::new()
-                        }
-                    });
-                if !display.is_empty() {
-                    titles.insert(cid.clone(), display);
-                }
-                if let Some(rid) = parsed_raw
-                    .as_ref()
-                    .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
-                    .filter(|r| !r.is_empty() && *r != cid && uuid::Uuid::parse_str(r).is_ok())
-                {
-                    root_ids.insert(cid.clone(), rid.to_owned());
-                }
-                if !parent.is_empty() && parent != cid {
-                    parent_sets.entry(cid).or_default().insert(parent);
-                } else if let Some(pid) = parsed_raw
-                    .as_ref()
-                    .and_then(|r| r.trajectory_meta.effective_parent(&cid))
-                {
-                    parent_sets
-                        .entry(cid.clone())
-                        .or_default()
-                        .insert(pid.to_owned());
-                } else if depth > 0
-                    || parsed_raw
-                        .as_ref()
-                        .is_some_and(|r| r.trajectory_meta.is_subagent(&cid))
-                {
-                    parent_sets.entry(cid).or_default();
-                }
-            }
-        }
-        open_conn = Some(conn);
     }
-
-    let aux = super::load_store_auxiliary_index(store, open_conn.as_ref());
+    for row in &aux.summary_rows {
+        let cid = &row.id;
+        if uuid::Uuid::parse_str(cid).is_err() {
+            continue;
+        }
+        if let Some(st) = row.sqlite_status {
+            sqlite_statuses.insert(cid.clone(), st);
+        }
+        let display = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.annotations.title.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                if !row.title.trim().is_empty() {
+                    row.title.trim().to_owned()
+                } else if !row.preview.trim().is_empty() {
+                    row.preview.trim().chars().take(80).collect()
+                } else {
+                    String::new()
+                }
+            });
+        if !display.is_empty() {
+            titles.insert(cid.clone(), display);
+        }
+        if let Some(rid) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
+            .filter(|r| !r.is_empty() && *r != cid && uuid::Uuid::parse_str(r).is_ok())
+        {
+            root_ids.insert(cid.clone(), rid.to_owned());
+        }
+        if !row.parent_conversation_id.is_empty() && row.parent_conversation_id != *cid {
+            parent_sets
+                .entry(cid.clone())
+                .or_default()
+                .insert(row.parent_conversation_id.clone());
+        } else if let Some(pid) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.effective_parent(cid))
+        {
+            parent_sets
+                .entry(cid.clone())
+                .or_default()
+                .insert(pid.to_owned());
+        } else if row.nesting_depth > 0
+            || row
+                .parsed_raw
+                .as_ref()
+                .is_some_and(|r| r.trajectory_meta.is_subagent(cid))
+        {
+            parent_sets.entry(cid.clone()).or_default();
+        }
+    }
     for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
             parent_sets

@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+enum ProcessRowLayoutMetrics {
+    static let compactRowHeight: CGFloat = 30
+    static let thoughtDisclosureHeaderHeight: CGFloat = 32
+    static let collapsedGroupRowHeight: CGFloat = 34
+}
+
 @MainActor
 private final class CapsulePillBoxNSView: NSView {
     override func layout() {
@@ -453,7 +459,7 @@ extension ConversationRowCellView {
             chev.widthAnchor.constraint(equalToConstant: 16),
             chev.heightAnchor.constraint(equalToConstant: 16),
             header.widthAnchor.constraint(equalToConstant: width),
-            header.heightAnchor.constraint(equalToConstant: 32),
+            header.heightAnchor.constraint(equalToConstant: ProcessRowLayoutMetrics.thoughtDisclosureHeaderHeight),
             hStack.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 4),
             hStack.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -4),
             hStack.centerYAnchor.constraint(equalTo: header.centerYAnchor),
@@ -626,7 +632,7 @@ extension ConversationRowCellView {
 
         NSLayoutConstraint.activate([
             row.widthAnchor.constraint(equalToConstant: width),
-            row.heightAnchor.constraint(equalToConstant: 30),
+            row.heightAnchor.constraint(equalToConstant: ProcessRowLayoutMetrics.compactRowHeight),
             hStack.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: open ? 6 : 0),
             hStack.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -8),
             hStack.centerYAnchor.constraint(equalTo: row.centerYAnchor),
@@ -801,7 +807,7 @@ extension ConversationRowCellView {
                 chev.widthAnchor.constraint(equalToConstant: 16),
                 chev.heightAnchor.constraint(equalToConstant: 16),
                 header.widthAnchor.constraint(equalToConstant: innerW),
-                header.heightAnchor.constraint(equalToConstant: 30),
+                header.heightAnchor.constraint(equalToConstant: ProcessRowLayoutMetrics.compactRowHeight),
                 hStack.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 4),
                 hStack.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -4),
                 hStack.centerYAnchor.constraint(equalTo: header.centerYAnchor),

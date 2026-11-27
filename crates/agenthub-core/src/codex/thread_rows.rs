@@ -284,7 +284,7 @@ fn format_timestamp(value: i64, tz: &jiff::tz::TimeZone) -> Option<String> {
         .map(|ts| ts.display_with_offset(tz.to_offset(ts)).to_string())
 }
 
-pub(crate) use crate::archive::{first_existing, table_columns};
+pub(crate) use crate::{archive::first_existing, db::table_columns};
 
 pub(crate) fn coalesce_non_empty(columns: &HashSet<String>, names: &[&str]) -> String {
     let existing: Vec<&str> = names

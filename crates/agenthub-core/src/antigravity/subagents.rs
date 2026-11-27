@@ -1,6 +1,7 @@
 //! Parent-bound, read-only access and inline enrichment for Antigravity subagent sessions.
 use anyhow::{bail, ensure, Context, Result};
-use rusqlite::{Connection, OpenFlags};
+#[cfg(test)]
+use rusqlite::Connection;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -22,12 +23,11 @@ use crate::{
 
 use super::sessions::{
     attach_storage_size, decode_file_uri, descendant_ids, evaluate_offline_tree_status_with_lock,
-    extract_transcript_spawned_subagents, has_conversation_parents_table,
-    has_primary_session_storage, inspect_conv_db_metadata, is_subtrajectory,
-    list_summaries_from_source, live_item_status, load_store_auxiliary_index,
-    make_summary_with_status, parse_summary_status_and_raw, probe_presence_locked_shared,
-    read_summary_status_cols, resolve_target_store_and_endpoint, subagent_states_by_root,
-    summaries_status_sql_exprs, valid_cascade_id, AntigravityPaths, LiveRpc,
+    extract_transcript_spawned_subagents, has_primary_session_storage, inspect_conv_db_metadata,
+    is_subtrajectory, list_summaries_from_source, live_item_status,
+    load_store_auxiliary_index_for_store, make_summary_with_status, probe_presence_locked_shared,
+    resolve_target_store_and_endpoint, subagent_states_by_root, valid_cascade_id, AntigravityPaths,
+    LiveRpc,
 };
 
 const MAX_SUBAGENT_DEPTH: usize = 32;
@@ -151,17 +151,8 @@ fn build_store_graph(
         raw_summaries: BTreeMap::new(),
     };
     let db_path = store.summaries_db();
-    let open_conn =
-        if ensure_no_symlink_under_store(&store.home, &db_path)?.is_some() && db_path.is_file() {
-            Connection::open_with_flags(
-                &db_path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .ok()
-        } else {
-            None
-        };
-    let aux = load_store_auxiliary_index(store, open_conn.as_ref());
+    let _ = ensure_no_symlink_under_store(&store.home, &db_path)?;
+    let aux = load_store_auxiliary_index_for_store(store);
     let mut fallback_root_edges: Vec<(String, String)> = Vec::new();
     for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
@@ -192,127 +183,74 @@ fn build_store_graph(
         }
     }
 
-    if let Some(conn) = &open_conn {
-        if has_conversation_parents_table(conn) {
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-            ) {
-                if let Ok(rows) =
-                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                {
-                    for (cid, pid) in rows.flatten() {
-                        graph.add_edge(pid, cid);
-                    }
-                }
+    for (cid, pid) in &aux.db_parent_edges {
+        graph.add_edge(pid.clone(), cid.clone());
+    }
+    for row in &aux.summary_rows {
+        let cid = &row.id;
+        if uuid::Uuid::parse_str(cid).is_err() {
+            continue;
+        }
+        if !row.parent_conversation_id.is_empty() {
+            graph.add_edge(row.parent_conversation_id.clone(), cid.clone());
+        } else if let Some(pid) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.parent_conversation_id.as_deref())
+            .filter(|p| !p.is_empty() && *p != cid)
+        {
+            graph.add_edge(pid.to_owned(), cid.clone());
+        } else if let Some(rid) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
+            .filter(|r| !r.is_empty() && *r != cid)
+        {
+            fallback_root_edges.push((rid.to_owned(), cid.clone()));
+        }
+        if let Some(s) = row.sqlite_status {
+            graph.sqlite_statuses.insert(cid.clone(), s);
+        }
+        let node = graph.nodes.entry(cid.clone()).or_default();
+        if let Some(raw_title) = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.annotations.title.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            node.title = Some(raw_title.to_owned());
+        } else if node.title.is_none() {
+            node.title = super::sessions::prompt::clean_antigravity_subagent_title(&row.title)
+                .or_else(|| {
+                    let an = row.agent_name.trim();
+                    (!an.is_empty()).then(|| an.to_owned())
+                })
+                .or_else(|| {
+                    super::sessions::prompt::clean_antigravity_subagent_title(&row.preview)
+                });
+        }
+        if let Ok(uris) = serde_json::from_str::<Vec<String>>(&row.workspace_uris) {
+            if let Some(first) = uris.into_iter().next() {
+                node.cwd = decode_file_uri(&first);
             }
         }
-        let (cols, status_cols_sql) = summaries_status_sql_exprs(conn);
-        let agent_name_expr = if cols.contains("agent_name") {
-            "COALESCE(agent_name, '')"
-        } else {
-            "''"
-        };
-        let sql = format!(
-            "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
-             COALESCE(last_modified_time, ''), COALESCE(workspace_uris, ''), \
-             COALESCE(parent_conversation_id, ''), {status_cols_sql}, {agent_name_expr} \
-             FROM conversation_summaries"
-        );
-        if let Ok(mut stmt) = conn.prepare(&sql) {
-            if let Ok(rows) = stmt.query_map([], |r| {
-                let (status_str, not_idle, raw_blob) = read_summary_status_cols(r, 6)?;
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    status_str,
-                    not_idle,
-                    raw_blob,
-                    r.get::<_, String>(9)?,
-                ))
+        if node.cwd.is_empty() {
+            if let Some(u) = row.parsed_raw.as_ref().and_then(|r| {
+                r.workspaces
+                    .first()
+                    .or_else(|| r.trajectory_meta.workspace_uris.first())
             }) {
-                for (
-                    cid,
-                    title,
-                    preview,
-                    modified,
-                    ws_raw,
-                    parent,
-                    status_str,
-                    not_idle,
-                    raw_blob,
-                    agent_name,
-                ) in rows.flatten()
-                {
-                    if uuid::Uuid::parse_str(&cid).is_err() {
-                        continue;
-                    }
-                    let (parsed_raw, st) =
-                        parse_summary_status_and_raw(&status_str, not_idle, raw_blob.as_deref());
-                    if !parent.is_empty() {
-                        graph.add_edge(parent, cid.clone());
-                    } else if let Some(pid) = parsed_raw
-                        .as_ref()
-                        .and_then(|r| r.trajectory_meta.parent_conversation_id.as_deref())
-                        .filter(|p| !p.is_empty() && *p != cid)
-                    {
-                        graph.add_edge(pid.to_owned(), cid.clone());
-                    } else if let Some(rid) = parsed_raw
-                        .as_ref()
-                        .and_then(|r| r.trajectory_meta.root_conversation_id.as_deref())
-                        .filter(|r| !r.is_empty() && *r != cid)
-                    {
-                        fallback_root_edges.push((rid.to_owned(), cid.clone()));
-                    }
-                    if let Some(s) = st {
-                        graph.sqlite_statuses.insert(cid.clone(), s);
-                    }
-                    let node = graph.nodes.entry(cid.clone()).or_default();
-                    if let Some(raw_title) = parsed_raw
-                        .as_ref()
-                        .and_then(|r| r.annotations.title.as_deref())
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        node.title = Some(raw_title.to_owned());
-                    } else if node.title.is_none() {
-                        node.title =
-                            super::sessions::prompt::clean_antigravity_subagent_title(&title)
-                                .or_else(|| {
-                                    let an = agent_name.trim();
-                                    (!an.is_empty()).then(|| an.to_owned())
-                                })
-                                .or_else(|| {
-                                    super::sessions::prompt::clean_antigravity_subagent_title(
-                                        &preview,
-                                    )
-                                });
-                    }
-                    if let Ok(uris) = serde_json::from_str::<Vec<String>>(&ws_raw) {
-                        if let Some(first) = uris.into_iter().next() {
-                            node.cwd = decode_file_uri(&first);
-                        }
-                    }
-                    if node.cwd.is_empty() {
-                        if let Some(u) = parsed_raw.as_ref().and_then(|r| {
-                            r.workspaces
-                                .first()
-                                .or_else(|| r.trajectory_meta.workspace_uris.first())
-                        }) {
-                            node.cwd = decode_file_uri(u);
-                        }
-                    }
-                    if !modified.trim().is_empty() && !modified.trim().starts_with("0001-") {
-                        node.updated_at = Some(modified);
-                    }
-                    if let Some(pr) = parsed_raw {
-                        graph.raw_summaries.insert(cid, pr);
-                    }
-                }
+                node.cwd = decode_file_uri(u);
             }
+        }
+        if !row.last_modified_time.trim().is_empty()
+            && !row.last_modified_time.trim().starts_with("0001-")
+        {
+            node.updated_at = Some(row.last_modified_time.clone());
+        }
+        if let Some(pr) = &row.parsed_raw {
+            graph.raw_summaries.insert(cid.clone(), pr.clone());
         }
     }
 

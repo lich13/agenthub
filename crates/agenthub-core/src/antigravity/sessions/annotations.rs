@@ -197,34 +197,53 @@ pub(super) fn write_annotation_overlay(
         output.push('\n');
     }
 
-    let existing_perms = fs::symlink_metadata(&path)
-        .ok()
-        .filter(|meta| meta.is_file() && !meta.file_type().is_symlink())
-        .map(|meta| meta.permissions());
-    let tmp = paths
-        .annotations_dir()
-        .join(format!(".agenthub-ann-{}.tmp", uuid::Uuid::new_v4()));
-    let write_res = (|| -> Result<()> {
-        let mut opts = OpenOptions::new();
-        opts.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
+    let existing_meta = match fs::symlink_metadata(&path) {
+        Ok(meta) => {
+            ensure!(
+                meta.is_file() && !meta.file_type().is_symlink(),
+                "拒绝覆盖非普通文件注解"
+            );
+            Some(meta)
         }
-        let mut file = opts.open(&tmp)?;
-        if let Some(perms) = existing_perms {
-            file.set_permissions(perms)?;
-        }
-        file.write_all(output.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&tmp, &path)?;
-        Ok(())
-    })();
-    if write_res.is_err() {
-        let _ = fs::remove_file(&tmp);
-    }
-    write_res?;
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(err.into()),
+    };
+    let existing_perms = existing_meta.as_ref().map(fs::Metadata::permissions);
+    session_delete::atomic_replace_file(
+        &path,
+        "agenthub-ann",
+        None,
+        existing_perms,
+        |file| {
+            file.write_all(output.as_bytes())?;
+            Ok(())
+        },
+        || {
+            match fs::symlink_metadata(&path) {
+                Ok(after) => {
+                    ensure!(
+                        after.is_file() && !after.file_type().is_symlink(),
+                        "拒绝覆盖非普通文件注解"
+                    );
+                    if let Some(before) = &existing_meta {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::MetadataExt;
+                            ensure!(
+                                (before.dev(), before.ino()) == (after.dev(), after.ino()),
+                                "注解文件在写入前已被替换，请重试"
+                            );
+                        }
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    ensure!(existing_meta.is_none(), "注解文件在写入前已被移除，请重试");
+                }
+                Err(err) => return Err(err.into()),
+            }
+            Ok(())
+        },
+    )?;
     Ok(())
 }
 

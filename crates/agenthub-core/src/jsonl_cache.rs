@@ -42,7 +42,7 @@ pub(crate) fn open_regular(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn anchor(file: &mut File, offset: u64) -> Result<[u8; 32]> {
+pub(crate) fn file_anchor(file: &mut File, offset: u64) -> std::io::Result<[u8; 32]> {
     let mut digest = Sha256::new();
     let mut bytes = vec![0; offset.min(4096) as usize];
     file.seek(SeekFrom::Start(0))?;
@@ -52,6 +52,10 @@ fn anchor(file: &mut File, offset: u64) -> Result<[u8; 32]> {
     file.read_exact(&mut bytes)?;
     digest.update(&bytes);
     Ok(digest.finalize().into())
+}
+
+fn anchor(file: &mut File, offset: u64) -> Result<[u8; 32]> {
+    Ok(file_anchor(file, offset)?)
 }
 
 pub(crate) struct ReadInfo<'a> {

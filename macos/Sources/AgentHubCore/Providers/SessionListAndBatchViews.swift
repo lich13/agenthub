@@ -512,8 +512,6 @@ final class AgentHubTaskMenuPresenter {
 
     private init() {}
 
-    var isPresented: Bool { activePanel != nil }
-
     func dismiss(restoreFocus: Bool = false) {
         if let m = mouseDownMonitor { NSEvent.removeMonitor(m); mouseDownMonitor = nil }
         if let s = scrollMonitor { NSEvent.removeMonitor(s); scrollMonitor = nil }

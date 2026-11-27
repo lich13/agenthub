@@ -8,6 +8,8 @@ use agenthub_core::{
 use serde_json::Value;
 use std::sync::{Arc, Mutex, RwLock};
 
+pub(crate) const ADMIN_ID: &str = "ssh-administrator";
+
 #[cfg(test)]
 pub(crate) struct TestSandboxDir(pub(crate) std::path::PathBuf);
 

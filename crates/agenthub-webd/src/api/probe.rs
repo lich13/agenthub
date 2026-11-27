@@ -193,11 +193,3 @@ fn probe_settings_value_for_config(state: &AppState, config: &Config) -> anyhow:
         .probe_settings_view(secret_state)?;
     serde_json::to_value(plan).map_err(anyhow::Error::from)
 }
-
-pub(crate) async fn load_probe_threads(
-    state: &AppState,
-    status: &'static str,
-    limit: usize,
-) -> anyhow::Result<Vec<agenthub_core::codex::ThreadSummary>> {
-    probe_service::probe_threads_for_status_with_paths(&state.codex_paths(), status, limit)
-}

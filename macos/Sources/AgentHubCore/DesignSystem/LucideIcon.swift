@@ -8,8 +8,6 @@ enum LucideIconName: String, CaseIterable, Sendable {
     case arrowDown = "ArrowDown"
     case arrowLeft = "ArrowLeft"
     case arrowUp = "ArrowUp"
-    case atSign = "AtSign"
-    case bell = "Bell"
     case blocks = "Blocks"
     case bookOpen = "BookOpen"
     case bot = "Bot"
@@ -17,43 +15,36 @@ enum LucideIconName: String, CaseIterable, Sendable {
     case check = "Check"
     case checkCircle2 = "CheckCircle2"
     case chevronDown = "ChevronDown"
-    case chevronLeft = "ChevronLeft"
     case chevronRight = "ChevronRight"
     case cloud = "Cloud"
     case copy = "Copy"
-    case database = "Database"
     case download = "Download"
     case externalLink = "ExternalLink"
     case file = "File"
     case folderGit2 = "FolderGit2"
     case folderOpen = "FolderOpen"
-    case folderPlus = "FolderPlus"
     case gitBranch = "GitBranch"
     case gitFork = "GitFork"
     case github = "Github"
     case imageOff = "ImageOff"
     case lockKeyholeOpen = "LockKeyholeOpen"
-    case menu = "Menu"
     case monitor = "Monitor"
     case moon = "Moon"
     case moreHorizontal = "MoreHorizontal"
     case panelLeftClose = "PanelLeftClose"
     case panelLeftOpen = "PanelLeftOpen"
-    case paperclip = "Paperclip"
     case pencil = "Pencil"
     case plus = "Plus"
     case refreshCw = "RefreshCw"
     case search = "Search"
     case slidersHorizontal = "SlidersHorizontal"
     case sparkles = "Sparkles"
-    case square = "Square"
     case sun = "Sun"
     case target = "Target"
     case terminal = "Terminal"
     case terminalSquare = "TerminalSquare"
     case trash2 = "Trash2"
     case triangleAlert = "TriangleAlert"
-    case wandSparkles = "WandSparkles"
     case x = "X"
 }
 
@@ -80,10 +71,6 @@ enum LucideVectorCatalog {
             return [.path("m12 19-7-7 7-7"), .path("M19 12H5")]
         case .arrowUp:
             return [.path("m5 12 7-7 7 7"), .path("M12 19V5")]
-        case .atSign:
-            return [.circle(cx: 12, cy: 12, r: 4), .path("M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8")]
-        case .bell:
-            return [.path("M10.268 21a2 2 0 0 0 3.464 0"), .path("M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326")]
         case .blocks:
             return [.path("M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"), .rect(x: 14, y: 2, width: 8, height: 8, rx: 1, ry: 1)]
         case .bookOpen:
@@ -98,16 +85,12 @@ enum LucideVectorCatalog {
             return [.circle(cx: 12, cy: 12, r: 10), .path("m9 12 2 2 4-4")]
         case .chevronDown:
             return [.path("m6 9 6 6 6-6")]
-        case .chevronLeft:
-            return [.path("m15 18-6-6 6-6")]
         case .chevronRight:
             return [.path("m9 18 6-6-6-6")]
         case .cloud:
             return [.path("M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z")]
         case .copy:
             return [.rect(x: 8, y: 8, width: 14, height: 14, rx: 2, ry: 2), .path("M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2")]
-        case .database:
-            return [.ellipse(cx: 12, cy: 5, rx: 9, ry: 3), .path("M3 5V19A9 3 0 0 0 21 19V5"), .path("M3 12A9 3 0 0 0 21 12")]
         case .download:
             return [.path("M12 15V3"), .path("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"), .path("m7 10 5 5 5-5")]
         case .externalLink:
@@ -118,8 +101,6 @@ enum LucideVectorCatalog {
             return [.path("M18 19a5 5 0 0 1-5-5v8"), .path("M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2v5"), .circle(cx: 13, cy: 12, r: 2), .circle(cx: 20, cy: 19, r: 2)]
         case .folderOpen:
             return [.path("m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2")]
-        case .folderPlus:
-            return [.path("M12 10v6"), .path("M9 13h6"), .path("M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z")]
         case .gitBranch:
             return [.path("M15 6a9 9 0 0 0-9 9V3"), .circle(cx: 18, cy: 6, r: 3), .circle(cx: 6, cy: 18, r: 3)]
         case .gitFork:
@@ -130,8 +111,6 @@ enum LucideVectorCatalog {
             return [.line(x1: 2, y1: 2, x2: 22, y2: 22), .path("M10.41 10.41a2 2 0 1 1-2.83-2.83"), .line(x1: 13.5, y1: 13.5, x2: 6, y2: 21), .line(x1: 18, y1: 12, x2: 21, y2: 15), .path("M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59"), .path("M21 15V5a2 2 0 0 0-2-2H9")]
         case .lockKeyholeOpen:
             return [.circle(cx: 12, cy: 16, r: 1), .rect(x: 3, y: 10, width: 18, height: 12, rx: 2, ry: 2), .path("M7 10V7a5 5 0 0 1 9.33-2.5")]
-        case .menu:
-            return [.path("M4 5h16"), .path("M4 12h16"), .path("M4 19h16")]
         case .monitor:
             return [.rect(x: 2, y: 3, width: 20, height: 14, rx: 2, ry: 2), .line(x1: 8, y1: 21, x2: 16, y2: 21), .line(x1: 12, y1: 17, x2: 12, y2: 21)]
         case .moon:
@@ -142,8 +121,6 @@ enum LucideVectorCatalog {
             return [.rect(x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2), .path("M9 3v18"), .path("m16 15-3-3 3-3")]
         case .panelLeftOpen:
             return [.rect(x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2), .path("M9 3v18"), .path("m14 9 3 3-3 3")]
-        case .paperclip:
-            return [.path("m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551")]
         case .pencil:
             return [.path("M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"), .path("m15 5 4 4")]
         case .plus:
@@ -156,8 +133,6 @@ enum LucideVectorCatalog {
             return [.path("M10 5H3"), .path("M12 19H3"), .path("M14 3v4"), .path("M16 17v4"), .path("M21 12h-9"), .path("M21 19h-5"), .path("M21 5h-7"), .path("M8 10v4"), .path("M8 12H3")]
         case .sparkles:
             return [.path("M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z"), .path("M20 2v4"), .path("M22 4h-4"), .circle(cx: 4, cy: 20, r: 2)]
-        case .square:
-            return [.rect(x: 3, y: 3, width: 18, height: 18, rx: 2, ry: 2)]
         case .sun:
             return [.circle(cx: 12, cy: 12, r: 4), .path("M12 2v2"), .path("M12 20v2"), .path("m4.93 4.93 1.41 1.41"), .path("m17.66 17.66 1.41 1.41"), .path("M2 12h2"), .path("M20 12h2"), .path("m6.34 17.66-1.41 1.41"), .path("m19.07 4.93-1.41 1.41")]
         case .target:
@@ -170,8 +145,6 @@ enum LucideVectorCatalog {
             return [.path("M10 11v6"), .path("M14 11v6"), .path("M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"), .path("M3 6h18"), .path("M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2")]
         case .triangleAlert:
             return [.path("m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"), .path("M12 9v4"), .path("M12 17h.01")]
-        case .wandSparkles:
-            return [.path("m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"), .path("m14 7 3 3"), .path("M5 6v4"), .path("M19 14v4"), .path("M10 2v2"), .path("M7 8H3"), .path("M21 16h-4"), .path("M11 3H9")]
         case .x:
             return [.path("M18 6 6 18"), .path("m6 6 12 12")]
         }

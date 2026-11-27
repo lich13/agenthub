@@ -47,15 +47,61 @@ pub(super) async fn handle_probe_remove_hooks(state: AppState, _args: Value) -> 
 }
 
 pub(super) async fn handle_cleanup_unified_dry_run(state: AppState, _args: Value) -> ApiResponse {
-    unified_cleanup_dry_run(state).await
+    let paths = state.unified_cleanup_paths()?;
+    let platform = state.platform().clone();
+    ok(agenthub_core::read_tasks::spawn_blocking(move || {
+        agenthub_core::services::use_cases::AgentHubUseCases::new(&platform)
+            .cleanup()
+            .unified_dry_run(&paths)
+    })
+    .await
+    .map_err(anyhow::Error::from)??)
 }
 
 pub(super) async fn handle_cleanup_unified_execute(state: AppState, args: Value) -> ApiResponse {
-    unified_cleanup_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
+    let request: agenthub_core::services::cleanup::UnifiedCleanupExecuteRequest =
+        rpc_wrapped_payload(&args, &["request"])?;
+    let paths = state.unified_cleanup_paths()?;
+    ok(
+        agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let (result, deleted_streams) =
+                agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+                    .cleanup()
+                    .unified_execute_with_deleted_streams(&paths, request)?;
+            let _ = state
+                .db
+                .prune_cursors_after_unified_cleanup(&deleted_streams);
+            state.db.record_audit(
+                Some(crate::state::ADMIN_ID),
+                "unified_cleanup.execute",
+                Some("unified_cleanup"),
+                None,
+                serde_json::json!({
+                    "deleted_count": result.deleted_count,
+                    "deleted_bytes": result.deleted_bytes,
+                    "failed_count": result.failed_count,
+                }),
+            )?;
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
 }
 
 pub(super) async fn handle_cleanup_hidden_dry_run(state: AppState, args: Value) -> ApiResponse {
-    hidden_threads_delete_dry_run(state, rpc_wrapped_payload(&args, &["request"])?).await
+    let request: agenthub_core::archive::hidden_scan::HiddenScanRequest =
+        rpc_wrapped_payload(&args, &["request"])?;
+    ok(
+        agenthub_core::services::use_cases::AgentHubUseCases::new(state.platform())
+            .cleanup()
+            .scan_hidden(
+                state.codex_paths(),
+                crate::state::ADMIN_ID.to_string(),
+                request,
+            )
+            .await?,
+    )
 }
 
 pub(super) async fn handle_updates_status(state: AppState, _args: Value) -> ApiResponse {

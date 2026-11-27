@@ -177,14 +177,14 @@ fn background_turns_do_not_replace_primary_state_and_corrupt_records_are_unknown
 fn append_cache_ignores_partial_tail_and_resets_on_truncate_or_replace() {
     let f = Fixture::new();
     let path = f.1.path.join("events.jsonl");
-    let cache = TurnCache(Mutex::new(VecDeque::new()));
+    let cache = TurnCache(crate::lru::ByteBoundedLru::new(256, u64::MAX));
     f.events(&f.start());
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Running);
-    let offset = cache.0.lock().unwrap()[0].offset;
+    let offset = cache.0.with_entries(|entries, _| entries[0].offset);
     let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
     file.write_all(&END.as_bytes()[..20]).unwrap();
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Running);
-    assert_eq!(cache.0.lock().unwrap()[0].offset, offset);
+    assert_eq!(cache.0.with_entries(|entries, _| entries[0].offset), offset);
     file.write_all(&END.as_bytes()[20..]).unwrap();
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Ended);
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Ended);
@@ -201,7 +201,7 @@ fn append_cache_ignores_partial_tail_and_resets_on_truncate_or_replace() {
 #[test]
 fn bounded_reads_resume_without_poisoning_a_line_at_the_budget_boundary() {
     let f = Fixture::new();
-    let cache = TurnCache(Mutex::new(VecDeque::new()));
+    let cache = TurnCache(crate::lru::ByteBoundedLru::new(256, u64::MAX));
     let padding = format!(
         "{{\"type\":\"other\",\"text\":\"{}\"}}\n",
         "x".repeat(60_000)
@@ -210,7 +210,7 @@ fn bounded_reads_resume_without_poisoning_a_line_at_the_budget_boundary() {
     let path = f.1.path.join("events.jsonl");
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Unknown);
     assert_eq!(cache.read(&path, &f.1.id).unwrap(), Phase::Ended);
-    assert!(cache.0.lock().unwrap()[0].caught_up);
+    assert!(cache.0.with_entries(|entries, _| entries[0].caught_up));
 }
 
 #[test]

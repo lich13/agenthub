@@ -1,10 +1,15 @@
 use super::*;
 use agenthub_core::{
+    claude::{ClaudeDeleteRequest, ClaudeDetailRequest},
+    grok::GrokDeleteRequest,
+    native_probe::NativeProvider,
     platform::PlatformPaths,
     provider_sessions::{
         ProviderDetailRequest, ProviderListRequest, ProviderRenameRequest, ProviderSessionRequest,
     },
-    services::use_cases::AgentHubUseCases,
+    services::use_cases::{
+        AgentHubUseCases, ClaudeRenameRequest, GrokRenameRequest, PageWindowOptions,
+    },
 };
 
 async fn run_blocking_provider<T, F>(state: AppState, work: F) -> ApiResponse
@@ -34,25 +39,61 @@ pub(super) async fn handle_grok_list(state: AppState, args: Value) -> ApiRespons
     } else {
         rpc_payload(&args)?
     };
-    grok_list(state, query).await
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p)
+            .grok()?
+            .list(query.limit.unwrap_or(100), query.q.as_deref())
+    })
+    .await
 }
 
 pub(super) async fn handle_grok_detail(state: AppState, args: Value) -> ApiResponse {
     let id = rpc_required_string(&args, "id")?;
-    let query: agenthub_core::services::use_cases::PageWindowOptions = rpc_payload(&args)?;
-    grok_detail(state, id, query).await
+    let query: PageWindowOptions = rpc_payload(&args)?;
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p)
+            .grok()?
+            .page(&id, query.limit, query.before.as_deref())
+    })
+    .await
 }
 
 pub(super) async fn handle_grok_rename(state: AppState, args: Value) -> ApiResponse {
-    grok_rename(state, rpc_payload(&args)?).await
+    let request: GrokRenameRequest = rpc_payload(&args)?;
+    ok(AgentHubUseCases::new(state.platform())
+        .grok()?
+        .rename(&request.id, &request.title)
+        .await?)
 }
 
 pub(super) async fn handle_grok_delete_preview(state: AppState, args: Value) -> ApiResponse {
-    grok_delete_preview(state, rpc_required_string(&args, "id")?).await
+    let id = rpc_required_string(&args, "id")?;
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p).grok()?.delete_preview(&id)
+    })
+    .await
 }
 
 pub(super) async fn handle_grok_delete_execute(state: AppState, args: Value) -> ApiResponse {
-    grok_delete_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
+    let request: GrokDeleteRequest = rpc_wrapped_payload(&args, &["request"])?;
+    let platform = state.platform().clone();
+    let db = state.db.clone();
+    ok(
+        agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let result = AgentHubUseCases::new(&platform)
+                .grok()?
+                .delete_execute(request)?;
+            if result.deleted && result.residuals.is_empty() {
+                let _ = db.delete_native_probe_stream_cursors(
+                    NativeProvider::Grok,
+                    std::slice::from_ref(&result.id),
+                );
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
 }
 
 pub(super) async fn handle_claude_list(state: AppState, args: Value) -> ApiResponse {
@@ -61,24 +102,62 @@ pub(super) async fn handle_claude_list(state: AppState, args: Value) -> ApiRespo
     } else {
         rpc_payload(&args)?
     };
-    claude_list(state, query).await
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p)
+            .claude()?
+            .list(query.limit.unwrap_or(100), query.q.as_deref())
+    })
+    .await
 }
 
 pub(super) async fn handle_claude_detail(state: AppState, args: Value) -> ApiResponse {
-    claude_detail(state, rpc_payload(&args)?).await
+    let request: ClaudeDetailRequest = rpc_payload(&args)?;
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p).claude()?.detail(request)
+    })
+    .await
 }
 
 pub(super) async fn handle_claude_rename(state: AppState, args: Value) -> ApiResponse {
-    claude_rename(state, rpc_payload(&args)?).await
+    let request: ClaudeRenameRequest = rpc_payload(&args)?;
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p)
+            .claude()?
+            .rename(&request.session_key, &request.title)
+    })
+    .await
 }
 
 pub(super) async fn handle_claude_delete_preview(state: AppState, args: Value) -> ApiResponse {
     let session_key = rpc_required_string(&args, "sessionKey")?;
-    claude_delete_preview(state, session_key).await
+    run_blocking_provider(state, move |p| {
+        AgentHubUseCases::new(p)
+            .claude()?
+            .delete_preview(&session_key)
+    })
+    .await
 }
 
 pub(super) async fn handle_claude_delete_execute(state: AppState, args: Value) -> ApiResponse {
-    claude_delete_execute(state, rpc_wrapped_payload(&args, &["request"])?).await
+    let request: ClaudeDeleteRequest = rpc_wrapped_payload(&args, &["request"])?;
+    let platform = state.platform().clone();
+    let db = state.db.clone();
+    ok(
+        agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
+            let result = AgentHubUseCases::new(&platform)
+                .claude()?
+                .delete_execute(request)?;
+            if result.deleted && result.residuals.is_empty() {
+                let _ = db.delete_native_probe_stream_cursors(
+                    NativeProvider::Claude,
+                    std::slice::from_ref(&result.session_key),
+                );
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+    )
 }
 
 pub(super) async fn handle_antigravity_list(state: AppState, args: Value) -> ApiResponse {

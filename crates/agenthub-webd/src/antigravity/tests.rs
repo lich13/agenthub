@@ -1,27 +1,19 @@
 use super::*;
-use axum::{http::StatusCode, response::IntoResponse, routing::post, Router};
+use crate::api::test_support::{TestHttpResponse, TestHttpRouter};
+use reqwest::StatusCode;
 #[tokio::test]
 async fn transport_only_reads_allowlisted_methods_and_refuses_redirects() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new()
-        .route(
-            &format!("{SERVICE}GetAllCascadeTrajectories"),
-            post(|| async { axum::Json(json!({"trajectorySummaries":{}})) }),
-        )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectory"),
-            post(|| async {
-                (
-                    StatusCode::FOUND,
-                    [("location", "http://example.invalid/redirect")],
-                )
-                    .into_response()
-            }),
-        );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let router = TestHttpRouter::new()
+        .post(format!("{SERVICE}GetAllCascadeTrajectories"), |_| async {
+            TestHttpResponse::ok_json(json!({"trajectorySummaries":{}}))
+        })
+        .post(format!("{SERVICE}GetCascadeTrajectory"), |_| async {
+            TestHttpResponse::status_only(StatusCode::FOUND)
+                .with_header("location", "http://example.invalid/redirect")
+        });
+    let task = router.serve_on(listener).await;
     let client = client().unwrap();
     assert!(query(
         &client,
@@ -71,11 +63,11 @@ async fn scan_paginates_steps_and_suppresses_completion_while_subtrajectory_runs
     let sub_id = "22222222-2222-4222-8222-222222222222";
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new()
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectory"),
-            post(move || async move {
-                axum::Json(json!({
+    let router = TestHttpRouter::new()
+        .post(
+            format!("{SERVICE}GetCascadeTrajectory"),
+            move |_| async move {
+                TestHttpResponse::ok_json(json!({
                     "status": "CASCADE_RUN_STATUS_IDLE",
                     "numTotalSteps": 2,
                     "trajectory": {
@@ -97,13 +89,14 @@ async fn scan_paginates_steps_and_suppresses_completion_while_subtrajectory_runs
                         ]
                     }
                 }))
-            }),
+            },
         )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectorySteps"),
-            post(|axum::Json(body): axum::Json<Value>| async move {
+        .post(
+            format!("{SERVICE}GetCascadeTrajectorySteps"),
+            |req| async move {
+                let body = req.json();
                 assert_eq!(body["stepOffset"], json!(1));
-                axum::Json(json!({
+                TestHttpResponse::ok_json(json!({
                     "steps": [
                         {
                             "type": "CORTEX_STEP_TYPE_PLANNER_RESPONSE",
@@ -117,11 +110,9 @@ async fn scan_paginates_steps_and_suppresses_completion_while_subtrajectory_runs
                         }
                     ]
                 }))
-            }),
+            },
         );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let task = router.serve_on(listener).await;
     let http = client().unwrap();
 
     // 1. Subagent is RUNNING -> root scan skips subagent as stream AND suppresses root completion
@@ -174,17 +165,17 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
     let waiting_id = "44444444-4444-4444-8444-444444444444";
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new()
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectory"),
-            post(|| async { StatusCode::PAYLOAD_TOO_LARGE.into_response() }),
-        )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectorySteps"),
-            post(move |axum::Json(body): axum::Json<Value>| async move {
+    let router = TestHttpRouter::new()
+        .post(format!("{SERVICE}GetCascadeTrajectory"), |_| async {
+            TestHttpResponse::status_only(StatusCode::PAYLOAD_TOO_LARGE)
+        })
+        .post(
+            format!("{SERVICE}GetCascadeTrajectorySteps"),
+            move |req| async move {
+                let body = req.json();
                 if body["cascadeId"] == json!(waiting_id) {
                     assert_eq!(body["stepOffset"], json!(1800));
-                    return axum::Json(json!({
+                    return TestHttpResponse::ok_json(json!({
                         "steps": [
                             {
                                 "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -203,7 +194,7 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
                     }));
                 }
                 assert_eq!(body["stepOffset"], json!(2305));
-                axum::Json(json!({
+                TestHttpResponse::ok_json(json!({
                     "steps": [
                         {
                             "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -232,17 +223,18 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
                         }
                     ]
                 }))
-            }),
+            },
         )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
-            post(move |axum::Json(body): axum::Json<Value>| async move {
+        .post(
+            format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            move |req| async move {
+                let body = req.json();
                 if body["cascadeId"] == json!(waiting_id) {
-                    return axum::Json(json!({}));
+                    return TestHttpResponse::ok_json(json!({}));
                 }
                 let off = body["executorMetadataOffset"].as_u64().unwrap_or(0);
                 if off == 0 {
-                    axum::Json(json!({
+                    TestHttpResponse::ok_json(json!({
                         "executorMetadata": [
                             {
                                 "executionId": "exec-98",
@@ -257,13 +249,11 @@ async fn long_session_scan_fetches_only_current_turn_tail_steps_without_full_tra
                         ]
                     }))
                 } else {
-                    axum::Json(json!({}))
+                    TestHttpResponse::ok_json(json!({}))
                 }
-            }),
+            },
         );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let task = router.serve_on(listener).await;
     let summaries = json!({
         "trajectorySummaries": {
             root_id: {
@@ -388,16 +378,17 @@ async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_increm
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new()
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectorySteps"),
-            post(move |axum::Json(body): axum::Json<Value>| {
+    let router = TestHttpRouter::new()
+        .post(
+            format!("{SERVICE}GetCascadeTrajectorySteps"),
+            move |req| {
                 let step_calls_handler = step_calls_handler.clone();
                 async move {
+                    let body = req.json();
                     step_calls_handler.fetch_add(1, Ordering::SeqCst);
                     let off = body["stepOffset"].as_u64().unwrap_or(0);
                     if off == 10 {
-                        axum::Json(json!({
+                        TestHttpResponse::ok_json(json!({
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -417,7 +408,7 @@ async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_increm
                             ]
                         }))
                     } else if off == 12 {
-                        axum::Json(json!({
+                        TestHttpResponse::ok_json(json!({
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -437,16 +428,17 @@ async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_increm
                             ]
                         }))
                     } else {
-                        axum::Json(json!({}))
+                        TestHttpResponse::ok_json(json!({}))
                     }
                 }
-            }),
+            },
         )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
-            post(move |axum::Json(body): axum::Json<Value>| {
+        .post(
+            format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            move |req| {
                 let meta_offsets_handler = meta_offsets_handler.clone();
                 async move {
+                    let body = req.json();
                     let off = body["executorMetadataOffset"].as_u64().unwrap_or(0);
                     meta_offsets_handler.lock().unwrap().push(off);
                     let all_four = meta_offsets_handler.lock().unwrap().len() >= 3;
@@ -463,13 +455,11 @@ async fn idle_reply_needed_stream_hits_cache_and_executor_metadatas_fetch_increm
                     } else {
                         Vec::new()
                     };
-                    axum::Json(json!({ "executorMetadata": slice }))
+                    TestHttpResponse::ok_json(json!({ "executorMetadata": slice }))
                 }
-            }),
+            },
         );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let task = router.serve_on(listener).await;
 
     let http = client().unwrap();
     let summaries_turn_1 = json!({
@@ -555,20 +545,21 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
     let port = listener.local_addr().unwrap().port();
     let fail_children = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let fail_response = fail_children.clone();
-    let router = Router::new()
-        .route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+    let router = TestHttpRouter::new()
+        .post(format!("{SERVICE}GetCascadeTrajectory"), move |req| {
             let fail = fail_response.clone();
             async move {
                 if fail.load(std::sync::atomic::Ordering::Relaxed) {
-                    return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    return TestHttpResponse::status_only(StatusCode::SERVICE_UNAVAILABLE);
                 }
+                let body = req.json();
                 let total = if body["cascadeId"] == d1_id { 300 } else { 2 };
-                axum::Json(json!({"numTotalSteps":total,"trajectory":{"cascadeId":body["cascadeId"],"steps":[]}})).into_response()
+                TestHttpResponse::ok_json(json!({"numTotalSteps":total,"trajectory":{"cascadeId":body["cascadeId"],"steps":[]}}))
             }
-        }))
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectorySteps"),
-            post(move |axum::Json(body): axum::Json<Value>| {
+        })
+        .post(
+            format!("{SERVICE}GetCascadeTrajectorySteps"),
+            move |req| {
                 let (t0, t1, t2, t3, t4, t5) = (
                     t0_r.clone(),
                     t1_r.clone(),
@@ -578,10 +569,11 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                     t5_r.clone(),
                 );
                 async move {
+                    let body = req.json();
                     let cid = body["cascadeId"].as_str().unwrap_or("");
                     let offset = body["stepOffset"].as_u64().unwrap_or(0) as usize;
                     if cid == root_id {
-                        axum::Json(json!({
+                        TestHttpResponse::ok_json(json!({
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_USER_INPUT",
@@ -624,9 +616,9 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                                 })
                             })
                             .collect();
-                        axum::Json(json!({ "steps": steps }))
+                        TestHttpResponse::ok_json(json!({ "steps": steps }))
                     } else if cid == d2_id {
-                        axum::Json(json!({
+                        TestHttpResponse::ok_json(json!({
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
@@ -646,7 +638,7 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                             ]
                         }))
                     } else if cid == d3_id {
-                        axum::Json(json!({
+                        TestHttpResponse::ok_json(json!({
                             "steps": [
                                 {
                                     "type": "CORTEX_STEP_TYPE_SYSTEM_MESSAGE",
@@ -673,18 +665,19 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                             ]
                         }))
                     } else {
-                        axum::Json(json!({}))
+                        TestHttpResponse::ok_json(json!({}))
                     }
                 }
-            }),
+            },
         )
-        .route(
-            &format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
-            post(move |axum::Json(body): axum::Json<Value>| async move {
+        .post(
+            format!("{SERVICE}GetCascadeTrajectoryExecutorMetadatas"),
+            move |req| async move {
+                let body = req.json();
                 if body["cascadeId"] == json!(root_id)
                     && body["executorMetadataOffset"].as_u64().unwrap_or(0) == 0
                 {
-                    axum::Json(json!({
+                    TestHttpResponse::ok_json(json!({
                         "executorMetadata": [
                             {
                                 "executionId": "root-exec",
@@ -694,13 +687,11 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
                         ]
                     }))
                 } else {
-                    axum::Json(json!({}))
+                    TestHttpResponse::ok_json(json!({}))
                 }
-            }),
+            },
         );
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let task = router.serve_on(listener).await;
     let summaries = json!({
         "trajectorySummaries": {
             root_id: {
@@ -791,14 +782,14 @@ async fn scan_propagates_nested_subagent_background_task_up_to_root() {
 async fn incomplete_subagent_trajectory_is_not_terminal_evidence() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new()
-        .route(&format!("{SERVICE}GetCascadeTrajectory"), post(|| async {
-            axum::Json(json!({"numTotalSteps":2,"trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE"}]}}))
-        }))
-        .route(&format!("{SERVICE}GetCascadeTrajectorySteps"), post(|| async { axum::Json(json!({"steps":[]})) }));
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
+    let router = TestHttpRouter::new()
+        .post(format!("{SERVICE}GetCascadeTrajectory"), |_| async {
+            TestHttpResponse::ok_json(json!({"numTotalSteps":2,"trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE"}]}}))
+        })
+        .post(format!("{SERVICE}GetCascadeTrajectorySteps"), |_| async {
+            TestHttpResponse::ok_json(json!({"steps":[]}))
+        });
+    let task = router.serve_on(listener).await;
     assert!(fetch_subagent_trajectory(
         &client().unwrap(),
         port,
@@ -822,10 +813,11 @@ async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication(
     let child_ids = children.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+    let router = TestHttpRouter::new().post(format!("{SERVICE}GetCascadeTrajectory"), move |req| {
         let observed = observed.clone();
         let child_ids = child_ids.clone();
         async move {
+            let body = req.json();
             let id = body["cascadeId"].as_str().unwrap();
             observed.lock().unwrap().push(id.to_owned());
             let invoke = |id: &str| json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","generic":{"name":"invoke_subagent","output":format!("Created the following subagent:\n{{\"conversationId\":\"{id}\"}}")},"metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:01Z"}});
@@ -836,12 +828,10 @@ async fn current_turn_inspects_nine_children_once_and_keeps_cycle_deduplication(
                 steps.push(invoke(root));
                 steps.push(invoke(&child_ids[0]));
             }
-            axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
+            TestHttpResponse::ok_json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
         }
-    }));
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
     });
+    let task = router.serve_on(listener).await;
     let summary = json!({"trajectoryId":"fixture","status":"CASCADE_RUN_STATUS_IDLE"});
     let result = load_trajectory_with_context(
         &client().unwrap(),
@@ -875,16 +865,15 @@ async fn descendants_discovered_later_anchor_earlier_pending_work() {
     let late = "55555555-5555-4555-8555-555555555555";
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| async move {
+    let router = TestHttpRouter::new().post(format!("{SERVICE}GetCascadeTrajectory"), move |req| async move {
+        let body = req.json();
         let id = body["cascadeId"].as_str().unwrap();
         let children: &[&str] = if id == root { &[first, second] } else if id == first { &[missing] } else if id == second { &[late] } else { &[] };
         let mut steps = vec![json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:00Z"}})];
         steps.extend(children.iter().map(|child| json!({"type":"CORTEX_STEP_TYPE_GENERIC","status":"CORTEX_STEP_STATUS_DONE","generic":{"name":"invoke_subagent","output":format!("Created the following subagent:\n{{\"conversationId\":\"{child}\"}}")},"metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:01Z"}})));
-        axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
-    }));
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
+        TestHttpResponse::ok_json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
     });
+    let task = router.serve_on(listener).await;
     let summaries = serde_json::Map::from_iter([(
         late.into(),
         json!({"parentConversationId":second,"status":"CASCADE_RUN_STATUS_IDLE","lastModifiedTime":"2026-01-01T00:04:59Z"}),
@@ -924,9 +913,10 @@ async fn summary_parent_index_keeps_both_fields_and_excludes_settled_senders() {
     let observed = calls.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let router = Router::new().route(&format!("{SERVICE}GetCascadeTrajectory"), post(move |axum::Json(body): axum::Json<Value>| {
+    let router = TestHttpRouter::new().post(format!("{SERVICE}GetCascadeTrajectory"), move |req| {
         let observed = observed.clone();
         async move {
+            let body = req.json();
             let id = body["cascadeId"].as_str().unwrap();
             observed.lock().unwrap().push(id.to_owned());
             let mut steps = vec![json!({"type":"CORTEX_STEP_TYPE_USER_INPUT","status":"CORTEX_STEP_STATUS_DONE","metadata":{"executionId":"fixture","createdAt":"2026-01-01T00:00:00Z"}})];
@@ -935,12 +925,10 @@ async fn summary_parent_index_keeps_both_fields_and_excludes_settled_senders() {
             } else if id == child {
                 steps.push(json!({"type":"CORTEX_STEP_TYPE_SYSTEM_MESSAGE","status":"CORTEX_STEP_STATUS_DONE","systemMessage":{"agentMessage":{"sender":settled}},"metadata":{"executionId":"fixture"}}));
             }
-            axum::Json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
+            TestHttpResponse::ok_json(json!({"numTotalSteps":steps.len(),"trajectory":{"cascadeId":id,"trajectoryId":"fixture","steps":steps}}))
         }
-    }));
-    let task = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
     });
+    let task = router.serve_on(listener).await;
     let summaries = serde_json::Map::from_iter([
         (direct.into(), json!({"parentConversationId":child})),
         (

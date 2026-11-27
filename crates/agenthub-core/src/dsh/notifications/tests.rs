@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use std::sync::Mutex;
 
 static TEST_CACHE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -283,21 +284,16 @@ fn targeted_scan_preserves_identity_and_cache_covers_more_than_64_sessions() {
     }
     let full = scan(&paths).unwrap();
     assert_eq!(full.streams.len(), 80);
-    {
-        let cache = CACHE.lock().unwrap();
+    CACHE.with_entries(|entries, bytes| {
         assert_eq!(
-            cache
-                .entries
+            entries
                 .iter()
                 .filter(|e| e.path.starts_with(root.as_path()))
                 .count(),
             80
         );
-        assert_eq!(
-            cache.bytes,
-            cache.entries.iter().map(|e| e.bytes).sum::<usize>()
-        );
-    }
+        assert_eq!(bytes, entries.iter().map(|e| e.bytes as u64).sum::<u64>());
+    });
     let request = crate::provider_sessions::ProviderListRequest {
         limit: Some(1),
         q: Some("fixture-0".into()),

@@ -8,7 +8,6 @@ pub mod account_scope;
 mod app_server_client;
 mod assistant_question;
 mod identity;
-mod mutations;
 mod paths;
 #[cfg(test)]
 mod rollout_accuracy_tests;
@@ -22,11 +21,11 @@ mod thread_rows;
 mod types;
 mod user_input;
 
+pub use crate::selected_codex::set_thread_archived;
 pub use app_server_client::{set_thread_title, CodexAppServerClient};
 pub use assistant_question::assistant_feedback_request;
 pub(crate) use identity::codex_task_identity_from_connection;
 pub use identity::{codex_task_identity, CodexTaskIdentity};
-pub use mutations::set_thread_archived;
 pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,

@@ -131,3 +131,211 @@ pub(crate) fn sandboxed_test_config() -> (Config, PathBuf) {
 
     (config, sandbox_root)
 }
+
+#[derive(Clone, Debug)]
+pub(crate) struct TestHttpRequest {
+    pub(crate) method: reqwest::Method,
+    pub(crate) uri: String,
+    pub(crate) body: Vec<u8>,
+}
+
+impl TestHttpRequest {
+    pub(crate) fn json(&self) -> serde_json::Value {
+        serde_json::from_slice(&self.body).unwrap_or(serde_json::Value::Null)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TestHttpResponse {
+    pub(crate) status: reqwest::StatusCode,
+    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body: Vec<u8>,
+}
+
+impl TestHttpResponse {
+    pub(crate) fn json(status: reqwest::StatusCode, value: serde_json::Value) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: serde_json::to_vec(&value).expect("serialize test HTTP JSON"),
+        }
+    }
+
+    pub(crate) fn ok_json(value: serde_json::Value) -> Self {
+        Self::json(reqwest::StatusCode::OK, value)
+    }
+
+    pub(crate) fn status_only(status: reqwest::StatusCode) -> Self {
+        Self {
+            status,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
+    }
+}
+
+type RouteHandler = std::sync::Arc<
+    dyn Fn(
+            TestHttpRequest,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = TestHttpResponse> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Default)]
+pub(crate) struct TestHttpRouter {
+    routes: Vec<(String, RouteHandler)>,
+}
+
+impl TestHttpRouter {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn post<F, Fut>(mut self, path: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(TestHttpRequest) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = TestHttpResponse> + Send + 'static,
+    {
+        let handler: RouteHandler = std::sync::Arc::new(move |req| Box::pin(handler(req)));
+        self.routes.push((path.into(), handler));
+        self
+    }
+
+    pub(crate) async fn serve_on(
+        self,
+        listener: tokio::net::TcpListener,
+    ) -> tokio::task::JoinHandle<()> {
+        let routes = std::sync::Arc::new(self.routes);
+        spawn_http_server_on(listener, move |req| {
+            let routes = routes.clone();
+            async move {
+                if req.method != reqwest::Method::POST {
+                    return TestHttpResponse::status_only(reqwest::StatusCode::METHOD_NOT_ALLOWED);
+                }
+                let path = req.uri.split('?').next().unwrap_or(&req.uri);
+                for (route_path, handler) in routes.iter() {
+                    if route_path == path {
+                        return handler(req).await;
+                    }
+                }
+                TestHttpResponse::status_only(reqwest::StatusCode::NOT_FOUND)
+            }
+        })
+    }
+}
+
+pub(crate) fn spawn_http_server_on<F, Fut>(
+    listener: tokio::net::TcpListener,
+    handler: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Fn(TestHttpRequest) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = TestHttpResponse> + Send + 'static,
+{
+    let handler = std::sync::Arc::new(handler);
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let handler = handler.clone();
+            tokio::spawn(async move {
+                let _ = serve_single_http_connection(stream, handler).await;
+            });
+        }
+    })
+}
+
+async fn serve_single_http_connection<F, Fut>(
+    stream: tokio::net::TcpStream,
+    handler: std::sync::Arc<F>,
+) -> std::io::Result<()>
+where
+    F: Fn(TestHttpRequest) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = TestHttpResponse> + Send + 'static,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let mut request_line = String::new();
+    if reader.read_line(&mut request_line).await? == 0 {
+        return Ok(());
+    }
+    let mut parts = request_line
+        .trim_end_matches(['\r', '\n'])
+        .split_whitespace();
+    let method_str = parts.next().unwrap_or("GET");
+    let uri = parts.next().unwrap_or("/").to_string();
+    let method = reqwest::Method::from_bytes(method_str.as_bytes()).unwrap_or(reqwest::Method::GET);
+
+    let mut content_length = 0usize;
+    let mut chunked = false;
+    loop {
+        let mut line = String::new();
+        if reader.read_line(&mut line).await? == 0 || line == "\r\n" || line == "\n" {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse::<usize>().unwrap_or(0);
+            } else if name.eq_ignore_ascii_case("transfer-encoding")
+                && value.to_ascii_lowercase().contains("chunked")
+            {
+                chunked = true;
+            }
+        }
+    }
+
+    let mut body = Vec::new();
+    if chunked {
+        loop {
+            let mut size_line = String::new();
+            if reader.read_line(&mut size_line).await? == 0 {
+                break;
+            }
+            let size_hex = size_line.trim().split(';').next().unwrap_or("0");
+            let chunk_size = usize::from_str_radix(size_hex, 16).unwrap_or(0);
+            if chunk_size == 0 {
+                let mut trailer = String::new();
+                let _ = reader.read_line(&mut trailer).await;
+                break;
+            }
+            let start = body.len();
+            body.resize(start + chunk_size, 0);
+            reader.read_exact(&mut body[start..]).await?;
+            let mut crlf = [0u8; 2];
+            reader.read_exact(&mut crlf).await?;
+        }
+    } else if content_length > 0 {
+        body.resize(content_length, 0);
+        reader.read_exact(&mut body).await?;
+    }
+
+    let response = handler(TestHttpRequest { method, uri, body }).await;
+    let reason = response.status.canonical_reason().unwrap_or("OK");
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        response.status.as_u16(),
+        reason,
+        response.body.len()
+    );
+    for (name, value) in &response.headers {
+        head.push_str(name);
+        head.push_str(": ");
+        head.push_str(value);
+        head.push_str("\r\n");
+    }
+    head.push_str("\r\n");
+    write_half.write_all(head.as_bytes()).await?;
+    if !response.body.is_empty() {
+        write_half.write_all(&response.body).await?;
+    }
+    write_half.flush().await?;
+    let _ = write_half.shutdown().await;
+    Ok(())
+}

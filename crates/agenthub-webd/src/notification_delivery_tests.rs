@@ -1,16 +1,11 @@
 use super::*;
+use crate::api::test_support::{spawn_http_server_on, TestHttpRequest, TestHttpResponse};
 use agenthub_core::{
     db::NewProbeEvent,
     native_probe::{NativeProvider, NativeTurnEvent},
     platform::PlatformKind,
 };
-use axum::{
-    body::{to_bytes, Body},
-    extract::State,
-    http::{Method, Request, StatusCode},
-    response::Response,
-    Router,
-};
+use reqwest::{Method, StatusCode};
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use std::{
@@ -79,16 +74,12 @@ struct LoopbackServer {
     task: tokio::task::JoinHandle<()>,
 }
 
-async fn capture_request(
-    State(state): State<Arc<ServerState>>,
-    request: Request<Body>,
-) -> Response {
-    let (parts, body) = request.into_parts();
-    let bytes = to_bytes(body, 2 * 1024 * 1024).await.unwrap();
+async fn capture_request(state: Arc<ServerState>, request: TestHttpRequest) -> TestHttpResponse {
+    let body = request.json();
     state.requests.lock().unwrap().push(CapturedRequest {
-        method: parts.method,
-        uri: parts.uri.to_string(),
-        body: serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        method: request.method,
+        uri: request.uri,
+        body,
     });
     let request_gate = state.request_gate.lock().unwrap().take();
     if let Some(gate) = request_gate {
@@ -104,13 +95,11 @@ async fn capture_request(
     if !reply.delay.is_zero() {
         tokio::time::sleep(reply.delay).await;
     }
-    let mut response = Response::builder()
-        .status(reply.status)
-        .header("Content-Type", "application/json");
-    for (name, value) in reply.headers {
-        response = response.header(name, value);
+    TestHttpResponse {
+        status: reply.status,
+        headers: reply.headers,
+        body: reply.body,
     }
-    response.body(Body::from(reply.body)).unwrap()
 }
 
 impl LoopbackServer {
@@ -121,13 +110,11 @@ impl LoopbackServer {
             requests: Mutex::new(Vec::new()),
             request_gate: Mutex::new(None),
         });
-        let router = Router::new()
-            .fallback(capture_request)
-            .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let task = tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+        let handler_state = state.clone();
+        let task = spawn_http_server_on(listener, move |req| {
+            capture_request(handler_state.clone(), req)
         });
         Self { url, state, task }
     }

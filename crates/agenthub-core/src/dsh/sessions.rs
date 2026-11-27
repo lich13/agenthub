@@ -1618,27 +1618,18 @@ pub fn set_archived_checked(
                 }
             }
         });
-        let tmp = storages.join(format!(".agenthub-index-{}", uuid::Uuid::new_v4()));
-        let write_res = (|| -> Result<()> {
-            let mut opts = OpenOptions::new();
-            opts.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                opts.mode(0o600);
-            }
-            let mut file = opts.open(&tmp)?;
-            serde_json::to_writer(&mut file, &initial)?;
-            file.write_all(b"\n")?;
-            file.sync_all()?;
-            check_stopped()?;
-            fs::rename(&tmp, &ws_path)?;
-            Ok(())
-        })();
-        if write_res.is_err() {
-            let _ = fs::remove_file(&tmp);
-        }
-        write_res?;
+        crate::session_delete::atomic_replace_file(
+            &ws_path,
+            "agenthub-index",
+            None,
+            None,
+            |file| {
+                serde_json::to_writer(&mut *file, &initial)?;
+                file.write_all(b"\n")?;
+                Ok(())
+            },
+            &check_stopped,
+        )?;
     }
 
     if archived {

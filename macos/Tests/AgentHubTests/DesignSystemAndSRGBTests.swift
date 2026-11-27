@@ -16,8 +16,8 @@ final class DesignSystemAndSRGBTests: XCTestCase {
         XCTAssertEqual(rustHeader, swiftHeader, "CAgentHubFFI header drifted from crates/agenthub-ffi/include/agenthub_ffi.h")
     }
 
-    func testAll53LucideIconsParseToNonEmptyPaths() {
-        XCTAssertEqual(LucideIconName.allCases.count, 53)
+    func testAll44LucideIconsParseToNonEmptyPaths() {
+        XCTAssertEqual(LucideIconName.allCases.count, 44)
         for icon in LucideIconName.allCases {
             let shapes = LucideVectorCatalog.shapes(for: icon)
             XCTAssertFalse(shapes.isEmpty, "Icon \(icon.rawValue) has no shapes")

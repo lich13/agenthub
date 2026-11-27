@@ -46,7 +46,7 @@ fn event_for(
     Some(event)
 }
 
-pub fn delivery_key(event: &ProbeBuiltEvent) -> Option<String> {
+pub(crate) fn delivery_key(event: &ProbeBuiltEvent) -> Option<String> {
     if event.payload["question_tool"] != "request_user_input_async" {
         return None;
     }
@@ -63,7 +63,7 @@ pub fn delivery_key(event: &ProbeBuiltEvent) -> Option<String> {
     ))
 }
 
-pub fn prepare_event(
+pub(crate) fn prepare_event(
     config: &Config,
     db: &PanelDb,
     event: ProbeBuiltEvent,
@@ -154,11 +154,11 @@ pub fn prepare_event(
 }
 
 #[cfg(test)]
-pub async fn run(config: &Config, db: &PanelDb) -> Result<()> {
+pub(crate) async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     run_with_threads(&|| Ok(config.clone()), db, None).await
 }
 
-pub async fn run_with_threads(
+pub(crate) async fn run_with_threads(
     load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     preloaded_sorted: Option<&[(ThreadSummary, CodexTaskIdentity)]>,

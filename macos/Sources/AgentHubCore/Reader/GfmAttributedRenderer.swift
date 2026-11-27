@@ -308,25 +308,6 @@ final class GfmLayoutCache {
         return out
     }
 
-    static func plainTextFromInlines(_ inlines: [GfmInline]) -> String {
-        var out = ""
-        for inline in inlines {
-            switch inline {
-            case let .text(t): out += t
-            case let .code(c): out += c
-            case let .strong(ch), let .emphasis(ch), let .strikethrough(ch):
-                out += plainTextFromInlines(ch)
-            case let .link(_, _, ch):
-                out += plainTextFromInlines(ch)
-            case let .image(_, alt, _):
-                out += alt.isEmpty ? "[图片]" : alt
-            case .softBreak, .hardBreak:
-                out += "\n"
-            }
-        }
-        return out
-    }
-
     static func safeRenderableHref(_ raw: String) -> String? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }

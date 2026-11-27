@@ -50,8 +50,8 @@ mod cli_meta;
 pub(super) mod prompt;
 pub use cli_meta::scan_offline_store;
 pub(crate) use cli_meta::{
-    build_offline_stream_snapshot, inspect_conv_db_metadata, load_store_auxiliary_index,
-    transcript_has_subagent_reminder,
+    build_offline_stream_snapshot, inspect_conv_db_metadata, load_store_auxiliary_index_checked,
+    load_store_auxiliary_index_for_store, transcript_has_subagent_reminder,
 };
 
 mod history;
@@ -1296,28 +1296,6 @@ fn summaries_table_columns(conn: &Connection) -> std::collections::HashSet<Strin
     crate::db::table_columns(conn, "conversation_summaries").unwrap_or_default()
 }
 
-pub(crate) fn summaries_status_sql_exprs(
-    conn: &Connection,
-) -> (std::collections::HashSet<String>, String) {
-    let cols = summaries_table_columns(conn);
-    let status_expr = if cols.contains("status") {
-        "COALESCE(status, '')"
-    } else {
-        "''"
-    };
-    let idle_expr = if cols.contains("not_fully_idle") {
-        "not_fully_idle"
-    } else {
-        "0"
-    };
-    let raw_expr = if cols.contains("raw_summary") {
-        "raw_summary"
-    } else {
-        "NULL"
-    };
-    (cols, format!("{status_expr}, {idle_expr}, {raw_expr}"))
-}
-
 pub(crate) fn read_summary_status_cols(
     row: &rusqlite::Row<'_>,
     base: usize,
@@ -1448,18 +1426,7 @@ pub(crate) fn collect_store_known_subagents(paths: &AntigravityPaths) -> BTreeSe
     if !paths.home.is_dir() {
         return known;
     }
-    let db_path = paths.summaries_db();
-    let conn = db_path
-        .is_file()
-        .then(|| {
-            Connection::open_with_flags(
-                &db_path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .ok()
-        })
-        .flatten();
-    let aux = load_store_auxiliary_index(paths, conn.as_ref());
+    let aux = load_store_auxiliary_index_for_store(paths);
     for kids in aux.sidecar_children.values() {
         known.extend(kids.iter().cloned());
     }
@@ -1468,51 +1435,20 @@ pub(crate) fn collect_store_known_subagents(paths: &AntigravityPaths) -> BTreeSe
             known.insert(cid.clone());
         }
     }
-    if let Some(conn) = &conn {
-        if has_conversation_parents_table(conn) {
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-            ) {
-                if let Ok(rows) =
-                    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
-                {
-                    for (cid, pid) in rows.flatten() {
-                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
-                            known.insert(cid);
-                        }
-                    }
-                }
-            }
+    for (cid, pid) in &aux.db_parent_edges {
+        if !pid.is_empty() && uuid::Uuid::parse_str(cid).is_ok() {
+            known.insert(cid.clone());
         }
-        let cols = summaries_table_columns(conn);
-        let raw_expr = if cols.contains("raw_summary") {
-            "raw_summary"
-        } else {
-            "NULL"
-        };
-        let sql = format!(
-            "SELECT conversation_id, COALESCE(parent_conversation_id, ''), COALESCE(nesting_depth, 0), {raw_expr} FROM conversation_summaries"
-        );
-        if let Ok(mut stmt) = conn.prepare(&sql) {
-            if let Ok(rows) = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, Option<Vec<u8>>>(3).ok().flatten(),
-                ))
-            }) {
-                for (cid, pid, depth, raw) in rows.flatten() {
-                    if !pid.is_empty()
-                        || depth > 0
-                        || raw
-                            .as_deref()
-                            .is_some_and(|b| parse_raw_summary(b).trajectory_meta.is_subagent(&cid))
-                    {
-                        known.insert(cid);
-                    }
-                }
-            }
+    }
+    for row in &aux.summary_rows {
+        if !row.parent_conversation_id.is_empty()
+            || row.nesting_depth > 0
+            || row
+                .parsed_raw
+                .as_ref()
+                .is_some_and(|r| r.trajectory_meta.is_subagent(&row.id))
+        {
+            known.insert(row.id.clone());
         }
     }
     known
@@ -1605,18 +1541,7 @@ fn list_offline_summaries_with_subagents_and_raw(
     );
     let mut root_rows: Vec<OfflineRow> = Vec::new();
 
-    let db_path = paths.summaries_db();
-    let open_conn = db_path
-        .is_file()
-        .then(|| {
-            Connection::open_with_flags(
-                &db_path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )
-            .ok()
-        })
-        .flatten();
-    let aux = load_store_auxiliary_index(paths, open_conn.as_ref());
+    let aux = load_store_auxiliary_index_for_store(paths);
 
     for (pid, kids) in &aux.sidecar_children {
         for cid in kids {
@@ -1634,119 +1559,64 @@ fn list_offline_summaries_with_subagents_and_raw(
         }
     }
 
-    if let Some(conn) = &open_conn {
-        if has_conversation_parents_table(conn) {
-            if let Ok(mut stmt) = conn.prepare(
-                "SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents",
-            ) {
-                if let Ok(rows) = stmt.query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                }) {
-                    for (cid, pid) in rows.flatten() {
-                        if !pid.is_empty() && uuid::Uuid::parse_str(&cid).is_ok() {
-                            indexed_ids.insert(cid.clone());
-                            known_subagents.insert(cid.clone());
-                            add_child_edge(&mut children_map, &pid, &cid);
-                        }
-                    }
-                }
-            }
+    for (cid, pid) in &aux.db_parent_edges {
+        if !pid.is_empty() && uuid::Uuid::parse_str(cid).is_ok() {
+            indexed_ids.insert(cid.clone());
+            known_subagents.insert(cid.clone());
+            add_child_edge(&mut children_map, pid, cid);
         }
+    }
 
-        let (_, status_cols_sql) = summaries_status_sql_exprs(conn);
-        let sql = format!(
-            "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
-             COALESCE(step_count, 0), COALESCE(last_modified_time, ''), \
-             COALESCE(workspace_uris, ''), COALESCE(parent_conversation_id, ''), \
-             COALESCE(nesting_depth, 0), {status_cols_sql} \
-             FROM conversation_summaries"
-        );
-        if let Ok(mut stmt) = conn.prepare(&sql) {
-            if let Ok(rows) = stmt.query_map([], |row| {
-                let (status_str, not_fully_idle, raw_blob) = read_summary_status_cols(row, 8)?;
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    status_str,
-                    not_fully_idle,
-                    raw_blob,
-                ))
-            }) {
-                for (
-                    id,
-                    db_title,
-                    preview,
-                    steps,
-                    modified,
-                    ws_raw,
-                    parent,
-                    depth,
-                    status_str,
-                    not_fully_idle,
-                    raw_blob,
-                ) in rows.flatten()
-                {
-                    if uuid::Uuid::parse_str(&id).is_err() {
-                        continue;
-                    }
-                    indexed_ids.insert(id.clone());
-                    let (parsed_raw, st) = parse_summary_status_and_raw(
-                        &status_str,
-                        not_fully_idle,
-                        raw_blob.as_deref(),
-                    );
-                    if let Some(ts_ms) = parse_any_timestamp_ms(&modified)
-                        .or_else(|| parsed_raw.as_ref().and_then(|r| r.created_time_ms))
-                        .or_else(|| aux.fts_rows.get(&id).and_then(|f| f.last_modified_ms))
-                    {
-                        node_timestamps_ms.insert(id.clone(), ts_ms);
-                    }
-                    if let Some(st) = st {
-                        sqlite_statuses.insert(id.clone(), st);
-                    }
-                    let raw_is_sub = parsed_raw
-                        .as_ref()
-                        .is_some_and(|r| r.trajectory_meta.is_subagent(&id));
-                    let raw_parent = parsed_raw
-                        .as_ref()
-                        .and_then(|r| r.trajectory_meta.effective_parent(&id))
-                        .map(str::to_owned);
-                    if let Some(pr) = parsed_raw {
-                        raw_summaries.insert(id.clone(), pr);
-                    }
-                    if !parent.is_empty() || depth > 0 || raw_is_sub {
-                        known_subagents.insert(id.clone());
-                        if !parent.is_empty() {
-                            add_child_edge(&mut children_map, &parent, &id);
-                        } else if let Some(pid) = raw_parent.as_deref() {
-                            add_child_edge(&mut children_map, pid, &id);
-                        }
-                        continue;
-                    }
-                    if has_primary_session_storage(paths, &id) {
-                        had_any_db_summary = true;
-                    }
-                    root_rows.push((
-                        id,
-                        db_title,
-                        preview,
-                        steps,
-                        modified,
-                        ws_raw,
-                        parent,
-                        depth,
-                        status_str,
-                        not_fully_idle,
-                    ));
-                }
-            }
+    for row in &aux.summary_rows {
+        let id = &row.id;
+        if uuid::Uuid::parse_str(id).is_err() {
+            continue;
         }
+        indexed_ids.insert(id.clone());
+        if let Some(ts_ms) = parse_any_timestamp_ms(&row.last_modified_time)
+            .or_else(|| row.parsed_raw.as_ref().and_then(|r| r.created_time_ms))
+            .or_else(|| aux.fts_rows.get(id).and_then(|f| f.last_modified_ms))
+        {
+            node_timestamps_ms.insert(id.clone(), ts_ms);
+        }
+        if let Some(st) = row.sqlite_status {
+            sqlite_statuses.insert(id.clone(), st);
+        }
+        let raw_is_sub = row
+            .parsed_raw
+            .as_ref()
+            .is_some_and(|r| r.trajectory_meta.is_subagent(id));
+        let raw_parent = row
+            .parsed_raw
+            .as_ref()
+            .and_then(|r| r.trajectory_meta.effective_parent(id));
+        if let Some(pr) = &row.parsed_raw {
+            raw_summaries.insert(id.clone(), pr.clone());
+        }
+        if !row.parent_conversation_id.is_empty() || row.nesting_depth > 0 || raw_is_sub {
+            known_subagents.insert(id.clone());
+            if !row.parent_conversation_id.is_empty() {
+                add_child_edge(&mut children_map, &row.parent_conversation_id, id);
+            } else if let Some(pid) = raw_parent {
+                add_child_edge(&mut children_map, pid, id);
+            }
+            continue;
+        }
+        if has_primary_session_storage(paths, id) {
+            had_any_db_summary = true;
+        }
+        root_rows.push((
+            id.clone(),
+            row.title.clone(),
+            row.preview.clone(),
+            row.step_count,
+            row.last_modified_time.clone(),
+            row.workspace_uris.clone(),
+            row.parent_conversation_id.clone(),
+            row.nesting_depth,
+            row.status_str.clone(),
+            row.not_fully_idle,
+        ));
     }
 
     let mut has_recorded_parent: BTreeSet<String> = children_map

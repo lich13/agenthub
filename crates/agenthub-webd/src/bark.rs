@@ -355,7 +355,6 @@ mod tests {
             assert!(!outcome.sent, "{case}");
             assert!(!outcome.skipped, "{case}");
             assert!(outcome.http_status.is_none(), "{case}");
-            assert!(outcome.request_url.is_none(), "{case}");
             assert_eq!(config.probe.notifications.server_url, server_url, "{case}");
 
             let outcome = send_chunk(
@@ -388,7 +387,6 @@ mod tests {
             assert!(!outcome.sent, "{case}");
             assert!(!outcome.skipped, "{case}");
             assert!(outcome.http_status.is_none(), "{case}");
-            assert!(outcome.request_url.is_none(), "{case}");
             assert!(outcome.notifications_enabled, "{case}");
             assert_eq!(config.probe.notifications.server_url, server_url, "{case}");
         }

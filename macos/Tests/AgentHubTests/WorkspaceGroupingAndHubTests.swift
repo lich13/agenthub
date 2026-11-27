@@ -74,7 +74,7 @@ final class WorkspaceGroupingAndHubTests: XCTestCase {
             idOf: \.sessionKey,
             cwdOf: \.cwd,
             workspaceRootOf: \.workspaceRoot,
-            updatedAtOf: \.updatedAt,
+            updatedAtMsOf: { ProjectWorkspaceEngine.parseTimestampMs($0.updatedAt) },
             statusOf: ProjectWorkspaceEngine.itemPriorityStatus
         )
         XCTAssertEqual(groups.map(\.key), [

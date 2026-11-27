@@ -1,6 +1,6 @@
 //! Shared session list, detail, pagination, and mutation DTOs for native providers
 //! (Antigravity App and DeepSeek Harness).
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::{path::PathBuf, sync::Arc};
@@ -223,13 +223,14 @@ pub fn matches_query(summary: &ProviderSessionSummary, needle: Option<&str>) -> 
         return true;
     };
     let lower = q.to_lowercase();
-    summary.title.to_lowercase().contains(&lower)
-        || summary.id.to_lowercase().contains(&lower)
-        || summary.cwd.to_lowercase().contains(&lower)
+    use crate::services::search::contains_folded_str;
+    contains_folded_str(&summary.title, &lower)
+        || contains_folded_str(&summary.id, &lower)
+        || contains_folded_str(&summary.cwd, &lower)
         || summary
             .last_message
             .as_deref()
-            .is_some_and(|msg| msg.to_lowercase().contains(&lower))
+            .is_some_and(|msg| contains_folded_str(msg, &lower))
 }
 
 pub(crate) fn paginate_provider_detail(
@@ -238,25 +239,14 @@ pub(crate) fn paginate_provider_detail(
     request: &ProviderDetailRequest,
 ) -> Result<ProviderSessionDetail> {
     let all_events = &snapshot.events;
-    let limit = request.limit.unwrap_or(160).clamp(1, 500);
-    let (start, end) = match crate::history_navigation::seek_window(
-        all_events.iter().map(|event| event.id.as_str()),
+    let page = crate::history_navigation::paginate_window(
+        all_events,
+        |event| event.id.as_str(),
         request.before.as_deref(),
-        limit,
-    )? {
-        Some(window) => window,
-        None => {
-            let end = match &request.before {
-                None => all_events.len(),
-                Some(id) => all_events
-                    .iter()
-                    .position(|event| &event.id == id)
-                    .context("历史位置已变化，请刷新会话")?,
-            };
-            (end.saturating_sub(limit), end)
-        }
-    };
-    let mut events = all_events[start..end].to_vec();
+        request.limit,
+        false,
+    )?;
+    let mut events = all_events[page.start..page.end].to_vec();
     for event in &mut events {
         if let Some(user) = &mut event.user_message {
             user.refresh_files((!summary.cwd.is_empty()).then_some(summary.cwd.as_str()));
@@ -265,13 +255,7 @@ pub(crate) fn paginate_provider_detail(
     let timeline = request.before.is_none().then(|| snapshot.timeline());
     Ok(ProviderSessionDetail {
         timeline,
-        after_cursor: crate::history_navigation::after_cursor(
-            end,
-            all_events.len(),
-            all_events
-                .get(end.saturating_sub(1))
-                .map(|event| event.id.as_str()),
-        ),
+        after_cursor: page.after_cursor,
         history: Some(crate::jsonl_cache::HistoryMetadata {
             epoch: summary.session_key.clone(),
             revision: snapshot.revision.clone(),
@@ -284,9 +268,9 @@ pub(crate) fn paginate_provider_detail(
         subagent_updates: None,
         summary,
         events,
-        total_events: all_events.len(),
-        has_more: start > 0,
-        before_cursor: (start > 0).then(|| all_events[start].id.clone()),
+        total_events: page.total,
+        has_more: page.has_more,
+        before_cursor: page.before_cursor,
     })
 }
 

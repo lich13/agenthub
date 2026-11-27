@@ -157,64 +157,45 @@ impl SearchUseCases {
                 .into_iter()
                 .collect()
         } else {
-            codex::list_threads_without_storage(
-                &self.codex,
-                false,
-                request.session_key.as_deref(),
-                MAX_SESSIONS,
-            )?
+            codex::list_threads_without_storage(&self.codex, false, None, MAX_SESSIONS)?
         };
-        for summary in summaries {
-            if output.len() >= MAX_RESULTS {
-                break;
-            }
-            let metadata = strip_memory_metadata(&format!(
-                "{} {} {}",
-                summary.title,
-                summary.id,
-                summary.cwd.as_deref().unwrap_or_default()
-            ));
-            if contains_folded(&metadata, needle) {
-                push_metadata(
-                    output,
-                    &summary.id,
-                    &summary.id,
-                    &summary.title,
+        Self::search_summaries(
+            needle,
+            summaries,
+            |summary| {
+                (
+                    summary.id.as_str(),
+                    summary.id.as_str(),
+                    summary.title.as_str(),
                     summary.cwd.clone(),
-                    &metadata,
-                    needle,
                     summary.updated_at.clone(),
-                );
-            }
-            if output.len() >= MAX_RESULTS {
-                break;
-            }
-            if codex::visit_search_blocks(&summary, |block| {
-                if output.len() >= MAX_RESULTS {
-                    return false;
-                }
-                let corpus = codex_block_corpus(block);
-                if let Some(snippet) = find_snippet(&corpus, needle) {
-                    push_result(
-                        output,
-                        &summary.id,
-                        &summary.id,
-                        &summary.title,
-                        summary.cwd.clone(),
-                        &block.kind,
-                        block.id.clone(),
-                        snippet,
-                        block.created_at.clone(),
-                    );
-                }
-                output.len() < MAX_RESULTS
-            })
-            .is_err()
-            {
-                push_warning(warnings);
-            }
-        }
-        Ok(())
+                )
+            },
+            |summary, output| {
+                codex::visit_search_blocks(summary, |block| {
+                    if output.len() >= MAX_RESULTS {
+                        return false;
+                    }
+                    let corpus = codex_block_corpus(block);
+                    if let Some(snippet) = find_snippet(&corpus, needle) {
+                        push_result(
+                            output,
+                            &summary.id,
+                            &summary.id,
+                            &summary.title,
+                            summary.cwd.clone(),
+                            &block.kind,
+                            block.id.clone(),
+                            snippet,
+                            block.created_at.clone(),
+                        );
+                    }
+                    output.len() < MAX_RESULTS
+                })
+            },
+            output,
+            warnings,
+        )
     }
 
     fn search_grok(
@@ -232,60 +213,50 @@ impl SearchUseCases {
         } else {
             grok::list_grok_sessions_without_storage(&self.grok, MAX_SESSIONS, None)?
         };
-        for summary in summaries {
-            if output.len() >= MAX_RESULTS {
-                break;
-            }
-            let metadata =
-                strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if contains_folded(&metadata, needle) {
-                push_metadata(
-                    output,
-                    &summary.id,
-                    &summary.id,
-                    &summary.title,
+        Self::search_summaries(
+            needle,
+            summaries,
+            |summary| {
+                (
+                    summary.id.as_str(),
+                    summary.id.as_str(),
+                    summary.title.as_str(),
                     Some(summary.cwd.clone()),
-                    &metadata,
-                    needle,
                     summary.updated_at.clone(),
-                );
-            }
-            if output.len() >= MAX_RESULTS {
-                break;
-            }
-            if grok::visit_search_events(&summary.path, |index, event| {
-                if output.len() >= MAX_RESULTS {
-                    return false;
-                }
-                let corpus = grok_event_corpus(event);
-                if let Some(snippet) = find_snippet(&corpus, needle) {
-                    let position = event.call_id.clone().unwrap_or_else(|| {
-                        if event.id.is_empty() {
-                            format!("event:{index}")
-                        } else {
-                            event.id.clone()
-                        }
-                    });
-                    push_result(
-                        output,
-                        &summary.id,
-                        &summary.id,
-                        &summary.title,
-                        Some(summary.cwd.clone()),
-                        &event.kind,
-                        position,
-                        snippet,
-                        event.timestamp.clone(),
-                    );
-                }
-                output.len() < MAX_RESULTS
-            })
-            .is_err()
-            {
-                push_warning(warnings);
-            }
-        }
-        Ok(())
+                )
+            },
+            |summary, output| {
+                grok::visit_search_events(&summary.path, |index, event| {
+                    if output.len() >= MAX_RESULTS {
+                        return false;
+                    }
+                    let corpus = grok_event_corpus(event);
+                    if let Some(snippet) = find_snippet(&corpus, needle) {
+                        let position = event.call_id.clone().unwrap_or_else(|| {
+                            if event.id.is_empty() {
+                                format!("event:{index}")
+                            } else {
+                                event.id.clone()
+                            }
+                        });
+                        push_result(
+                            output,
+                            &summary.id,
+                            &summary.id,
+                            &summary.title,
+                            Some(summary.cwd.clone()),
+                            &event.kind,
+                            position,
+                            snippet,
+                            event.timestamp.clone(),
+                        );
+                    }
+                    output.len() < MAX_RESULTS
+                })
+            },
+            output,
+            warnings,
+        )
     }
 
     fn search_claude(
@@ -303,54 +274,48 @@ impl SearchUseCases {
         } else {
             claude::list_claude_sessions_without_storage(&self.claude, MAX_SESSIONS, None)?
         };
-        for summary in summaries {
-            if output.len() >= MAX_RESULTS {
-                break;
-            }
-            let metadata =
-                strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
-            if contains_folded(&metadata, needle) {
-                push_metadata(
-                    output,
-                    &summary.session_key,
-                    &summary.id,
-                    &summary.title,
+        Self::search_summaries(
+            needle,
+            summaries,
+            |summary| {
+                (
+                    summary.session_key.as_str(),
+                    summary.id.as_str(),
+                    summary.title.as_str(),
                     Some(summary.cwd.clone()),
-                    &metadata,
-                    needle,
                     summary.updated_at.clone(),
-                );
-            }
-            let read = claude::visit_search_events(
-                &self.claude,
-                &summary.session_key,
-                MAX_CLAUDE_PAGES,
-                |event| {
-                    if output.len() >= MAX_RESULTS {
-                        return Ok(false);
-                    }
-                    let corpus = claude_event_corpus(event);
-                    if let Some(snippet) = find_snippet(&corpus, needle) {
-                        push_result(
-                            output,
-                            &summary.session_key,
-                            &summary.id,
-                            &summary.title,
-                            Some(summary.cwd.clone()),
-                            &event.kind,
-                            event.id.clone(),
-                            snippet,
-                            event.timestamp.clone(),
-                        );
-                    }
-                    Ok(output.len() < MAX_RESULTS)
-                },
-            );
-            if read.is_err() {
-                push_warning(warnings);
-            }
-        }
-        Ok(())
+                )
+            },
+            |summary, output| {
+                claude::visit_search_events(
+                    &self.claude,
+                    &summary.session_key,
+                    MAX_CLAUDE_PAGES,
+                    |event| {
+                        if output.len() >= MAX_RESULTS {
+                            return Ok(false);
+                        }
+                        let corpus = claude_event_corpus(event);
+                        if let Some(snippet) = find_snippet(&corpus, needle) {
+                            push_result(
+                                output,
+                                &summary.session_key,
+                                &summary.id,
+                                &summary.title,
+                                Some(summary.cwd.clone()),
+                                &event.kind,
+                                event.id.clone(),
+                                snippet,
+                                event.timestamp.clone(),
+                            );
+                        }
+                        Ok(output.len() < MAX_RESULTS)
+                    },
+                )
+            },
+            output,
+            warnings,
+        )
     }
 
     fn search_antigravity(
@@ -474,55 +439,87 @@ impl SearchUseCases {
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
     ) -> Result<()> {
+        Self::search_summaries(
+            needle,
+            summaries,
+            |summary| {
+                (
+                    summary.session_key.as_str(),
+                    summary.id.as_str(),
+                    summary.title.as_str(),
+                    (!summary.cwd.is_empty()).then(|| summary.cwd.clone()),
+                    summary.updated_at.clone(),
+                )
+            },
+            |summary, output| {
+                let events = load(&summary.session_key)?;
+                let cwd = (!summary.cwd.is_empty()).then(|| summary.cwd.clone());
+                for event in events.iter() {
+                    if output.len() >= MAX_RESULTS {
+                        break;
+                    }
+                    let corpus = provider_event_corpus(event, literal_user);
+                    if let Some(snippet) = find_snippet(&corpus, needle) {
+                        push_result(
+                            output,
+                            &summary.session_key,
+                            &summary.id,
+                            &summary.title,
+                            cwd.clone(),
+                            &event.kind,
+                            event.id.clone(),
+                            snippet,
+                            event.timestamp.clone(),
+                        );
+                    }
+                }
+                Ok(())
+            },
+            output,
+            warnings,
+        )
+    }
+
+    fn search_summaries<S>(
+        needle: &str,
+        summaries: Vec<S>,
+        meta_of: impl Fn(&S) -> (&str, &str, &str, Option<String>, Option<String>),
+        mut visit_body: impl FnMut(&S, &mut Vec<SessionSearchResult>) -> Result<()>,
+        output: &mut Vec<SessionSearchResult>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
         for summary in summaries {
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let metadata =
-                strip_memory_metadata(&format!("{} {} {}", summary.title, summary.id, summary.cwd));
+            let (session_key, id, title, cwd, updated_at) = meta_of(&summary);
+            let metadata = strip_memory_metadata(&format!(
+                "{} {} {}",
+                title,
+                id,
+                cwd.as_deref().unwrap_or_default()
+            ));
             if contains_folded(&metadata, needle) {
                 push_metadata(
                     output,
-                    &summary.session_key,
-                    &summary.id,
-                    &summary.title,
-                    (!summary.cwd.is_empty()).then(|| summary.cwd.clone()),
+                    session_key,
+                    id,
+                    title,
+                    cwd,
                     &metadata,
                     needle,
-                    summary.updated_at.clone(),
+                    updated_at,
                 );
             }
             if output.len() >= MAX_RESULTS {
                 break;
             }
-            let events = match load(&summary.session_key) {
-                Ok(events) => events,
+            match visit_body(&summary, output) {
+                Ok(()) => {}
                 Err(err) if err.is::<crate::grokbot::GrokBotAccountChanged>() => {
                     return Err(err);
                 }
-                Err(_) => {
-                    push_warning(warnings);
-                    continue;
-                }
-            };
-            for event in events.iter() {
-                if output.len() >= MAX_RESULTS {
-                    break;
-                }
-                let corpus = provider_event_corpus(event, literal_user);
-                if let Some(snippet) = find_snippet(&corpus, needle) {
-                    push_result(
-                        output,
-                        &summary.session_key,
-                        &summary.id,
-                        &summary.title,
-                        (!summary.cwd.is_empty()).then(|| summary.cwd.clone()),
-                        &event.kind,
-                        event.id.clone(),
-                        snippet,
-                        event.timestamp.clone(),
-                    );
-                }
+                Err(_) => push_warning(warnings),
             }
         }
         Ok(())
@@ -2224,6 +2221,23 @@ mod tests {
                     scope: SearchScope::Thread,
                     session_key: Some(grok_acp_id.into()),
                     query: "VISIBLE_ACP_REPLY".into(),
+                    cursor: None,
+                    limit: None,
+                })
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+
+        // Provider-scope Codex search must ignore any residual active session_key filter.
+        assert_eq!(
+            service
+                .search(SessionSearchRequest {
+                    provider: SessionProvider::Codex,
+                    scope: SearchScope::Provider,
+                    session_key: Some("99999999-9999-4999-8999-999999999999".into()),
+                    query: "VISIBLE_QUESTION_TEXT".into(),
                     cursor: None,
                     limit: None,
                 })

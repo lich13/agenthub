@@ -487,46 +487,39 @@ pub fn manage_file(
         .map(|meta| meta.permissions());
     let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent_dir)?;
-    let temporary = parent_dir.join(format!(".agenthub-hooks-{}.tmp", uuid::Uuid::new_v4()));
-    let write = (|| -> Result<()> {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        if let Some(perms) = existing_perms {
-            file.set_permissions(perms)?;
-        }
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        #[cfg(test)]
-        SETTINGS_CHECKPOINT.with(|slot| {
-            if let Some(hook) = slot.borrow_mut().as_mut() {
-                hook(path);
-            }
-        });
-        ensure!(
-            read(path)? == before
-                && before_stamp
-                    == if path.exists() {
-                        Some(super::reader::stamp(path)?)
-                    } else {
-                        None
-                    },
-            "{label} 设置已被其他程序修改，请刷新后重试"
-        );
-        fs::rename(&temporary, path)?;
-        ensure!(
-            read(path)?.as_deref() == Some(bytes.as_slice()),
-            "{label} 设置读回发生变化，请刷新后检查"
-        );
-        Ok(())
-    })();
-    let _ = fs::remove_file(&temporary);
-    write?;
+    crate::session_delete::atomic_replace_file(
+        path,
+        "agenthub-hooks",
+        None,
+        existing_perms,
+        |file| {
+            file.write_all(&bytes)?;
+            Ok(())
+        },
+        || {
+            #[cfg(test)]
+            SETTINGS_CHECKPOINT.with(|slot| {
+                if let Some(hook) = slot.borrow_mut().as_mut() {
+                    hook(path);
+                }
+            });
+            ensure!(
+                read(path)? == before
+                    && before_stamp
+                        == if path.exists() {
+                            Some(super::reader::stamp(path)?)
+                        } else {
+                            None
+                        },
+                "{label} 设置已被其他程序修改，请刷新后重试"
+            );
+            Ok(())
+        },
+    )?;
+    ensure!(
+        read(path)?.as_deref() == Some(bytes.as_slice()),
+        "{label} 设置读回发生变化，请刷新后检查"
+    );
     Ok(ClaudeHooksStatus {
         changed: true,
         ..status_for_handler(path, &root, binary, config, handler)

@@ -63,9 +63,29 @@ pub(crate) struct SubagentSidecarMeta {
     pub(crate) title: Option<String>,
 }
 
+#[derive(Debug, Default, Clone)]
+pub(crate) struct DbSummaryRow {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) preview: String,
+    pub(crate) step_count: i64,
+    pub(crate) last_modified_time: String,
+    pub(crate) workspace_uris: String,
+    pub(crate) parent_conversation_id: String,
+    pub(crate) nesting_depth: i64,
+    pub(crate) status_str: String,
+    pub(crate) not_fully_idle: bool,
+    pub(crate) agent_name: String,
+    pub(crate) parsed_raw: Option<ParsedRawSummary>,
+    pub(crate) sqlite_status: Option<&'static str>,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct StoreAuxiliaryIndex {
+    pub(crate) has_summaries_table: bool,
     pub(crate) fts_rows: BTreeMap<String, FtsMetaRow>,
+    pub(crate) db_parent_edges: Vec<(String, String)>,
+    pub(crate) summary_rows: Vec<DbSummaryRow>,
     pub(crate) conv_meta: BTreeMap<String, ConvMetaEntry>,
     pub(crate) last_conv_cwd: BTreeMap<String, String>,
     pub(crate) sidecar_children: BTreeMap<String, Vec<String>>,
@@ -300,8 +320,97 @@ fn compute_aux_index_stamp(paths: &AntigravityPaths, has_conn: bool) -> Option<A
     })
 }
 
+fn load_db_parent_edges(conn: &Connection) -> Result<Vec<(String, String)>> {
+    if !super::has_conversation_parents_table(conn) {
+        return Ok(Vec::new());
+    }
+    let mut stmt =
+        conn.prepare("SELECT conversation_id, COALESCE(parent_id, '') FROM conversation_parents")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn load_db_summary_rows(conn: &Connection) -> Result<(bool, Vec<DbSummaryRow>)> {
+    let cols = crate::db::table_columns(conn, "conversation_summaries")?;
+    if !cols.contains("conversation_id") {
+        return Ok((false, Vec::new()));
+    }
+    let col_text = |name: &str| {
+        if cols.contains(name) {
+            format!("COALESCE({name}, '')")
+        } else {
+            "''".to_owned()
+        }
+    };
+    let col_int = |name: &str| {
+        if cols.contains(name) {
+            format!("COALESCE({name}, 0)")
+        } else {
+            "0".to_owned()
+        }
+    };
+    let title_expr = col_text("title");
+    let preview_expr = col_text("preview");
+    let step_expr = col_int("step_count");
+    let modified_expr = col_text("last_modified_time");
+    let ws_expr = col_text("workspace_uris");
+    let parent_expr = col_text("parent_conversation_id");
+    let depth_expr = col_int("nesting_depth");
+    let status_expr = col_text("status");
+    let idle_expr = if cols.contains("not_fully_idle") {
+        "not_fully_idle"
+    } else {
+        "0"
+    };
+    let raw_expr = if cols.contains("raw_summary") {
+        "raw_summary"
+    } else {
+        "NULL"
+    };
+    let agent_expr = col_text("agent_name");
+    let sql = format!(
+        "SELECT conversation_id, {title_expr}, {preview_expr}, {step_expr}, {modified_expr}, \
+         {ws_expr}, {parent_expr}, {depth_expr}, {status_expr}, {idle_expr}, {raw_expr}, {agent_expr} \
+         FROM conversation_summaries"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let (status_str, not_fully_idle, raw_blob) = super::read_summary_status_cols(row, 8)?;
+        let (parsed_raw, sqlite_status) =
+            super::parse_summary_status_and_raw(&status_str, not_fully_idle, raw_blob.as_deref());
+        Ok(DbSummaryRow {
+            id: row.get::<_, String>(0)?,
+            title: row.get::<_, String>(1)?,
+            preview: row.get::<_, String>(2)?,
+            step_count: row.get::<_, i64>(3)?,
+            last_modified_time: row.get::<_, String>(4)?,
+            workspace_uris: row.get::<_, String>(5)?,
+            parent_conversation_id: row.get::<_, String>(6)?,
+            nesting_depth: row.get::<_, i64>(7)?,
+            status_str,
+            not_fully_idle,
+            agent_name: row.get::<_, String>(11)?,
+            parsed_raw,
+            sqlite_status,
+        })
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok((true, out))
+}
+
 fn aux_index_weight(idx: &StoreAuxiliaryIndex) -> u64 {
     256 + idx.fts_rows.len() as u64 * 160
+        + idx.db_parent_edges.len() as u64 * 96
+        + idx.summary_rows.len() as u64 * 384
         + idx.conv_meta.len() as u64 * 192
         + idx.last_conv_cwd.len() as u64 * 128
         + idx.sidecar_children.len() as u64 * 96
@@ -310,6 +419,74 @@ fn aux_index_weight(idx: &StoreAuxiliaryIndex) -> u64 {
 
 static STORE_AUX_INDEX_CACHE: StampedCache<AuxIndexStamp, std::sync::Arc<StoreAuxiliaryIndex>> =
     StampedCache::new(16, 8 * 1024 * 1024);
+
+pub(crate) fn load_store_auxiliary_index_for_store(
+    paths: &AntigravityPaths,
+) -> std::sync::Arc<StoreAuxiliaryIndex> {
+    let db_path = paths.summaries_db();
+    let has_db = matches!(
+        fs::symlink_metadata(&db_path),
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink()
+    );
+    let stamp = compute_aux_index_stamp(paths, has_db);
+    if let Some(ref stamp) = stamp {
+        if let Some(cached) = STORE_AUX_INDEX_CACHE.get(&paths.home, stamp) {
+            return cached;
+        }
+    }
+    let open_conn = has_db
+        .then(|| {
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .ok()
+        })
+        .flatten();
+    load_store_auxiliary_index(paths, open_conn.as_ref())
+}
+
+pub(crate) fn load_store_auxiliary_index_checked(
+    paths: &AntigravityPaths,
+) -> Result<std::sync::Arc<StoreAuxiliaryIndex>> {
+    let db_path = paths.summaries_db();
+    let has_db = db_path.is_file();
+    let stamp = compute_aux_index_stamp(paths, has_db);
+    if let Some(ref stamp) = stamp {
+        if let Some(cached) = STORE_AUX_INDEX_CACHE.get(&paths.home, stamp) {
+            if has_db && !cached.has_summaries_table {
+                anyhow::bail!("无法读取 Antigravity 索引数据库子会话表");
+            }
+            return Ok(cached);
+        }
+    }
+    let open_conn = if has_db {
+        Some(
+            Connection::open_with_flags(
+                &db_path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .context("无法打开 Antigravity 索引数据库校验子会话")?,
+        )
+    } else {
+        None
+    };
+    let (raw, complete) =
+        load_store_auxiliary_index_uncached_inner(paths, open_conn.as_ref(), true)?;
+    if has_db && !raw.has_summaries_table {
+        anyhow::bail!("无法读取 Antigravity 索引数据库子会话表");
+    }
+    let computed = std::sync::Arc::new(raw);
+    if complete {
+        if let Some(stamp) = stamp {
+            if compute_aux_index_stamp(paths, open_conn.is_some()).as_ref() == Some(&stamp) {
+                let weight = aux_index_weight(&computed);
+                STORE_AUX_INDEX_CACHE.insert(paths.home.clone(), stamp, computed.clone(), weight);
+            }
+        }
+    }
+    Ok(computed)
+}
 
 pub(crate) fn load_store_auxiliary_index(
     paths: &AntigravityPaths,
@@ -338,9 +515,35 @@ fn load_store_auxiliary_index_uncached(
     paths: &AntigravityPaths,
     conn: Option<&Connection>,
 ) -> (StoreAuxiliaryIndex, bool) {
+    load_store_auxiliary_index_uncached_inner(paths, conn, false)
+        .unwrap_or_else(|_| (StoreAuxiliaryIndex::default(), false))
+}
+
+fn load_store_auxiliary_index_uncached_inner(
+    paths: &AntigravityPaths,
+    conn: Option<&Connection>,
+    strict_db: bool,
+) -> Result<(StoreAuxiliaryIndex, bool)> {
     let mut idx = StoreAuxiliaryIndex::default();
     let mut complete = true;
     if let Some(conn) = conn {
+        match load_db_parent_edges(conn) {
+            Ok(edges) => idx.db_parent_edges = edges,
+            Err(err) if strict_db => {
+                return Err(err.context("无法读取 Antigravity conversation_parents 子会话表"));
+            }
+            Err(_) => complete = false,
+        }
+        match load_db_summary_rows(conn) {
+            Ok((has_table, rows)) => {
+                idx.has_summaries_table = has_table;
+                idx.summary_rows = rows;
+            }
+            Err(err) if strict_db => {
+                return Err(err.context("无法读取 Antigravity 索引数据库子会话表"));
+            }
+            Err(_) => complete = false,
+        }
         match load_fts_meta_rows(conn) {
             Ok(rows) => idx.fts_rows = rows,
             Err(_) => complete = false,
@@ -526,7 +729,7 @@ fn load_store_auxiliary_index_uncached(
         Err(_) => complete = false,
     }
 
-    (idx, complete)
+    Ok((idx, complete))
 }
 
 use crate::file_stamp::{FileStamp, SqliteReadStampPair, StampedCache, WalReadStamp};
@@ -735,26 +938,6 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
     if has_table("steps") {
         let cnt: i64 = conn.query_row("SELECT count(*) FROM steps", [], |r| r.get(0))?;
         out.step_count = cnt.max(0) as usize;
-    }
-
-    if has_table("executor_metadata") {
-        let cols = crate::db::table_columns(&conn, "executor_metadata")?;
-        if let Some(blob_col) = ["metadata", "data", "blob", "payload"]
-            .into_iter()
-            .find(|c| cols.contains(*c))
-        {
-            let order_col = if cols.contains("idx") { "idx" } else { "rowid" };
-            let _ = conn
-                .query_row(
-                    &format!(
-                        "SELECT \"{blob_col}\" FROM executor_metadata ORDER BY {order_col} DESC LIMIT 1"
-                    ),
-                    [],
-                    |r| r.get::<_, Option<Vec<u8>>>(0),
-                )
-                .optional()?
-                .flatten();
-        }
     }
 
     Ok(Some(out))

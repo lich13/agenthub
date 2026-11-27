@@ -173,6 +173,52 @@ pub fn after_cursor(end: usize, total: usize, last_id: Option<&str>) -> Option<S
         .flatten()
 }
 
+pub(crate) struct PageWindow {
+    pub start: usize,
+    pub end: usize,
+    pub total: usize,
+    pub has_more: bool,
+    pub before_cursor: Option<String>,
+    pub after_cursor: Option<String>,
+}
+
+pub(crate) fn paginate_window<T>(
+    items: &[T],
+    id_of: impl Fn(&T) -> &str,
+    before: Option<&str>,
+    limit: Option<usize>,
+    unbounded_when_none: bool,
+) -> Result<PageWindow> {
+    let total = items.len();
+    let clamped_limit = limit.unwrap_or(160).clamp(1, 500);
+    let (start, end) = match seek_window(items.iter().map(&id_of), before, clamped_limit)? {
+        Some(window) => window,
+        None => {
+            let end = match before {
+                None => total,
+                Some(id) => items
+                    .iter()
+                    .position(|item| id_of(item) == id)
+                    .context("历史位置已变化，请刷新会话")?,
+            };
+            let start = if unbounded_when_none && limit.is_none() {
+                0
+            } else {
+                end.saturating_sub(clamped_limit)
+            };
+            (start, end)
+        }
+    };
+    Ok(PageWindow {
+        start,
+        end,
+        total,
+        has_more: start > 0,
+        before_cursor: (start > 0).then(|| id_of(&items[start]).to_owned()),
+        after_cursor: after_cursor(end, total, items.get(end.saturating_sub(1)).map(&id_of)),
+    })
+}
+
 pub(crate) fn strip_subagent_cursor_prefix(
     cursor: &str,
     prefix: &str,

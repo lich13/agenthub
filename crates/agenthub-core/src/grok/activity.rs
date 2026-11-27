@@ -4,8 +4,10 @@ use crate::{
     platform::{resolve_kernel_exe, same_canonical_dir},
 };
 use serde_json::Value;
+#[cfg(test)]
+use std::collections::VecDeque;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
@@ -55,30 +57,18 @@ pub(crate) fn invalidate_readonly_snapshot_cache() {
 }
 
 pub(crate) fn evict_idle_cache(max_idle: std::time::Duration) {
-    let mut evicted = false;
     if let Ok(mut guard) = READONLY_SNAPSHOT_CACHE.lock() {
         if guard
             .as_ref()
             .is_some_and(|(_, _, ts)| ts.elapsed() >= max_idle)
         {
             *guard = None;
-            evicted = true;
+            crate::note_cache_eviction();
         }
     }
-    if let Ok(mut entries) = TURN_CACHE.0.lock() {
-        let before = entries.len();
-        let now = std::time::Instant::now();
-        entries.retain(|entry| now.saturating_duration_since(entry.last_accessed) < max_idle);
-        if entries.len() < before {
-            if entries.capacity() > entries.len().saturating_mul(4).max(16) {
-                entries.shrink_to_fit();
-            }
-            evicted = true;
-        }
-    }
-    if evicted {
-        crate::note_cache_eviction();
-    }
+    TURN_CACHE
+        .0
+        .evict_idle(max_idle, |entry| entry.last_accessed, |_| 0);
 }
 
 #[cfg(test)]
@@ -541,14 +531,14 @@ struct Cursor {
     id: String,
     stamp: FileStamp,
     offset: u64,
-    anchor: Vec<u8>,
+    anchor: [u8; 32],
     turns: Turns,
     caught_up: bool,
     last_accessed: std::time::Instant,
 }
 
-struct TurnCache(Mutex<VecDeque<Cursor>>);
-static TURN_CACHE: TurnCache = TurnCache(Mutex::new(VecDeque::new()));
+struct TurnCache(crate::lru::ByteBoundedLru<Cursor>);
+static TURN_CACHE: TurnCache = TurnCache(crate::lru::ByteBoundedLru::new(256, u64::MAX));
 const READ_BUDGET: u64 = 8 * 1024 * 1024;
 const LINE_LIMIT: u64 = 256 * 1024;
 
@@ -570,9 +560,9 @@ impl TurnCache {
         let mut file = File::open(path)?;
         let stamp = FileStamp::from_open_file(&file)
             .ok_or_else(|| std::io::Error::other("invalid activity file"))?;
-        let old = self.0.lock().ok().and_then(|mut entries| {
-            crate::lru::take_first(&mut entries, |entry| entry.path == path && entry.id == id)
-        });
+        let old = self
+            .0
+            .take(|entry| entry.path == path && entry.id == id, |_| 0);
         let mut cursor = match old {
             Some(mut cursor) if cursor.stamp == stamp && cursor.caught_up => {
                 cursor.last_accessed = std::time::Instant::now();
@@ -584,7 +574,8 @@ impl TurnCache {
                 if cursor.stamp.same_inode(&stamp)
                     && (stamp.len > cursor.stamp.len
                         || (cursor.stamp == stamp && !cursor.caught_up))
-                    && anchor(&mut file, cursor.offset)? == cursor.anchor =>
+                    && crate::jsonl_cache::file_anchor(&mut file, cursor.offset)?
+                        == cursor.anchor =>
             {
                 cursor
             }
@@ -593,7 +584,7 @@ impl TurnCache {
                 id: id.to_owned(),
                 stamp,
                 offset: 0,
-                anchor: Vec::new(),
+                anchor: [0; 32],
                 turns: Turns::default(),
                 caught_up: false,
                 last_accessed: std::time::Instant::now(),
@@ -635,7 +626,7 @@ impl TurnCache {
         if FileStamp::from_open_file(&file).as_ref() != Some(&stamp) {
             return Ok((Phase::Unknown, false));
         }
-        cursor.anchor = anchor(&mut file, cursor.offset)?;
+        cursor.anchor = crate::jsonl_cache::file_anchor(&mut file, cursor.offset)?;
         let complete = cursor.caught_up && cursor.offset == stamp.len;
         cursor.stamp = stamp;
         cursor.last_accessed = std::time::Instant::now();
@@ -643,20 +634,10 @@ impl TurnCache {
         Ok((phase, complete))
     }
     fn publish(&self, cursor: Cursor) {
-        if let Ok(mut entries) = self.0.lock() {
-            entries.retain(|entry| entry.path != cursor.path);
-            entries.push_back(cursor);
-            crate::lru::trim(&mut entries, 256, 0, 0, |_| true, |_| 0);
-        }
+        let target_path = cursor.path.clone();
+        self.0
+            .insert(cursor, |entry| entry.path == target_path, |_| 0);
     }
-}
-
-fn anchor(file: &mut File, offset: u64) -> std::io::Result<Vec<u8>> {
-    let len = offset.min(64);
-    let mut value = vec![0; len as usize];
-    file.seek(SeekFrom::Start(offset - len))?;
-    file.read_exact(&mut value)?;
-    Ok(value)
 }
 
 #[cfg(test)]

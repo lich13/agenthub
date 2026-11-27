@@ -111,6 +111,26 @@ public struct ProbeSettingsView: Codable, Equatable, Sendable {
             case hookCooldownMaxLines = "hook_cooldown_max_lines"
             case logMaxBytes = "log_max_bytes"
         }
+
+        public init(
+            eventRetentionDays: Int,
+            hookEventMaxLines: Int = 500,
+            hookCooldownMaxLines: Int = 1000,
+            logMaxBytes: Int = 5 * 1024 * 1024
+        ) {
+            self.eventRetentionDays = eventRetentionDays
+            self.hookEventMaxLines = hookEventMaxLines
+            self.hookCooldownMaxLines = hookCooldownMaxLines
+            self.logMaxBytes = logMaxBytes
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            eventRetentionDays = try c.decode(Int.self, forKey: .eventRetentionDays)
+            hookEventMaxLines = try c.decodeIfPresent(Int.self, forKey: .hookEventMaxLines) ?? 500
+            hookCooldownMaxLines = try c.decodeIfPresent(Int.self, forKey: .hookCooldownMaxLines) ?? 1000
+            logMaxBytes = try c.decodeIfPresent(Int.self, forKey: .logMaxBytes) ?? (5 * 1024 * 1024)
+        }
     }
 
     public struct ErrorMonitor: Codable, Equatable, Sendable {
@@ -225,9 +245,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
     public var pollSecondsText: String
     public var recentLimitText: String
     public var eventRetentionDaysText: String
-    public var hookEventMaxLinesText: String
-    public var hookCooldownMaxLinesText: String
-    public var logMaxMiBText: String
 
     public var barkEnabled: Bool
     public var barkServerUrl: String
@@ -267,12 +284,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         let probe = view.probe
         let obs = probe.observability
         let notif = view.notifications
-        let logBytes = obs.logMaxBytes
-        let logMiB: Double = Double(logBytes) / (1024.0 * 1024.0)
-        let isWholeMiB: Bool = logMiB.truncatingRemainder(dividingBy: 1) == 0
-        let formattedMiB: String = isWholeMiB
-            ? String(Int(logMiB))
-            : String(format: "%.6g", logMiB)
 
         return ProbeSettingsDraft(
             codexHome: codex.configuredCodexHome ?? "",
@@ -282,9 +293,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             pollSecondsText: String(probe.pollSeconds),
             recentLimitText: String(probe.recentLimit),
             eventRetentionDaysText: String(obs.eventRetentionDays),
-            hookEventMaxLinesText: String(obs.hookEventMaxLines),
-            hookCooldownMaxLinesText: String(obs.hookCooldownMaxLines),
-            logMaxMiBText: formattedMiB,
             barkEnabled: notif.enabled,
             barkServerUrl: notif.serverUrl,
             barkDeviceKey: "",
@@ -448,38 +456,11 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
         checkInt(pollSecondsText, label: "轮询秒数", min: 5, max: 3600)
         checkInt(recentLimitText, label: "最近事件数", min: 1, max: 500)
         checkInt(eventRetentionDaysText, label: "通知事件保留天数", min: 1, max: 3650)
-        checkInt(hookEventMaxLinesText, label: "Hook 事件行数", min: 10, max: 10000)
-        checkInt(hookCooldownMaxLinesText, label: "冷却行数", min: 10, max: 10000)
-
-        if Self.validatedLogMaxBytes(from: logMaxMiBText) == nil {
-            let trimmed = logMaxMiBText.trimmingCharacters(in: .whitespaces)
-            if let mib = Double(trimmed), mib.isFinite {
-                errors.append("日志上限 MiB 须在 0.00390625 到 8 之间")
-            } else {
-                errors.append("日志上限 MiB 格式无效")
-            }
-        }
 
         if hostLabel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             errors.append("主机标签不能为空")
         }
         return errors
-    }
-
-    private static func validatedLogMaxBytes(from rawMiBText: String) -> Int? {
-        guard let mib = Double(rawMiBText.trimmingCharacters(in: .whitespaces)),
-              mib.isFinite,
-              mib >= 0
-        else {
-            return nil
-        }
-        let minBytes = 4096.0
-        let maxBytes = Double(8 * 1024 * 1024)
-        let roundedBytes = (mib * 1024.0 * 1024.0).rounded()
-        guard roundedBytes >= minBytes, roundedBytes <= maxBytes else {
-            return nil
-        }
-        return Int(roundedBytes)
     }
 
     public func buildSavePayload(
@@ -521,9 +502,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             let pollSeconds = Int(pollSecondsText.trimmingCharacters(in: .whitespaces)) ?? 15
             let recentLimit = Int(recentLimitText.trimmingCharacters(in: .whitespaces)) ?? 50
             let retentionDays = Int(eventRetentionDaysText.trimmingCharacters(in: .whitespaces)) ?? 2
-            let hookMaxLines = Int(hookEventMaxLinesText.trimmingCharacters(in: .whitespaces)) ?? 500
-            let cooldownLines = Int(hookCooldownMaxLinesText.trimmingCharacters(in: .whitespaces)) ?? 1000
-            let logBytes = Self.validatedLogMaxBytes(from: logMaxMiBText) ?? (5 * 1024 * 1024)
 
             let trimmedHome = codexHome.trimmingCharacters(in: .whitespacesAndNewlines)
             let homePatch: JSONValue = (trimmedHome.isEmpty || trimmedHome.lowercased() == "auto") ? .null : .string(trimmedHome)
@@ -567,9 +545,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
                     "notifications": .object(notifObj),
                     "observability": .object([
                         "event_retention_days": .number(Double(retentionDays)),
-                        "hook_event_max_lines": .number(Double(hookMaxLines)),
-                        "hook_cooldown_max_lines": .number(Double(cooldownLines)),
-                        "log_max_bytes": .number(Double(logBytes)),
                     ]),
                 ]),
             ]
@@ -596,10 +571,7 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             let limitsEqual: Bool =
                 pollSecondsText == other.pollSecondsText &&
                 recentLimitText == other.recentLimitText &&
-                eventRetentionDaysText == other.eventRetentionDaysText &&
-                hookEventMaxLinesText == other.hookEventMaxLinesText &&
-                hookCooldownMaxLinesText == other.hookCooldownMaxLinesText &&
-                logMaxMiBText == other.logMaxMiBText
+                eventRetentionDaysText == other.eventRetentionDaysText
             let codexEqual: Bool =
                 notifyCompletion == other.notifyCompletion &&
                 notifyReplyNeeded == other.notifyReplyNeeded &&
@@ -652,9 +624,6 @@ public struct ProbeSettingsDraft: Equatable, Sendable {
             pollSecondsText = refreshed.pollSecondsText
             recentLimitText = refreshed.recentLimitText
             eventRetentionDaysText = refreshed.eventRetentionDaysText
-            hookEventMaxLinesText = refreshed.hookEventMaxLinesText
-            hookCooldownMaxLinesText = refreshed.hookCooldownMaxLinesText
-            logMaxMiBText = refreshed.logMaxMiBText
             notifyCompletion = refreshed.notifyCompletion
             notifyReplyNeeded = refreshed.notifyReplyNeeded
             notifyRecoverable = refreshed.notifyRecoverable

@@ -37,7 +37,7 @@ pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
                 .threads()
                 .account_scope_clear(&state.codex_paths())?;
             state.db.record_audit(
-                Some(crate::audit::ADMIN_ID),
+                Some(crate::state::ADMIN_ID),
                 "codex_account_scope.clear",
                 Some("codex_account_scope"),
                 None,

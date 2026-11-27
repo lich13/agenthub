@@ -295,10 +295,7 @@ fn bounded_redacted_summary(value: &str) -> Option<String> {
     if redacted.len() <= MAX_ERROR_SUMMARY_BYTES {
         return Some(redacted.to_string());
     }
-    let mut end = MAX_ERROR_SUMMARY_BYTES;
-    while !redacted.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = redacted.floor_char_boundary(MAX_ERROR_SUMMARY_BYTES);
     Some(format!("{} [truncated]", &redacted[..end]))
 }
 
