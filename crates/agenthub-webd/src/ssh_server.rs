@@ -72,21 +72,29 @@ async fn serve_at(state: AppState, path: &Path) -> Result<()> {
         });
     }
 }
-#[derive(serde::Serialize)]
 pub(crate) struct OutboundResponse {
     pub id: u64,
     pub result: Option<Box<serde_json::value::RawValue>>,
     pub error: Option<String>,
 }
 
+const MAX_CONNECTION_INFLIGHT_REQUESTS: usize = 16;
+
 async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
     let (mut reader, writer) = stream.into_split();
     let writer = Arc::new(Mutex::new(writer));
+    let inflight = Arc::new(tokio::sync::Semaphore::new(
+        MAX_CONNECTION_INFLIGHT_REQUESTS,
+    ));
     while let Some(request) = ssh_rpc::read::<_, Request>(&mut reader).await? {
+        let Ok(permit) = inflight.clone().acquire_owned().await else {
+            break;
+        };
         let state = state.clone();
         let writer = writer.clone();
         // An accepted operation finishes independently of the SSH connection.
         tokio::spawn(async move {
+            let _permit = permit;
             let response = dispatch_raw(state, request).await;
             let large_response = response
                 .result
@@ -94,7 +102,15 @@ async fn connection(state: AppState, stream: UnixStream) -> Result<()> {
                 .is_some_and(|raw| raw.get().len() > 1024 * 1024);
             {
                 let mut guard = writer.lock().await;
-                if ssh_rpc::write(&mut *guard, &response).await.is_err() {
+                if ssh_rpc::write_raw_response(
+                    &mut *guard,
+                    response.id,
+                    response.result.as_deref(),
+                    response.error.as_deref(),
+                )
+                .await
+                .is_err()
+                {
                     use tokio::io::AsyncWriteExt;
                     let _ = guard.shutdown().await;
                 }

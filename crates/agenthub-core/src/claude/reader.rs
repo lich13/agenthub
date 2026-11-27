@@ -66,7 +66,13 @@ struct ReaderState {
     weight: u64,
 }
 impl ReaderState {
-    fn push(&mut self, line: &[u8], context: &ReadContext) -> Result<()> {
+    fn push(
+        &mut self,
+        path: &Path,
+        line: &[u8],
+        line_offset: u64,
+        context: &ReadContext,
+    ) -> Result<()> {
         #[cfg(test)]
         BODY_RECORDS.with(|count| count.set(count.get() + 1));
         ensure!(
@@ -116,7 +122,12 @@ impl ReaderState {
             self.main.push(uuid.into());
         }
         if !self.rebuild {
-            self.parser.push(&value, self.records, None);
+            self.parser.push(
+                &value,
+                self.records,
+                None,
+                Some((path, line_offset, line.len())),
+            );
         }
         self.records += 1;
         if counts_retained {
@@ -136,17 +147,29 @@ impl ReaderState {
         let mut input = BufReader::new(options.open(path)?.take(offset));
         let mut line = Vec::new();
         let mut position = 0;
+        let mut cur_offset = 0u64;
         self.parser = Parser {
             context: self.parser.context.clone(),
             summary_only: self.parser.summary_only,
             retain_probe_events: self.parser.retain_probe_events,
             ..Default::default()
         };
-        while input.read_until(b'\n', &mut line)? != 0 {
+        loop {
+            let line_offset = cur_offset;
+            let read_len = input.read_until(b'\n', &mut line)?;
+            if read_len == 0 {
+                break;
+            }
+            cur_offset += read_len as u64;
             if let Ok(value) = serde_json::from_slice::<Value>(&line) {
                 if value.is_object() {
                     self.parser.context.validate(&value)?;
-                    self.parser.push(&value, position, Some(&allowed));
+                    self.parser.push(
+                        &value,
+                        position,
+                        Some(&allowed),
+                        Some((path, line_offset, line.len())),
+                    );
                     position += 1;
                 }
             }
@@ -259,6 +282,27 @@ impl Default for ProbeReaderState {
     }
 }
 
+struct SummaryReaderState {
+    inner: ReaderState,
+    snapshot: Option<Arc<Parsed>>,
+}
+
+impl Default for SummaryReaderState {
+    fn default() -> Self {
+        Self {
+            inner: ReaderState {
+                parser: Parser {
+                    summary_only: true,
+                    retain_probe_events: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            snapshot: None,
+        }
+    }
+}
+
 static DETAIL_CACHE: crate::jsonl_cache::JsonlCache<ReaderState> =
     crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CLAUDE_DETAIL_CACHE_BYTES)
         .with_line_limit(crate::resource_limits::CLAUDE_LINE_BYTES);
@@ -272,10 +316,10 @@ static PROBE_CACHE: crate::read_cache::ReadCache<(
     .with_entry_limit(crate::resource_limits::CLAUDE_SUMMARY_ENTRIES)
     .with_native_metadata();
 
-static SUMMARY_CACHE: crate::read_cache::ReadCache<Parsed> =
-    crate::read_cache::ReadCache::new(crate::resource_limits::CLAUDE_SUMMARY_CACHE_BYTES)
+static SUMMARY_CACHE: crate::jsonl_cache::JsonlCache<SummaryReaderState> =
+    crate::jsonl_cache::JsonlCache::new(crate::resource_limits::CLAUDE_SUMMARY_CACHE_BYTES)
         .with_entry_limit(usize::MAX)
-        .with_native_metadata();
+        .with_line_limit(crate::resource_limits::CLAUDE_LINE_BYTES);
 
 pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
     DETAIL_CACHE.evict_idle(max_idle);
@@ -298,7 +342,7 @@ pub(super) fn read_probe_snapshot(path: &Path) -> Result<Arc<ClaudeProbeSnapshot
             Ok(0)
         },
         false,
-        |state, line, _, _| state.inner.push(line, &ReadContext::Main),
+        |state, line, _, offset| state.inner.push(path, line, offset, &ReadContext::Main),
         |state, info| {
             if info.changed || state.snapshot.is_none() {
                 if state.inner.rebuild {
@@ -449,7 +493,7 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
             Ok(0)
         },
         false,
-        |state, line, _, _| state.push(line, context),
+        |state, line, _, offset| state.push(path, line, offset, context),
         |state, info| {
             if info.changed {
                 let old_snapshot = std::mem::take(&mut state.snapshot);
@@ -587,80 +631,80 @@ pub(super) fn read_context(path: &Path, context: &ReadContext) -> Result<Arc<Par
     )
 }
 
-fn read_summary_uncached(path: &Path) -> Result<Parsed> {
-    let mut state = ReaderState {
-        parser: Parser {
-            summary_only: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let (offset, partial) = crate::jsonl_cache::scan_once(
-        path,
-        MAX_BYTES,
-        Some(crate::resource_limits::CLAUDE_LINE_BYTES),
-        false,
-        |line, _, _| state.push(line, &ReadContext::Main),
-    )?;
-    if state.rebuild {
-        state.rebuild(path, offset)?;
-    }
-    let mut parsed = state
-        .parser
-        .snapshot(path, state.issues, partial, state.records as u64);
-    parsed.events = Arc::default();
-    parsed.native_events.clear();
-    parsed.prompts.clear();
-    parsed.agent_names.clear();
-    Ok(parsed)
-}
-
 pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
     // A list may contain many more sources than the body cache can retain.
     // Keep only summary fields here, and never insert cold list items into DETAIL_CACHE.
+    if !SUMMARY_CACHE.has_entry(path, "") {
+        if DETAIL_CACHE.has_entry(path, "") {
+            let parsed = read(path)?;
+            return Ok(Arc::new(Parsed {
+                id: parsed.id.clone(),
+                title: parsed.title.clone(),
+                cwd: parsed.cwd.clone(),
+                cwds: parsed.cwds.clone(),
+                version: parsed.version.clone(),
+                updated_at: parsed.updated_at.clone(),
+                message_count: parsed.message_count,
+                last_message: parsed.last_message.clone(),
+                issues: parsed.issues.clone(),
+                has_fatal_issues: parsed.has_fatal_issues,
+                has_partial_tail: parsed.has_partial_tail,
+                warnings: parsed.warnings.clone(),
+                last_turn_at: parsed.last_turn_at,
+                last_terminal_at: parsed.last_terminal_at,
+                turn_open: parsed.turn_open,
+                has_open_questions: parsed.has_open_questions,
+                saw_sidechain: parsed.saw_sidechain,
+                saw_primary: parsed.saw_primary,
+                ..Default::default()
+            }));
+        }
+        if PROBE_DETAIL_CACHE.has_entry(path, "") {
+            let snap = read_probe_snapshot(path)?;
+            return Ok(Arc::new(snap.to_summary_parsed()));
+        }
+    }
     SUMMARY_CACHE.read(
         path,
-        |parsed, _| {
-            512 + (parsed.id.capacity()
-                + parsed.title.capacity()
-                + parsed.cwd.capacity()
-                + parsed.cwds.iter().map(String::capacity).sum::<usize>()
-                + parsed.version.capacity()
-                + parsed.updated_at.as_ref().map_or(0, String::capacity)
-                + parsed.last_message.as_ref().map_or(0, String::capacity)
-                + parsed.issues.iter().map(String::capacity).sum::<usize>()
-                + parsed.warnings.iter().map(String::capacity).sum::<usize>())
-                as u64
+        |size| {
+            ensure!(size <= MAX_BYTES, "Claude 会话超出 512 MiB 读取上限");
+            Ok(0)
         },
-        || {
-            if DETAIL_CACHE.has_entry(path, "") {
-                let parsed = read(path)?;
-                return Ok(Parsed {
-                    id: parsed.id.clone(),
-                    title: parsed.title.clone(),
-                    cwd: parsed.cwd.clone(),
-                    cwds: parsed.cwds.clone(),
-                    version: parsed.version.clone(),
-                    updated_at: parsed.updated_at.clone(),
-                    message_count: parsed.message_count,
-                    last_message: parsed.last_message.clone(),
-                    issues: parsed.issues.clone(),
-                    warnings: parsed.warnings.clone(),
-                    last_turn_at: parsed.last_turn_at,
-                    last_terminal_at: parsed.last_terminal_at,
-                    turn_open: parsed.turn_open,
-                    has_open_questions: parsed.has_open_questions,
-                    saw_sidechain: parsed.saw_sidechain,
-                    saw_primary: parsed.saw_primary,
-                    ..Default::default()
-                });
+        false,
+        |state, line, _, offset| state.inner.push(path, line, offset, &ReadContext::Main),
+        |state, info| {
+            if info.changed || state.snapshot.is_none() {
+                if state.inner.rebuild {
+                    state.inner.rebuild(path, info.offset)?;
+                }
+                let mut parsed = state.inner.parser.snapshot(
+                    path,
+                    state.inner.issues.clone(),
+                    info.partial,
+                    state.inner.records as u64,
+                );
+                parsed.events = Arc::default();
+                parsed.native_events.clear();
+                parsed.prompts.clear();
+                parsed.agent_names.clear();
+                state.inner.weight = 512
+                    + (parsed.id.capacity()
+                        + parsed.title.capacity()
+                        + parsed.cwd.capacity()
+                        + parsed.cwds.iter().map(String::capacity).sum::<usize>()
+                        + parsed.version.capacity()
+                        + parsed.updated_at.as_ref().map_or(0, String::capacity)
+                        + parsed.last_message.as_ref().map_or(0, String::capacity)
+                        + parsed.issues.iter().map(String::capacity).sum::<usize>()
+                        + parsed.warnings.iter().map(String::capacity).sum::<usize>())
+                        as u64
+                    + state.inner.parser.seen.len() as u64 * 48
+                    + state.inner.main.len() as u64 * 40;
+                state.snapshot = Some(Arc::new(parsed));
             }
-            if PROBE_DETAIL_CACHE.has_entry(path, "") {
-                let snap = read_probe_snapshot(path)?;
-                return Ok(snap.to_summary_parsed());
-            }
-            read_summary_uncached(path)
+            Ok(state.snapshot.as_ref().expect("summary snapshot").clone())
         },
+        |state| state.inner.weight,
     )
 }
 
@@ -912,6 +956,12 @@ fn compact_file_history_detail(record: &Value) -> String {
     "文件历史快照".into()
 }
 
+#[derive(Clone, Copy)]
+enum SeenUuid {
+    Span { offset: u64, len: u32 },
+    Digest([u8; 32]),
+}
+
 #[derive(Default)]
 struct Parser {
     context: ReadContext,
@@ -930,7 +980,7 @@ struct Parser {
     pending: HashSet<String>,
     questions: HashMap<String, crate::native_probe::NativeTurnEvent>,
     permission_calls: HashMap<String, String>,
-    seen: HashMap<String, [u8; 32]>,
+    seen: HashMap<String, SeenUuid>,
     last_assistant_text: Option<String>,
     last_stop_reason: String,
     last_assistant_events: Vec<usize>,
@@ -957,6 +1007,16 @@ fn canonical_record_digest(record: &Value) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+fn read_canonical_digest_at(path: &Path, offset: u64, len: u32) -> Option<[u8; 32]> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = crate::file_stamp::open_regular_nofollow(path).ok()?;
+    file.seek(SeekFrom::Start(offset)).ok()?;
+    let mut buf = vec![0u8; len as usize];
+    file.read_exact(&mut buf).ok()?;
+    let value = serde_json::from_slice::<Value>(&buf).ok()?;
+    Some(canonical_record_digest(&value))
+}
+
 impl Parser {
     fn push_event(&mut self, e: ClaudeHistoryEvent) {
         self.saw_any_event = true;
@@ -976,7 +1036,13 @@ impl Parser {
         }
     }
 
-    fn push(&mut self, record: &Value, position: usize, allowed: Option<&HashSet<String>>) {
+    fn push(
+        &mut self,
+        record: &Value,
+        position: usize,
+        allowed: Option<&HashSet<String>>,
+        source_span: Option<(&Path, u64, usize)>,
+    ) {
         let is_sidechain_record = record.get("isSidechain").and_then(Value::as_bool) == Some(true)
             || !field(record, "agentId").is_empty()
             || field(record, "type") == "fork-context-ref";
@@ -1042,13 +1108,34 @@ impl Parser {
             uuid.into()
         };
         if !uuid.is_empty() {
-            let hash = canonical_record_digest(record);
-            if let Some(prior) = self.seen.insert(uuid.into(), hash) {
-                if prior != hash {
+            if let Some(existing) = self.seen.get_mut(uuid) {
+                let current_hash = canonical_record_digest(record);
+                let matches_prior = match *existing {
+                    SeenUuid::Digest(digest) => digest == current_hash,
+                    SeenUuid::Span { offset, len } => match source_span
+                        .and_then(|(path, _, _)| read_canonical_digest_at(path, offset, len))
+                    {
+                        Some(digest) => {
+                            *existing = SeenUuid::Digest(digest);
+                            digest == current_hash
+                        }
+                        None => false,
+                    },
+                };
+                if !matches_prior {
                     issue(&mut self.parsed, "记录 ID 冲突，改名已禁用");
                 }
                 return;
             }
+            let entry = match source_span.and_then(|(_, offset, len)| {
+                u32::try_from(len)
+                    .ok()
+                    .map(|len| SeenUuid::Span { offset, len })
+            }) {
+                Some(span) => span,
+                None => SeenUuid::Digest(canonical_record_digest(record)),
+            };
+            self.seen.insert(uuid.into(), entry);
         }
         self.read_kind(record, position, key, kind, uuid);
     }

@@ -406,6 +406,7 @@ fn execute_codex_scope(
     let has_spawn_edges =
         edge_cols.contains("parent_thread_id") && edge_cols.contains("child_thread_id");
     let edges = crate::selected_codex::tree::spawn_edges_with_connection(&conn)?;
+    let job_tables = crate::selected_codex::tree::active_job_tables(&conn)?;
     let targets = verified_scope_targets(targets, scope, |id, fingerprint| {
         let verified = if is_hidden {
             archive::verify_hidden_target_fingerprint(&conn, &thread_cols, has_spawn_edges, id)?
@@ -421,7 +422,12 @@ fn execute_codex_scope(
         }
         let tree_ids =
             crate::selected_codex::tree::descendants_from_edges(&edges, &[id.to_owned()])?;
-        crate::selected_codex::tree::ensure_ids_not_running(codex, &tree_ids, Some(&conn))?;
+        crate::selected_codex::tree::ensure_ids_not_running_with_job_tables(
+            codex,
+            &tree_ids,
+            Some(&conn),
+            &job_tables,
+        )?;
         Ok(None)
     });
     let selections = targets

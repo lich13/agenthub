@@ -138,7 +138,8 @@ impl Parser {
         position: usize,
         uuid: &str,
     ) {
-        let (user, compact) = crate::claude::presentation::user_content(key, record, parts);
+        let (user, compact) =
+            crate::claude::presentation::user_content(key, record, parts, !self.summary_only);
         let automatic = record["isMeta"] == true
             || compact
             || (user.text.trim().is_empty() && user.attachments.is_empty());

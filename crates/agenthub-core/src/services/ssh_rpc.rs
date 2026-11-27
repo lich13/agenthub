@@ -44,6 +44,64 @@ pub async fn write<W: AsyncWrite + Unpin, T: Serialize>(writer: &mut W, value: &
     writer.flush().await?;
     Ok(())
 }
+
+pub async fn write_raw_response<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    id: u64,
+    result: Option<&serde_json::value::RawValue>,
+    error: Option<&str>,
+) -> Result<()> {
+    if let (Some(raw), None) = (result, error) {
+        let prefix = format!("{{\"id\":{id},\"result\":");
+        let body = raw.get().as_bytes();
+        let suffix = b",\"error\":null}";
+        let total = prefix
+            .len()
+            .saturating_add(body.len())
+            .saturating_add(suffix.len());
+        ensure!(
+            total <= crate::resource_limits::REMOTE_RESPONSE_BYTES,
+            "RPC frame exceeds size limit"
+        );
+        writer.write_all(&(total as u32).to_be_bytes()).await?;
+        writer.write_all(prefix.as_bytes()).await?;
+        writer.write_all(body).await?;
+        writer.write_all(suffix).await?;
+        writer.flush().await?;
+        return Ok(());
+    }
+    write(
+        writer,
+        &Response {
+            id,
+            result: result.and_then(|r| serde_json::from_str(r.get()).ok()),
+            error: error.map(str::to_owned),
+        },
+    )
+    .await
+}
+
+pub async fn read_raw_response<R: AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<
+    Option<(
+        u64,
+        Option<Box<serde_json::value::RawValue>>,
+        Option<String>,
+    )>,
+> {
+    #[derive(Deserialize)]
+    struct RawResponseFrame {
+        id: u64,
+        result: Option<Box<serde_json::value::RawValue>>,
+        error: Option<String>,
+    }
+    let Some(frame) = read::<_, RawResponseFrame>(reader).await? else {
+        return Ok(None);
+    };
+    Ok(Some((frame.id, frame.result, frame.error)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -66,5 +124,26 @@ mod tests {
             .await
             .is_err());
         assert!(read::<_, Request>(&mut &[][..]).await.unwrap().is_none());
+
+        let raw_payload =
+            serde_json::value::RawValue::from_string("{\"items\":[1,2,3]}".into()).unwrap();
+        let mut raw_frame = Vec::new();
+        write_raw_response(&mut raw_frame, 42, Some(&raw_payload), None)
+            .await
+            .unwrap();
+        let decoded: Response = read(&mut raw_frame.as_slice()).await.unwrap().unwrap();
+        assert_eq!(decoded.id, 42);
+        assert_eq!(
+            decoded.result,
+            Some(serde_json::json!({"items": [1, 2, 3]}))
+        );
+        assert_eq!(decoded.error, None);
+        let (rid, rval, rerr) = read_raw_response(&mut raw_frame.as_slice())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(rid, 42);
+        assert_eq!(rval.unwrap().get(), "{\"items\":[1,2,3]}");
+        assert_eq!(rerr, None);
     }
 }

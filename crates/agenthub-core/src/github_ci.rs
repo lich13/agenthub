@@ -488,7 +488,7 @@ struct Cached {
 pub struct Monitor {
     client: Client,
     cache: HashMap<String, Cached>,
-    token: String,
+    token: zeroize::Zeroizing<String>,
     retry_at: i64,
     api: String,
     credentials_due_ms: i64,
@@ -507,7 +507,7 @@ impl Monitor {
                 .timeout(Duration::from_secs(12))
                 .build()?,
             cache: HashMap::new(),
-            token: String::new(),
+            token: zeroize::Zeroizing::new(String::new()),
             retry_at: 0,
             api: "https://api.github.com".into(),
             credentials_due_ms: 0,
@@ -586,6 +586,18 @@ impl Monitor {
         self.active = Some(active);
         let mut account_ready = false;
         if !active {
+            if !self.cache.is_empty() {
+                self.cache.clear();
+                self.cache.shrink_to_fit();
+            }
+            if !self.repository_due_ms.is_empty() {
+                self.repository_due_ms.clear();
+                self.repository_due_ms.shrink_to_fit();
+            }
+            if !self.token.is_empty() {
+                self.token = zeroize::Zeroizing::new(String::new());
+            }
+            self.credentials_due_ms = 0;
             if !state.snapshot.enabled
                 && state.baseline_ms == 0
                 && state.monitored_repo_ids.is_empty()
@@ -614,8 +626,8 @@ impl Monitor {
                 if check_account {
                     // Only a verified account can extend the credential lease.
                     self.credentials_due_ms = 0;
-                    let token = token.await?;
-                    if token != self.token {
+                    let token = zeroize::Zeroizing::new(token.await?);
+                    if *token != *self.token {
                         self.cache.clear();
                         self.repository_due_ms.clear();
                         self.token = token;
@@ -734,7 +746,7 @@ impl Monitor {
         let mut req = self
             .client
             .get(&url)
-            .bearer_auth(&self.token)
+            .bearer_auth(&*self.token)
             .header(header::ACCEPT, "application/vnd.github+json");
         if let Some(etag) = self.cache.get(&url).and_then(|c| c.etag.as_ref()) {
             req = req.header(header::IF_NONE_MATCH, etag);

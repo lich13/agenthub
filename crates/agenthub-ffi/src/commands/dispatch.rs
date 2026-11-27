@@ -35,7 +35,6 @@ use agenthub_core::{
     user_message::SessionAttachmentRequest,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

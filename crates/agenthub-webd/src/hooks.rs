@@ -116,12 +116,15 @@ pub(super) fn schedule_hook_request_user_input_confirmation(
         .spawn()
         .context("start question confirmation helper")?;
     let payload = serde_json::to_vec(payload).context("serialize PreToolUse payload")?;
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .context("open question confirmation stdin")?
-        .write_all(&payload)
-        .context("send PreToolUse payload to confirmation helper")?;
+        .context("open question confirmation stdin")?;
+    if let Err(err) = stdin.write_all(&payload) {
+        if err.kind() != std::io::ErrorKind::BrokenPipe {
+            return Err(err).context("send PreToolUse payload to confirmation helper");
+        }
+    }
     Ok(())
 }
 

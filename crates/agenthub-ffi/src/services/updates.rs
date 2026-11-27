@@ -176,12 +176,17 @@ fn native_update_job_plan_for_action(
         .ok_or_else(|| anyhow!("update action did not produce a macOS updater job spec"))
 }
 
-fn http_client() -> Result<reqwest::Client> {
-    agenthub_core::http_client_builder()
+fn http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
+    let built = agenthub_core::http_client_builder()
         .timeout(Duration::from_secs(120))
         .user_agent(concat!("AgentHub/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|err| anyhow!("初始化更新器失败: {err}"))
+        .map_err(|err| anyhow!("初始化更新器失败: {err}"))?;
+    Ok(CLIENT.get_or_init(|| built))
 }
 
 async fn fetch_bounded(client: &reqwest::Client, url: &str, max_bytes: usize) -> Result<Vec<u8>> {
@@ -256,7 +261,7 @@ pub(crate) fn verify_minisign_archive(
 async fn check_update(state: &DesktopState, job_id: &str, feed_url: &str) -> Result<UpdateStatus> {
     let client = http_client()?;
     let mut status = desktop_update_status_with_state(state, None, None)?;
-    let (manifest, _) = fetch_latest_manifest(&client, feed_url).await?;
+    let (manifest, _) = fetch_latest_manifest(client, feed_url).await?;
     let available =
         updates::update_available_for_versions(&status.current_version, &manifest.version);
     if available == Some(true) {
@@ -369,7 +374,7 @@ fn extract_and_verify_bundle(
 async fn install_update(state: &DesktopState, job_id: &str, feed_url: &str) -> Result<bool> {
     let client = http_client()?;
     let status = desktop_update_status_with_state(state, None, None)?;
-    let (manifest, platform) = fetch_latest_manifest(&client, feed_url).await?;
+    let (manifest, platform) = fetch_latest_manifest(client, feed_url).await?;
     if updates::update_available_for_versions(&status.current_version, &manifest.version)
         != Some(true)
     {
@@ -389,7 +394,7 @@ async fn install_update(state: &DesktopState, job_id: &str, feed_url: &str) -> R
         job_id,
         &format!("downloading signed app update {}\n", manifest.version),
     )?;
-    let bytes = fetch_bounded(&client, &platform.url, MAX_ARCHIVE_BYTES)
+    let bytes = fetch_bounded(client, &platform.url, MAX_ARCHIVE_BYTES)
         .await
         .map_err(|err| anyhow!("下载更新失败: {err}"))?;
 

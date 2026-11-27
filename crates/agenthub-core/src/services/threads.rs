@@ -77,6 +77,9 @@ pub fn plan_thread_detail_request(
     request: ThreadDetailRequest,
 ) -> anyhow::Result<ThreadDetailPlan> {
     let thread_id = required_thread_id(&request.id)?;
+    if let Some(cursor) = request.before.as_deref() {
+        anyhow::ensure!(crate::codex::valid_history_cursor(cursor), "无效的历史游标");
+    }
     let full = request.full.unwrap_or(false);
     Ok(ThreadDetailPlan {
         thread_id,
@@ -192,5 +195,27 @@ mod tests {
 
         let blocks = plan_thread_blocks_request(" thread-a ", Some(0), None).unwrap();
         assert_eq!(blocks.block_limit, Some(1));
+
+        for valid in [
+            "b:12",
+            "b:12:message:12",
+            "a:message:3",
+            "p:message:3",
+            "j:m1",
+            "n:m1",
+            "w:m1",
+        ] {
+            assert!(
+                plan_thread_blocks_request("thread-a", Some(10), Some(valid.to_string())).is_ok()
+            );
+        }
+        for invalid in ["not-a-cursor", "b:abc", "b:12:", "a:", "p:", "x:12"] {
+            let err = plan_thread_blocks_request("thread-a", Some(10), Some(invalid.to_string()))
+                .unwrap_err();
+            assert!(
+                err.to_string().contains("无效的历史游标"),
+                "unexpected error for {invalid}: {err}"
+            );
+        }
     }
 }

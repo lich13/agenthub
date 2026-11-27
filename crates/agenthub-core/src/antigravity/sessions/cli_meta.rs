@@ -1483,9 +1483,9 @@ fn inspect_offline_db_steps_uncached(db_path: &Path) -> Result<Option<CachedDbSt
     }
     let total = total_check.min(200_000);
     let sql = if total_check <= 200_000 {
-        "SELECT step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM steps ORDER BY idx DESC"
+        "SELECT step_type, COALESCE(status, 0), CASE WHEN step_type IN (14, 15, 17) OR COALESCE(status, 0) = 7 THEN COALESCE(step_payload, X'') ELSE X'' END FROM steps ORDER BY idx DESC"
     } else {
-        "SELECT step_type, COALESCE(status, 0), COALESCE(step_payload, X'') FROM (SELECT idx, step_type, status, step_payload FROM steps ORDER BY idx ASC LIMIT 200000) ORDER BY idx DESC"
+        "SELECT step_type, COALESCE(status, 0), step_blob FROM (SELECT idx, step_type, status, CASE WHEN step_type IN (14, 15, 17) OR COALESCE(status, 0) = 7 THEN COALESCE(step_payload, X'') ELSE X'' END AS step_blob FROM steps ORDER BY idx ASC LIMIT 200000) ORDER BY idx DESC"
     };
     let mut stmt = conn.prepare(sql)?;
     let mut rows = stmt.query([])?;

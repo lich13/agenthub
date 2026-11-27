@@ -131,7 +131,16 @@ impl ProbeRuntime {
         let db = db.clone();
         crate::read_tasks::spawn_blocking(move || {
             let mut status = runtime.status_blocking(&db, force_refresh)?;
-            let _ = enrich_probe_status_from_db(&mut status, &db);
+            if let Err(err) = enrich_probe_status_from_db(&mut status, &db) {
+                let redacted = crate::security::redact_output(&err.to_string());
+                status.error_monitor_status = "error".to_string();
+                if status.error_monitor_last_error.is_none() {
+                    status.error_monitor_last_error = Some(redacted.clone());
+                }
+                status
+                    .discovery_warnings
+                    .push(format!("Probe 状态数据库读取失败：{redacted}"));
+            }
             Ok(status)
         })
         .await?

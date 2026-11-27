@@ -61,6 +61,11 @@ const SCHEMA_THREE_INDEX_SPECS: &[(&str, &str, &str)] = &[
         "CREATE INDEX IF NOT EXISTS idx_jobs_started_at ON jobs(started_at DESC);",
     ),
     (
+        "idx_jobs_kind_started_at",
+        "jobs",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_kind_started_at ON jobs(kind, started_at DESC);",
+    ),
+    (
         "idx_native_probe_deliveries_updated_at",
         "native_probe_deliveries",
         "CREATE INDEX IF NOT EXISTS idx_native_probe_deliveries_updated_at ON native_probe_deliveries(status, updated_at);",
@@ -829,26 +834,28 @@ impl PanelDb {
         retention_days: u32,
         max_delete_rows: u32,
     ) -> Result<(usize, usize)> {
-        let cutoff = Self::now() - i64::from(retention_days.max(1)) * 86_400;
+        let now = Self::now();
+        let cutoff = now - i64::from(retention_days.max(1)) * 86_400;
         let limit = i64::from(max_delete_rows.max(1));
-        let conn = self.conn.lock().expect("db mutex");
-        Self::prune_audit(&conn, Self::now())?;
-        let events_deleted = conn.execute(
+        let marker_cutoff = now - i64::from(retention_days.clamp(7, 3650)) * 86_400;
+        let mut conn = self.conn.lock().expect("db mutex");
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Self::prune_audit(&tx, now)?;
+        let events_deleted = tx.execute(
             "DELETE FROM probe_events WHERE rowid IN (
                 SELECT rowid FROM probe_events WHERE created_at < ?1 ORDER BY created_at ASC LIMIT ?2
             )",
             params![cutoff, limit],
         )?;
-        let dedupe_deleted = conn.execute(
+        let dedupe_deleted = tx.execute(
             "DELETE FROM probe_dedupe WHERE rowid IN (
                 SELECT rowid FROM probe_dedupe WHERE expires_at <= ?1 ORDER BY expires_at ASC LIMIT ?2
             )",
-            params![Self::now(), limit],
+            params![now, limit],
         )?;
-        let marker_cutoff = Self::now() - i64::from(retention_days.clamp(7, 3650)) * 86_400;
         let mut protected_markers = std::collections::HashSet::new();
         {
-            let mut stmt = conn.prepare(
+            let mut stmt = tx.prepare(
                 "SELECT value FROM settings WHERE key LIKE 'probe_active_unresolved_markers:%' AND updated_at >= ?1",
             )?;
             let rows = stmt.query_map([marker_cutoff], |row| row.get::<_, String>(0))?;
@@ -859,7 +866,7 @@ impl PanelDb {
             }
         }
         let candidate_markers: Vec<String> = {
-            let mut stmt = conn.prepare(
+            let mut stmt = tx.prepare(
                 "SELECT key FROM settings
                  WHERE (
                      key LIKE 'probe_feedback_delivery:%'
@@ -878,12 +885,12 @@ impl PanelDb {
             .filter(|key| !protected_markers.contains(key))
             .collect();
         if !expired_markers.is_empty() {
-            conn.execute(
+            tx.execute(
                 "DELETE FROM settings WHERE key IN (SELECT value FROM json_each(?1))",
                 [serde_json::to_string(&expired_markers)?],
             )?;
         }
-        conn.execute(
+        tx.execute(
             "DELETE FROM probe_notification_deliveries WHERE rowid IN (
                 SELECT rowid FROM probe_notification_deliveries
                 WHERE status IN ('sent', 'failed', 'skipped', 'legacy', 'unknown')
@@ -893,7 +900,7 @@ impl PanelDb {
             )",
             params![marker_cutoff * 1_000, limit],
         )?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM probe_error_incidents WHERE rowid IN (
                 SELECT rowid FROM probe_error_incidents
                 WHERE bark_status != 'pending' AND updated_at < ?1
@@ -902,7 +909,7 @@ impl PanelDb {
             )",
             params![marker_cutoff, limit],
         )?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM jobs WHERE rowid IN (
                 SELECT rowid FROM jobs
                 WHERE status IN ('succeeded', 'failed', 'cancelled')
@@ -915,6 +922,7 @@ impl PanelDb {
             )",
             params![marker_cutoff, limit],
         )?;
+        tx.commit()?;
         Ok((events_deleted, dedupe_deleted))
     }
 }

@@ -165,14 +165,14 @@ pub(crate) fn start(
             let result = if source.target == MachineTarget::Remote {
                 Some(
                     remote
-                        .invoke(&RemoteInvokeRequest {
+                        .invoke_raw(&RemoteInvokeRequest {
                             revision: source.revision,
                             command: "github.ci.status".into(),
                             args: serde_json::json!({ "cached_only": true }),
                         })
                         .await
-                        .and_then(|value| {
-                            serde_json::from_value::<Snapshot>(value)
+                        .and_then(|raw| {
+                            serde_json::from_str::<Snapshot>(raw.get())
                                 .map_err(|_| "CI 状态不可用".into())
                         }),
                 )

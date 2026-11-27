@@ -44,7 +44,12 @@ fn command(text: &str) -> Option<String> {
     })
 }
 
-pub(super) fn user_content(key: &str, record: &Value, parts: &[Value]) -> (UserMessage, bool) {
+pub(super) fn user_content(
+    key: &str,
+    record: &Value,
+    parts: &[Value],
+    stat_files: bool,
+) -> (UserMessage, bool) {
     let projected: Vec<_> = parts
         .iter()
         .filter(|part| part["type"] != "tool_result")
@@ -58,7 +63,12 @@ pub(super) fn user_content(key: &str, record: &Value, parts: &[Value]) -> (UserM
             part
         })
         .collect();
-    let mut user = parse_user_message(key, &Value::Array(projected));
+    let arr = Value::Array(projected);
+    let mut user = if stat_files {
+        parse_user_message(key, &arr)
+    } else {
+        crate::user_message::parse_user_message_without_stat(key, &arr)
+    };
     let compact = record["isCompactSummary"] == true;
     if (record["isMeta"] == true || compact) && !user.text.is_empty() {
         user.context_blocks.push(UserContextBlock {

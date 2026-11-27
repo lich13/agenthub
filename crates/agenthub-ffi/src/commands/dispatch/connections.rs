@@ -67,6 +67,6 @@ pub(super) async fn remote_invoke(
     args_json: &str,
 ) -> Result<String, String> {
     let args: WrappedRequest<RemoteInvokeRequest> = parse_args(args_json)?;
-    let value: Result<Value, String> = remote::remoteInvoke(ctx.remote, args.request).await;
-    encode(value)
+    let raw = remote::remoteInvokeRaw(ctx.remote, args.request).await?;
+    Ok(String::from(Box::<str>::from(raw)))
 }

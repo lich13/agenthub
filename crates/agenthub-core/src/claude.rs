@@ -703,19 +703,7 @@ pub(crate) fn visit_search_events(
     let (_, parsed) = resolve(paths, key)?;
     for page in parsed.events.rchunks(500).take(max_pages) {
         for event in page {
-            let mut refreshed;
-            let event = if event.user_message.is_some() {
-                refreshed = (**event).clone();
-                refreshed
-                    .user_message
-                    .as_mut()
-                    .unwrap()
-                    .refresh_files(Some(&parsed.cwd));
-                &refreshed
-            } else {
-                event.as_ref()
-            };
-            if !visit(event)? {
+            if !visit(event.as_ref())? {
                 return Ok(());
             }
         }

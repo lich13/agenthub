@@ -26,6 +26,8 @@ pub(crate) fn evict_idle_cache(max_idle: Duration) {
             let evicted = map.len() < before;
             if map.is_empty() {
                 *guard = None;
+            } else if evicted && map.capacity() > map.len().saturating_mul(4).max(32) {
+                map.shrink_to_fit();
             }
             if evicted {
                 crate::note_cache_eviction();
@@ -90,20 +92,13 @@ fn resolve_workspace_root_uncached(cwd: &Path) -> Option<String> {
 }
 
 fn read_gitdir_pointer(dot_git_file: &Path, base_dir: &Path) -> Option<PathBuf> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
+    let file = crate::file_stamp::open_regular_nofollow(dot_git_file).ok()?;
+    let meta = file.metadata().ok()?;
+    if meta.len() > 4_096 {
+        return None;
     }
     let mut buf = Vec::new();
-    options
-        .open(dot_git_file)
-        .ok()?
-        .take(4_096)
-        .read_to_end(&mut buf)
-        .ok()?;
+    file.take(4_096).read_to_end(&mut buf).ok()?;
     let text = std::str::from_utf8(&buf).ok()?;
     let first_line = text.lines().next()?.trim();
     let raw_target = first_line.strip_prefix("gitdir:")?.trim();
@@ -128,23 +123,21 @@ fn main_repo_from_worktree_gitdir(gitdir: &Path) -> Option<PathBuf> {
         return common_git.parent().map(normalize_lexical);
     }
     let commondir_file = gitdir.join("commondir");
-    if let Ok(meta) = fs::symlink_metadata(&commondir_file) {
-        if meta.is_file() && !meta.file_type().is_symlink() && meta.len() <= 4_096 {
-            let mut raw = String::new();
-            fs::File::open(&commondir_file)
-                .ok()?
-                .take(4_096)
-                .read_to_string(&mut raw)
-                .ok()?;
-            let rel = raw.lines().next()?.trim();
-            if !rel.is_empty() {
-                let resolved_common = if Path::new(rel).is_absolute() {
-                    normalize_lexical(Path::new(rel))
-                } else {
-                    normalize_lexical(&gitdir.join(rel))
-                };
-                if resolved_common.file_name().and_then(|n| n.to_str()) == Some(".git") {
-                    return resolved_common.parent().map(normalize_lexical);
+    if let Ok(file) = crate::file_stamp::open_regular_nofollow(&commondir_file) {
+        if let Ok(meta) = file.metadata() {
+            if meta.len() <= 4_096 {
+                let mut raw = String::new();
+                file.take(4_096).read_to_string(&mut raw).ok()?;
+                let rel = raw.lines().next()?.trim();
+                if !rel.is_empty() {
+                    let resolved_common = if Path::new(rel).is_absolute() {
+                        normalize_lexical(Path::new(rel))
+                    } else {
+                        normalize_lexical(&gitdir.join(rel))
+                    };
+                    if resolved_common.file_name().and_then(|n| n.to_str()) == Some(".git") {
+                        return resolved_common.parent().map(normalize_lexical);
+                    }
                 }
             }
         }

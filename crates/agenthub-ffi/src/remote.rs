@@ -10,7 +10,9 @@ use agenthub_core::services::{
     system::{HostSurface, SystemCapabilitiesResponse, API_VERSION},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
+#[cfg(test)]
+use serde_json::Value;
 use std::{
     fs,
     io::Write,
@@ -259,10 +261,7 @@ impl RemoteConnections {
         failed.close();
     }
 
-    pub(crate) async fn invoke(&self, request: &RemoteInvokeRequest) -> Result<Value, String> {
-        self.invoke_with(request, Self::reconnect).await
-    }
-
+    #[cfg(test)]
     async fn invoke_with<F, Fut>(
         &self,
         request: &RemoteInvokeRequest,
@@ -272,10 +271,32 @@ impl RemoteConnections {
         F: Fn(RemoteMachineSummary) -> Fut + Clone,
         Fut: std::future::Future<Output = Result<Arc<ssh::Client>, String>>,
     {
+        let raw = self.invoke_raw_with(request, connect).await?;
+        serde_json::from_str(raw.get()).map_err(|_| "远程响应格式无效".into())
+    }
+
+    pub(crate) async fn invoke_raw(
+        &self,
+        request: &RemoteInvokeRequest,
+    ) -> Result<Box<serde_json::value::RawValue>, String> {
+        self.invoke_raw_with(request, Self::reconnect).await
+    }
+
+    async fn invoke_raw_with<F, Fut>(
+        &self,
+        request: &RemoteInvokeRequest,
+        connect: F,
+    ) -> Result<Box<serde_json::value::RawValue>, String>
+    where
+        F: Fn(RemoteMachineSummary) -> Fut + Clone,
+        Fut: std::future::Future<Output = Result<Arc<ssh::Client>, String>>,
+    {
         let mut client = self
             .ensure_client_with(request.revision, connect.clone())
             .await?;
-        let result = client.call(&request.command, request.args.clone()).await;
+        let result = client
+            .call_raw(&request.command, request.args.clone())
+            .await;
         match result {
             Err(error) if error.is_transport() => {
                 self.forget_client(&client);
@@ -283,7 +304,9 @@ impl RemoteConnections {
                     return Err(error.to_string());
                 }
                 client = self.ensure_client_with(request.revision, connect).await?;
-                let result = client.call(&request.command, request.args.clone()).await;
+                let result = client
+                    .call_raw(&request.command, request.args.clone())
+                    .await;
                 if result.as_ref().is_err_and(|error| error.is_transport()) {
                     self.forget_client(&client);
                 }
@@ -455,10 +478,10 @@ pub(crate) async fn remoteSelect(
     state.commit(prefs, client)
 }
 
-pub(crate) async fn remoteInvoke(
+pub(crate) async fn remoteInvokeRaw(
     state: &RemoteConnections,
     request: RemoteInvokeRequest,
-) -> Result<Value, String> {
+) -> Result<Box<serde_json::value::RawValue>, String> {
     let access = remote_access(&request.command).ok_or("不支持的远程操作")?;
     let guard = {
         let mut s = state.state.lock().expect("connection");
@@ -475,7 +498,7 @@ pub(crate) async fn remoteInvoke(
             None
         }
     };
-    let value = state.invoke(&request).await;
+    let value = state.invoke_raw(&request).await;
     drop(guard);
     if state.state.lock().expect("connection").prefs.revision != request.revision {
         return Err("连接已变化，已丢弃旧响应".into());

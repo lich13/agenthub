@@ -70,6 +70,13 @@ fn codex_path(config: &Config, event: &ProbeBuiltEvent) -> Option<PathBuf> {
         .rollout_path
 }
 
+fn prefix_digest_checked(path: &Path, length: u64) -> Result<Option<String>> {
+    let Some((mut file, _)) = open_regular_nofollow_checked(path)? else {
+        return Ok(None);
+    };
+    prefix_digest_from_open_file(&mut file, length)
+}
+
 fn prefix_digest(path: &Path, length: u64) -> Option<String> {
     prefix_digest_checked(path, length).ok().flatten()
 }
@@ -1205,17 +1212,56 @@ async fn current_state(config: &Config, db: &PanelDb, candidate: &Candidate) -> 
     .and_then(|res| res)
 }
 
-fn prefix_digest_checked(path: &Path, length: u64) -> Result<Option<String>> {
-    let mut file = match std::fs::File::open(path) {
-        Ok(file) => file.take(length),
+fn open_regular_nofollow_checked(
+    path: &Path,
+) -> Result<Option<(std::fs::File, std::fs::Metadata)>> {
+    let lmeta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     };
+    if !lmeta.is_file() || lmeta.file_type().is_symlink() {
+        return Ok(None);
+    }
+    let file = match agenthub_core::file_stamp::open_regular_nofollow(path) {
+        Ok(file) => file,
+        Err(err) => {
+            if err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+                || matches!(
+                    std::fs::symlink_metadata(path),
+                    Err(meta_err) if meta_err.kind() == std::io::ErrorKind::NotFound
+                )
+                || std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+            {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+    };
+    let fmeta = file.metadata()?;
+    if !fmeta.is_file() {
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (fmeta.dev(), fmeta.ino()) != (lmeta.dev(), lmeta.ino()) {
+            return Ok(None);
+        }
+    }
+    Ok(Some((file, fmeta)))
+}
+
+fn prefix_digest_from_open_file(file: &mut std::fs::File, length: u64) -> Result<Option<String>> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut reader = file.take(length);
     let mut digest = Sha256::new();
     let mut buffer = [0u8; 32768];
     let mut count = 0;
     loop {
-        let size = file.read(&mut buffer)?;
+        let size = reader.read(&mut buffer)?;
         if size == 0 {
             break;
         }
@@ -1255,14 +1301,9 @@ fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) 
             let Some(path) = thread.rollout_path else {
                 return Ok(false);
             };
-            let meta = match std::fs::symlink_metadata(&path) {
-                Ok(meta) => meta,
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                Err(err) => return Err(err.into()),
-            };
-            if !meta.is_file() || meta.file_type().is_symlink() {
+            let Some((mut file, meta)) = open_regular_nofollow_checked(&path)? else {
                 return Ok(false);
-            }
+            };
             let cur_identity = match native_probe::file_identity(&path) {
                 Ok(identity) => identity,
                 Err(err)
@@ -1277,7 +1318,17 @@ fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) 
             if cur_identity != proof.identity {
                 return Ok(false);
             }
-            let Some(digest) = prefix_digest_checked(&path, proof.length)? else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let still_same = std::fs::symlink_metadata(&path).ok().is_some_and(|m| {
+                    !m.file_type().is_symlink() && (m.dev(), m.ino()) == (meta.dev(), meta.ino())
+                });
+                if !still_same {
+                    return Ok(false);
+                }
+            }
+            let Some(digest) = prefix_digest_from_open_file(&mut file, proof.length)? else {
                 return Ok(false);
             };
             if digest != proof.digest {
@@ -1285,11 +1336,6 @@ fn current_snapshot_state(config: &Config, db: &PanelDb, candidate: &Candidate) 
             }
             let mut tail = String::new();
             if !codex::is_compressed_rollout_path(&path) {
-                let mut file = match std::fs::File::open(&path) {
-                    Ok(file) => file,
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-                    Err(err) => return Err(err.into()),
-                };
                 file.seek(SeekFrom::Start(proof.length))?;
                 file.take(2 * 1024 * 1024 + 1).read_to_string(&mut tail)?;
                 if !tail.is_empty() && !tail.ends_with('\n') && tail.len() <= 2 * 1024 * 1024 {

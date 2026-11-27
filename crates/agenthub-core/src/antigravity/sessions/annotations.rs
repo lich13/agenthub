@@ -125,10 +125,47 @@ fn parse_pbtxt_annotations(content: &str) -> AnnotationOverlay {
     overlay
 }
 
+fn read_regular_text_nofollow(path: &Path) -> Result<Option<(String, fs::Metadata)>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => {
+            ensure!(
+                meta.is_file() && !meta.file_type().is_symlink(),
+                "拒绝读取非普通文件注解"
+            );
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    }
+    let file = match crate::file_stamp::open_regular_nofollow(path) {
+        Ok(file) => file,
+        Err(err) => {
+            if err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound)
+            {
+                return Ok(None);
+            }
+            return Err(err);
+        }
+    };
+    let meta = file.metadata()?;
+    ensure!(meta.is_file(), "拒绝读取非普通文件注解");
+    let mut text = String::new();
+    use std::io::Read;
+    file.take(4 * 1024 * 1024).read_to_string(&mut text)?;
+    Ok(Some((text, meta)))
+}
+
 pub(super) fn read_annotation_overlay(paths: &AntigravityPaths, id: &str) -> AnnotationOverlay {
-    let path = paths.annotations_dir().join(format!("{id}.pbtxt"));
-    fs::read_to_string(path)
-        .map(|text| parse_pbtxt_annotations(&text))
+    let dir = paths.annotations_dir();
+    if fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return AnnotationOverlay::default();
+    }
+    let path = dir.join(format!("{id}.pbtxt"));
+    read_regular_text_nofollow(&path)
+        .ok()
+        .flatten()
+        .map(|(text, _)| parse_pbtxt_annotations(&text))
         .unwrap_or_default()
 }
 
@@ -138,9 +175,19 @@ pub(super) fn write_annotation_overlay(
     new_title: Option<&str>,
     new_archived: Option<bool>,
 ) -> Result<()> {
-    fs::create_dir_all(paths.annotations_dir())?;
-    let path = paths.annotations_dir().join(format!("{id}.pbtxt"));
-    let existing = fs::read_to_string(&path).unwrap_or_default();
+    let dir = paths.annotations_dir();
+    if let Ok(dir_meta) = fs::symlink_metadata(&dir) {
+        ensure!(
+            dir_meta.is_dir() && !dir_meta.file_type().is_symlink(),
+            "拒绝写入符号链接注解目录"
+        );
+    }
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{id}.pbtxt"));
+    let (existing, existing_meta) = match read_regular_text_nofollow(&path)? {
+        Some((text, meta)) => (text, Some(meta)),
+        None => (String::new(), None),
+    };
     let current = parse_pbtxt_annotations(&existing);
     let title = new_title.map(str::to_owned).or(current.title);
     let archived = new_archived.or(current.archived);
@@ -197,17 +244,6 @@ pub(super) fn write_annotation_overlay(
         output.push('\n');
     }
 
-    let existing_meta = match fs::symlink_metadata(&path) {
-        Ok(meta) => {
-            ensure!(
-                meta.is_file() && !meta.file_type().is_symlink(),
-                "拒绝覆盖非普通文件注解"
-            );
-            Some(meta)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(err.into()),
-    };
     let existing_perms = existing_meta.as_ref().map(fs::Metadata::permissions);
     session_delete::atomic_replace_file(
         &path,
@@ -294,61 +330,81 @@ fn encode_len_field(field_number: u64, payload: &[u8], out: &mut Vec<u8>) {
     out.extend_from_slice(payload);
 }
 
-fn parse_wire_fields(bytes: &[u8]) -> Option<Vec<WireField<'_>>> {
-    let mut fields = Vec::new();
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        let field_start = pos;
-        let tag = decode_varint(bytes, &mut pos)?;
-        let number = tag >> 3;
-        if number == 0 {
+#[derive(Clone, Copy)]
+struct WireFieldIter<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+}
+
+fn next_wire_field<'a>(bytes: &'a [u8], pos: &mut usize) -> Option<WireField<'a>> {
+    let field_start = *pos;
+    let tag = decode_varint(bytes, pos)?;
+    let number = tag >> 3;
+    if number == 0 {
+        return None;
+    }
+    let wire_type = (tag & 0x07) as u8;
+    let payload = match wire_type {
+        0 => {
+            let val_start = *pos;
+            decode_varint(bytes, pos)?;
+            &bytes[val_start..*pos]
+        }
+        1 => {
+            let end = pos.checked_add(8)?;
+            if end > bytes.len() {
+                return None;
+            }
+            let slice = &bytes[*pos..end];
+            *pos = end;
+            slice
+        }
+        2 => {
+            let len = usize::try_from(decode_varint(bytes, pos)?).ok()?;
+            let end = pos.checked_add(len)?;
+            if end > bytes.len() {
+                return None;
+            }
+            let slice = &bytes[*pos..end];
+            *pos = end;
+            slice
+        }
+        5 => {
+            let end = pos.checked_add(4)?;
+            if end > bytes.len() {
+                return None;
+            }
+            let slice = &bytes[*pos..end];
+            *pos = end;
+            slice
+        }
+        _ => return None,
+    };
+    Some(WireField {
+        number,
+        wire_type,
+        raw: &bytes[field_start..*pos],
+        payload,
+    })
+}
+
+impl<'a> Iterator for WireFieldIter<'a> {
+    type Item = WireField<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.bytes.len() {
             return None;
         }
-        let wire_type = (tag & 0x07) as u8;
-        let payload = match wire_type {
-            0 => {
-                let val_start = pos;
-                decode_varint(bytes, &mut pos)?;
-                &bytes[val_start..pos]
-            }
-            1 => {
-                let end = pos.checked_add(8)?;
-                if end > bytes.len() {
-                    return None;
-                }
-                let slice = &bytes[pos..end];
-                pos = end;
-                slice
-            }
-            2 => {
-                let len = usize::try_from(decode_varint(bytes, &mut pos)?).ok()?;
-                let end = pos.checked_add(len)?;
-                if end > bytes.len() {
-                    return None;
-                }
-                let slice = &bytes[pos..end];
-                pos = end;
-                slice
-            }
-            5 => {
-                let end = pos.checked_add(4)?;
-                if end > bytes.len() {
-                    return None;
-                }
-                let slice = &bytes[pos..end];
-                pos = end;
-                slice
-            }
-            _ => return None,
-        };
-        fields.push(WireField {
-            number,
-            wire_type,
-            raw: &bytes[field_start..pos],
-            payload,
-        });
+        next_wire_field(self.bytes, &mut self.pos)
     }
-    Some(fields)
+}
+
+fn parse_wire_fields(bytes: &[u8]) -> Option<WireFieldIter<'_>> {
+    let mut check_pos = 0usize;
+    while check_pos < bytes.len() {
+        next_wire_field(bytes, &mut check_pos)?;
+    }
+    Some(WireFieldIter { bytes, pos: 0 })
 }
 
 /// Reads `.exa.jetski_cortex_pb.ConversationAnnotations` (field 15 of `CascadeTrajectorySummary`):

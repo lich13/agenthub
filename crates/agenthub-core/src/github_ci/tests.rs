@@ -386,7 +386,7 @@ impl Server {
     fn monitor(&self) -> Monitor {
         let mut m = Monitor::new().unwrap();
         m.api = self.url.clone();
-        m.token = "fixture-only".into();
+        m.token = zeroize::Zeroizing::new("fixture-only".into());
         m
     }
 }

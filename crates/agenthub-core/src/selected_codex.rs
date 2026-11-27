@@ -537,11 +537,15 @@ fn ensure_safe_path_with_canonical_root(
 
 fn read_index(paths: &CodexPaths) -> Result<String> {
     let path = paths.session_index();
-    if !path.try_exists()? {
-        return Ok(String::new());
+    match fs::symlink_metadata(&path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(err) => return Err(err.into()),
+        Ok(_) => {}
     }
     ensure_safe_path(&paths.home, &path)?;
-    let text = fs::read_to_string(path)?;
+    let mut file = crate::file_stamp::open_regular_nofollow(&path)?;
+    let mut text = String::new();
+    file.read_to_string(&mut text)?;
     for line in text.lines().filter(|s| !s.trim().is_empty()) {
         serde_json::from_str::<Value>(line).context("会话索引损坏，暂不能归档或恢复")?;
     }

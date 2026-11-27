@@ -1277,9 +1277,14 @@ async fn run_probe_error_monitor_once(
             safe_probe_monitor_error(&error.to_string())
         );
     }
-    let config =
-        load_config().map_err(|_| anyhow::anyhow!("notification configuration unavailable"))?;
-    let config = &config;
+    let tick_config = std::sync::Arc::new(
+        load_config().map_err(|_| anyhow::anyhow!("notification configuration unavailable"))?,
+    );
+    let config = tick_config.as_ref();
+    let tick_loader = {
+        let snap = tick_config.clone();
+        move || Ok((*snap).clone())
+    };
     let shared_codex_threads =
         if async_question_monitor::is_enabled(config) || question_monitor::is_enabled(config) {
             let paths = resolve_codex_paths(&config.codex.home).codex_paths();
@@ -1297,9 +1302,13 @@ async fn run_probe_error_monitor_once(
         } else {
             None
         };
-    if let Err(error) =
-        async_question_monitor::run_with_threads(load_config, db, shared_codex_threads.as_deref())
-            .await
+    if let Err(error) = async_question_monitor::run_with_threads_and_fresh_loader(
+        &tick_loader,
+        load_config,
+        db,
+        shared_codex_threads.as_deref(),
+    )
+    .await
     {
         tracing::warn!(
             "Codex structured question monitor failed: {}",
@@ -1549,15 +1558,27 @@ fn load_probe_error_cursor(db: &PanelDb) -> Result<Option<ProbeErrorCursor>> {
         .transpose()
 }
 
+const IDLE_ERROR_MONITOR_STATUS_HEARTBEAT_SECONDS: i64 = 300;
+
 fn store_probe_error_monitor_status(
     db: &PanelDb,
     status: ProbeErrorMonitorRuntimeStatus,
 ) -> Result<()> {
-    if status.status == "disabled" {
+    if status.status == "disabled"
+        || (status.status == "ok"
+            && status.rows_seen == 0
+            && status.new_incidents == 0
+            && status.last_error.is_none())
+    {
         if let Some(raw) = db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)? {
             if let Ok(mut previous) = serde_json::from_str::<ProbeErrorMonitorRuntimeStatus>(&raw) {
+                let prev_scan_at = previous.last_scan_at;
                 previous.last_scan_at = status.last_scan_at;
-                if previous == status {
+                if previous == status
+                    && (status.status == "disabled"
+                        || status.last_scan_at.saturating_sub(prev_scan_at)
+                            < IDLE_ERROR_MONITOR_STATUS_HEARTBEAT_SECONDS)
+                {
                     return Ok(());
                 }
             }
@@ -1683,8 +1704,14 @@ async fn run_probe_thread_scan_if_due(state: AppState) -> Result<usize> {
             }
         }
     }
-    let _ = state
+    if let Err(err) = state
         .db
-        .retain_active_unresolved_markers("thread_scan", &active_markers);
+        .retain_active_unresolved_markers("thread_scan", &active_markers)
+    {
+        tracing::warn!(
+            "failed to retain active thread_scan unresolved markers: {}",
+            safe_probe_monitor_error(&err.to_string())
+        );
+    }
     Ok(recorded)
 }

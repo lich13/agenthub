@@ -362,10 +362,38 @@ pub(crate) fn probe_writer_locked(paths: &CodexPaths, id: &str) -> std::io::Resu
     crate::file_stamp::probe_advisory_lock(&lock_path, libc::LOCK_SH)
 }
 
+pub(crate) fn active_job_tables(conn: &Connection) -> Result<Vec<(&'static str, &'static str)>> {
+    let mut active = Vec::new();
+    for (table, key) in [
+        ("jobs", "thread_id"),
+        ("agent_job_items", "assigned_thread_id"),
+    ] {
+        let cols = crate::archive::table_columns(conn, table)?;
+        if cols.contains(key) && cols.contains("status") {
+            active.push((table, key));
+        }
+    }
+    Ok(active)
+}
+
+#[cfg(test)]
 pub(crate) fn ensure_ids_not_running(
     paths: &CodexPaths,
     tree_ids: &[String],
     conn: Option<&Connection>,
+) -> Result<()> {
+    let tables = match conn {
+        Some(conn) => active_job_tables(conn)?,
+        None => Vec::new(),
+    };
+    ensure_ids_not_running_with_job_tables(paths, tree_ids, conn, &tables)
+}
+
+pub(crate) fn ensure_ids_not_running_with_job_tables(
+    paths: &CodexPaths,
+    tree_ids: &[String],
+    conn: Option<&Connection>,
+    active_job_tables: &[(&str, &str)],
 ) -> Result<()> {
     for id in tree_ids {
         let locked = probe_writer_locked(paths, id)
@@ -375,16 +403,6 @@ pub(crate) fn ensure_ids_not_running(
     let Some(conn) = conn else {
         return Ok(());
     };
-    let mut active_job_tables = Vec::new();
-    for (table, key) in [
-        ("jobs", "thread_id"),
-        ("agent_job_items", "assigned_thread_id"),
-    ] {
-        let cols = crate::archive::table_columns(conn, table)?;
-        if cols.contains(key) && cols.contains("status") {
-            active_job_tables.push((table, key));
-        }
-    }
     for id in tree_ids {
         if let Some(row) = row_value(conn, "threads", "id", id)? {
             for field in [
@@ -411,7 +429,7 @@ pub(crate) fn ensure_ids_not_running(
                 );
             }
         }
-        for &(table, key) in &active_job_tables {
+        for &(table, key) in active_job_tables {
             let active = has_active_job(conn, table, key, id)?;
             ensure!(!active, "线程 {id} 仍有关联的运行任务，无法清理");
         }

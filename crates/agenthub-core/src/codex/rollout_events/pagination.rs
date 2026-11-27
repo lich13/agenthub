@@ -3,7 +3,6 @@ use super::*;
 
 #[derive(Default)]
 struct DetailState {
-    messages: Vec<CodexMessage>,
     builder: MessageBlockBuilder,
     raw_event_count: usize,
     turn_context: Option<String>,
@@ -89,25 +88,35 @@ fn detail_state_weight(state: &DetailState) -> u64 {
                 .as_ref()
                 .map_or(0, crate::user_message::UserMessage::weight)
     }
-    state
-        .messages
-        .capacity()
-        .saturating_mul(std::mem::size_of::<CodexMessage>()) as u64
-        + state
-            .messages
-            .iter()
-            .map(|m| {
-                (m.kind.capacity()
-                    + m.role.capacity()
-                    + m.text.capacity()
-                    + opt_str_cap(&m.created_at)) as u64
-            })
-            .sum::<u64>()
-        + opt_str_cap(&state.turn_context) as u64
+    opt_str_cap(&state.turn_context) as u64
         + state.blocks.iter().map(|b| block_weight(b)).sum::<u64>()
         + (state.blocks.capacity() + state.compacted.capacity()) as u64
             * std::mem::size_of::<Arc<MessageBlock>>() as u64
         + crate::history_navigation::weight(&state.timeline)
+}
+
+fn load_legacy_messages(path: &Path) -> Result<Vec<CodexMessage>> {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(crate::codex::rollout_file::open_reader(path)?);
+    let mut line = Vec::new();
+    let mut messages = Vec::new();
+    let mut turn_context = None;
+    loop {
+        line.clear();
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            break;
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        if let Ok(mut value) = serde_json::from_slice::<Value>(&line) {
+            normalize_canonical_turn(&mut value, &mut turn_context);
+            if let Some(message) = parse_message_event(&value) {
+                messages.push(message);
+            }
+        }
+    }
+    Ok(messages)
 }
 
 fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Result<R>) -> Result<R> {
@@ -122,9 +131,6 @@ fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Resul
             state.raw_event_count += 1;
             if let Ok(mut value) = serde_json::from_slice::<Value>(line) {
                 normalize_canonical_turn(&mut value, &mut state.turn_context);
-                if let Some(message) = parse_message_event(&value) {
-                    state.messages.push(message);
-                }
                 state.builder.push_event(&value, state.raw_event_count);
             }
             Ok(())
@@ -290,7 +296,7 @@ pub fn thread_detail_page_from_summary(
             subagents: None,
             subagent_updates: Default::default(),
             messages: if limit.is_none() {
-                state.messages.clone()
+                load_legacy_messages(&path)?
             } else {
                 Vec::new()
             },

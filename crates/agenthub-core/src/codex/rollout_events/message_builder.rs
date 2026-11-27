@@ -10,6 +10,8 @@ pub(super) struct MessageBlockBuilder {
     pub(super) async_questions: super::super::user_input::AsyncQuestionTracker,
     pub(super) current_plan_marker: Option<(Option<String>, Option<String>)>,
     pub(super) plan_block_indexes: HashMap<String, usize>,
+    pub(super) seen_user_message_ids: HashSet<String>,
+    pub(super) unresolved_plan_indexes: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,7 +28,6 @@ pub(super) struct PendingToolCall {
     pub(super) created_at: Option<String>,
     pub(super) input: Option<String>,
     pub(super) summary: Option<String>,
-    pub(super) payload: Option<Value>,
 }
 
 impl MessageBlockBuilder {
@@ -129,15 +130,10 @@ impl MessageBlockBuilder {
         }
 
         if let Some(mut block) = parse_message_block(value, raw_index) {
-            if block.user_message.as_ref().is_some_and(|message| {
-                self.blocks.iter().any(|existing| {
-                    existing
-                        .user_message
-                        .as_ref()
-                        .is_some_and(|previous| previous.id == message.id)
-                })
-            }) {
-                return;
+            if let Some(message) = block.user_message.as_ref() {
+                if !self.seen_user_message_ids.insert(message.id.clone()) {
+                    return;
+                }
             }
             if block.role == "assistant"
                 && block.text.as_deref().is_some_and(contains_proposed_plan)
@@ -198,19 +194,28 @@ impl MessageBlockBuilder {
                 existing.created_at = block.created_at.or_else(|| existing.created_at.clone());
                 existing.kind = "plan".to_string();
             }
+            if existing.resolved != Some(true) && !self.unresolved_plan_indexes.contains(&index) {
+                self.unresolved_plan_indexes.push(index);
+            }
             return;
         }
-        self.plan_block_indexes.insert(key, self.blocks.len());
+        let index = self.blocks.len();
+        self.plan_block_indexes.insert(key, index);
+        if block.resolved != Some(true) {
+            self.unresolved_plan_indexes.push(index);
+        }
         self.blocks.push(Arc::new(block));
     }
 
     fn resolve_pending_plans(&mut self) {
-        for block in &mut self.blocks {
-            if block.kind == "plan" && block.resolved != Some(true) {
-                let block = Arc::make_mut(block);
-                block.status = Some("completed".to_string());
-                block.plan_status = Some("completed".to_string());
-                block.resolved = Some(true);
+        for index in self.unresolved_plan_indexes.drain(..) {
+            if let Some(slot) = self.blocks.get_mut(index) {
+                if slot.kind == "plan" && slot.resolved != Some(true) {
+                    let block = Arc::make_mut(slot);
+                    block.status = Some("completed".to_string());
+                    block.plan_status = Some("completed".to_string());
+                    block.resolved = Some(true);
+                }
             }
         }
     }
@@ -219,20 +224,27 @@ impl MessageBlockBuilder {
         let Some(progress_turn_id) = progress_turn_id else {
             return;
         };
-        for block in &mut self.blocks {
-            if block.kind == "plan"
-                && block.resolved != Some(true)
-                && block
-                    .turn_id
-                    .as_deref()
-                    .is_some_and(|turn_id| turn_id != progress_turn_id)
+        let blocks = &mut self.blocks;
+        self.unresolved_plan_indexes.retain(|&index| {
+            let Some(slot) = blocks.get_mut(index) else {
+                return false;
+            };
+            if slot.kind != "plan" || slot.resolved == Some(true) {
+                return false;
+            }
+            if slot
+                .turn_id
+                .as_deref()
+                .is_some_and(|turn_id| turn_id != progress_turn_id)
             {
-                let block = Arc::make_mut(block);
+                let block = Arc::make_mut(slot);
                 block.status = Some("completed".to_string());
                 block.plan_status = Some("completed".to_string());
                 block.resolved = Some(true);
+                return false;
             }
-        }
+            true
+        });
     }
 
     fn push_answer_block(&mut self, block: MessageBlock) {
@@ -460,7 +472,6 @@ impl PendingToolCall {
             created_at: event_time(value),
             input,
             summary,
-            payload: None,
         }
     }
 
@@ -488,7 +499,7 @@ impl PendingToolCall {
             item_id: self.item_id,
             created_at: self.created_at,
             questions: Vec::new(),
-            payload: self.payload,
+            payload: None,
         }
     }
 }

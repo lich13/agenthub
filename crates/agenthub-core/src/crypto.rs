@@ -11,6 +11,8 @@ const BOUND_NONCE: u8 = 2;
 
 #[derive(Clone)]
 pub struct SecretBox {
+    cipher: std::sync::Arc<Aes256Gcm>,
+    #[cfg(test)]
     key: Zeroizing<[u8; 32]>,
 }
 
@@ -30,7 +32,12 @@ impl SecretBox {
         }
         let mut key = Zeroizing::new([0_u8; 32]);
         key.copy_from_slice(&raw);
-        Ok(Self { key })
+        let cipher = std::sync::Arc::new(Aes256Gcm::new((&*key).into()));
+        Ok(Self {
+            cipher,
+            #[cfg(test)]
+            key,
+        })
     }
 
     pub(crate) fn encrypt(
@@ -38,11 +45,11 @@ impl SecretBox {
         identity: &[&str],
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        let cipher = Aes256Gcm::new((&*self.key).into());
         let mut nonce = [0; 12];
         OsRng.fill_bytes(&mut nonce);
         let aad = serde_json::to_vec(identity)?;
-        let ciphertext = cipher
+        let ciphertext = self
+            .cipher
             .encrypt(
                 Nonce::from_slice(&nonce),
                 Payload {
@@ -72,8 +79,7 @@ impl SecretBox {
             legacy if legacy.len() == 12 => (legacy, Vec::new()),
             _ => return Err(anyhow!("invalid encrypted record format")),
         };
-        let cipher = Aes256Gcm::new((&*self.key).into());
-        cipher
+        self.cipher
             .decrypt(
                 Nonce::from_slice(nonce),
                 Payload {

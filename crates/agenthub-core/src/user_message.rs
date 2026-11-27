@@ -299,15 +299,24 @@ fn image_data(part: &Value) -> Option<String> {
 }
 
 pub fn parse_user_message(id: &str, content: &Value) -> UserMessage {
-    parse_user_message_inner(id, content, true)
+    parse_user_message_inner(id, content, true, true)
+}
+
+pub(crate) fn parse_user_message_without_stat(id: &str, content: &Value) -> UserMessage {
+    parse_user_message_inner(id, content, true, false)
 }
 
 /// Parses literal user text and native attachments without extracting `"上下文"` envelopes.
 pub fn parse_literal_user_message(id: &str, content: &Value) -> UserMessage {
-    parse_user_message_inner(id, content, false)
+    parse_user_message_inner(id, content, false, true)
 }
 
-fn parse_user_message_inner(id: &str, content: &Value, project_context: bool) -> UserMessage {
+fn parse_user_message_inner(
+    id: &str,
+    content: &Value,
+    project_context: bool,
+    stat_files: bool,
+) -> UserMessage {
     let owned = match content {
         Value::String(text) => vec![serde_json::json!({"type":"text", "text":text})],
         Value::Object(_) => vec![content.clone()],
@@ -428,7 +437,7 @@ fn parse_user_message_inner(id: &str, content: &Value, project_context: bool) ->
                 if embedded_paths.contains(path) || !consumed.insert(path.to_owned()) {
                     continue;
                 }
-                result.add_file(
+                result.add_file_with_stat(
                     mentions
                         .iter()
                         .find(|mention| mention.path == path)
@@ -439,13 +448,14 @@ fn parse_user_message_inner(id: &str, content: &Value, project_context: bool) ->
                             image: part.get("type").and_then(Value::as_str)
                                 != Some("resource_link"),
                         }),
+                    stat_files,
                 );
             }
         }
     }
     for mention in mentions {
         if consumed.insert(mention.path.clone()) {
-            result.add_file(mention);
+            result.add_file_with_stat(mention, stat_files);
         }
     }
     result
@@ -556,7 +566,13 @@ impl UserMessage {
     }
 
     fn add_file(&mut self, file: FileMention) {
-        let fingerprint = file_fingerprint(Path::new(&file.path)).ok();
+        self.add_file_with_stat(file, true);
+    }
+
+    fn add_file_with_stat(&mut self, file: FileMention, stat_file: bool) {
+        let fingerprint = stat_file
+            .then(|| file_fingerprint(Path::new(&file.path)).ok())
+            .flatten();
         let reason = if !Path::new(&file.path).is_absolute() {
             Some("附件路径无法定位")
         } else if fingerprint.is_none() {

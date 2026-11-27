@@ -280,7 +280,12 @@ pub(crate) async fn run_with_threads(
         )?;
     }
     let retained: Vec<String> = next_active_keys.into_values().collect();
-    let _ = db.retain_active_unresolved_markers("feedback", &retained);
+    if let Err(err) = db.retain_active_unresolved_markers("feedback", &retained) {
+        tracing::warn!(
+            "failed to retain active feedback unresolved markers: {}",
+            agenthub_core::security::redact_output(&err.to_string())
+        );
+    }
     Ok(())
 }
 

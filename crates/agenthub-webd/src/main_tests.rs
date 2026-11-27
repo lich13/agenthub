@@ -53,6 +53,66 @@ fn disabled_error_monitor_retains_timestamp_until_status_changes() {
 }
 
 #[test]
+fn idle_ok_error_monitor_heartbeat_throttles_unchanged_db_writes_for_300s() {
+    let db = PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let mut status = ProbeErrorMonitorRuntimeStatus {
+        status: "ok".into(),
+        last_scan_at: 1_000,
+        last_error: None,
+        rows_seen: 0,
+        new_incidents: 0,
+        incident_count: 2,
+        cursor: Some(agenthub_core::probe_error_monitor::ProbeErrorCursor {
+            database_identity: String::new(),
+            ts: 100,
+            ts_nanos: 0,
+            id: 42,
+        }),
+    };
+    store_probe_error_monitor_status(&db, status.clone()).unwrap();
+    status.last_scan_at = 1_015;
+    store_probe_error_monitor_status(&db, status.clone()).unwrap();
+    let saved_early: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+        &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved_early.last_scan_at, 1_000);
+
+    status.last_scan_at = 1_300;
+    store_probe_error_monitor_status(&db, status.clone()).unwrap();
+    let saved_after_window: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+        &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved_after_window.last_scan_at, 1_300);
+
+    status.last_scan_at = 1_305;
+    status.cursor = Some(agenthub_core::probe_error_monitor::ProbeErrorCursor {
+        database_identity: String::new(),
+        ts: 100,
+        ts_nanos: 0,
+        id: 43,
+    });
+    store_probe_error_monitor_status(&db, status.clone()).unwrap();
+    let saved_on_cursor_advance: ProbeErrorMonitorRuntimeStatus = serde_json::from_str(
+        &db.get_setting(PROBE_ERROR_MONITOR_STATUS_SETTING)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved_on_cursor_advance.last_scan_at, 1_305);
+    assert_eq!(saved_on_cursor_advance.cursor.unwrap().id, 43);
+}
+
+#[test]
 fn hook_request_user_input_cli_subcommand_is_internal_and_argument_free() {
     assert!(Cli::try_parse_from(["agenthub-webd", "probe", "hook-request-user-input"]).is_ok());
     assert!(

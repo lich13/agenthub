@@ -158,12 +158,22 @@ pub(crate) async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     run_with_threads(&|| Ok(config.clone()), db, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn run_with_threads(
     load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     preloaded_sorted: Option<&[(ThreadSummary, CodexTaskIdentity)]>,
 ) -> Result<()> {
-    let config = &db.sync_notification_channels_from_config(load_config)?;
+    run_with_threads_and_fresh_loader(load_config, load_config, db, preloaded_sorted).await
+}
+
+pub(crate) async fn run_with_threads_and_fresh_loader(
+    tick_config: &super::notification_delivery::ConfigLoader<'_>,
+    fresh_config: &super::notification_delivery::ConfigLoader<'_>,
+    db: &PanelDb,
+    preloaded_sorted: Option<&[(ThreadSummary, CodexTaskIdentity)]>,
+) -> Result<()> {
+    let config = &db.sync_notification_channels_from_config(tick_config)?;
     let Some(since) = db
         .current_notification_baseline("probe_async_question_baseline")?
         .filter(|_| enabled(config))
@@ -242,7 +252,7 @@ pub(crate) async fn run_with_threads(
             if call.created_at_ms.is_some_and(|created| {
                 now_ms.saturating_sub(created) <= PASSIVE_ASYNC_QUESTION_MAX_AGE_MS
             }) {
-                record_probe_event_with_bark(load_config, db, event).await?;
+                record_probe_event_with_bark(fresh_config, db, event).await?;
             }
         }
     }
@@ -253,7 +263,12 @@ pub(crate) async fn run_with_threads(
             }
         }
     }
-    let _ = db.retain_active_unresolved_markers("async_question", &active_markers);
+    if let Err(err) = db.retain_active_unresolved_markers("async_question", &active_markers) {
+        tracing::warn!(
+            "failed to retain active async_question unresolved markers: {}",
+            agenthub_core::security::redact_output(&err.to_string())
+        );
+    }
     Ok(())
 }
 

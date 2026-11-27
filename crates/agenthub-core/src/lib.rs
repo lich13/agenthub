@@ -6,7 +6,7 @@ pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod dsh;
-pub(crate) mod file_stamp;
+pub mod file_stamp;
 pub mod grok;
 pub mod grokbot;
 pub mod history_navigation;

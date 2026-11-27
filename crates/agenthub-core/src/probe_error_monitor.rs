@@ -121,6 +121,7 @@ pub fn scan_codex_turn_errors(
     )
     .with_context(|| format!("open Codex logs DB {}", logs_db_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_millis(500))?;
+    let _ = conn.execute_batch("PRAGMA temp_store = MEMORY; PRAGMA cache_size = -512;");
     let establish_baseline = match previous {
         None => true,
         Some(cursor) if cursor.database_identity != database_identity => true,
@@ -146,12 +147,13 @@ pub fn scan_codex_turn_errors(
     let mut statement = conn.prepare(
         r#"
         SELECT id, ts, ts_nanos, target,
-               CASE WHEN target = 'codex_core::session::turn' THEN feedback_log_body END,
+               CASE WHEN target = 'codex_core::session::turn'
+                         AND instr(feedback_log_body, 'Turn error:') > 0
+                    THEN feedback_log_body
+               END,
                thread_id
         FROM logs
-        WHERE ts > ?1
-           OR (ts = ?1 AND ts_nanos > ?2)
-           OR (ts = ?1 AND ts_nanos = ?2 AND id > ?3)
+        WHERE (ts, ts_nanos, id) > (?1, ?2, ?3)
         ORDER BY ts ASC, ts_nanos ASC, id ASC
         LIMIT ?4
         "#,

@@ -85,6 +85,7 @@ fn metadata_with_canonical_root(
     Some((resolved, meta))
 }
 
+#[cfg(test)]
 fn metadata(root: &Path, path: &Path) -> Option<(PathBuf, Metadata)> {
     metadata_with_canonical_root(root, None, path)
 }
@@ -122,11 +123,13 @@ impl Source {
     /// Re-reads both stamps under the reuse rule of `can_reuse_size`: the same
     /// directory and primary file, where the primary may only have grown.
     fn current(&self) -> bool {
-        metadata(&self.root, &self.directory).is_some_and(|(_, meta)| {
-            self.directory_stamp
-                .same_inode(&FileStamp::from_metadata(&meta))
-        }) && self.primary.as_ref().is_none_or(|(path, stamp)| {
-            metadata(&self.root, path)
+        metadata_with_canonical_root(&self.root, Some(&self.root), &self.directory).is_some_and(
+            |(_, meta)| {
+                self.directory_stamp
+                    .same_inode(&FileStamp::from_metadata(&meta))
+            },
+        ) && self.primary.as_ref().is_none_or(|(path, stamp)| {
+            metadata_with_canonical_root(&self.root, Some(&self.root), path)
                 .is_some_and(|(_, meta)| stamp.grew_into(&FileStamp::from_metadata(&meta)))
         })
     }
@@ -301,22 +304,32 @@ pub fn directory_size(
     owner: &str,
 ) -> SessionStorageSize {
     let unavailable = || SessionStorageSize::unavailable(StorageScope::Directory);
-    let Some((directory, meta)) = metadata(root, directory).filter(|(_, meta)| meta.is_dir())
+    if fs::symlink_metadata(root)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(true)
+    {
+        return unavailable();
+    }
+    let Some(canonical_root) = root.canonicalize().ok() else {
+        return unavailable();
+    };
+    let Some((directory, meta)) =
+        metadata_with_canonical_root(root, Some(&canonical_root), directory)
+            .filter(|(_, meta)| meta.is_dir())
     else {
         return unavailable();
     };
     let primary = match primary {
-        Some(file) => match metadata(root, file).filter(|(_, meta)| meta.is_file()) {
+        Some(file) => match metadata_with_canonical_root(root, Some(&canonical_root), file)
+            .filter(|(_, meta)| meta.is_file())
+        {
             Some((path, meta)) => Some((path, FileStamp::from_metadata(&meta))),
             None => return unavailable(),
         },
         None => None,
     };
-    let Some(root) = root.canonicalize().ok() else {
-        return unavailable();
-    };
     let source = Source {
-        root,
+        root: canonical_root,
         directory,
         directory_stamp: FileStamp::from_metadata(&meta),
         primary,
@@ -328,20 +341,25 @@ pub fn directory_size(
 fn scan(source: &Source) -> SessionStorageSize {
     let mut bytes = 0u64;
     let mut partial = false;
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let started = Instant::now();
-    let mut add = |meta: Metadata| {
+    let mut add = |meta: &Metadata| {
+        #[cfg(unix)]
         let key = {
             use std::os::unix::fs::MetadataExt;
-            format!("{}:{}", meta.dev(), meta.ino())
+            (meta.dev(), meta.ino())
         };
+        #[cfg(not(unix))]
+        let key = (0u64, bytes);
         if seen.insert(key) {
             bytes = bytes.saturating_add(meta.len());
         }
     };
     if let Some((path, _)) = &source.primary {
-        if let Some((_, meta)) = metadata(&source.root, path) {
-            add(meta);
+        if let Some((_, meta)) =
+            metadata_with_canonical_root(&source.root, Some(&source.root), path)
+        {
+            add(&meta);
         } else {
             return SessionStorageSize::unavailable(StorageScope::Directory);
         }
@@ -363,12 +381,15 @@ fn scan(source: &Source) -> SessionStorageSize {
         if entry.file_type().is_symlink() {
             continue;
         }
-        let Some((_, meta)) = metadata(&source.root, entry.path()) else {
+        let Ok(meta) = entry.metadata() else {
             partial = true;
             continue;
         };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
         if meta.is_file() {
-            add(meta);
+            add(&meta);
         } else if !meta.is_dir() || entry.depth() == SCAN_DEPTH {
             partial = true;
         }

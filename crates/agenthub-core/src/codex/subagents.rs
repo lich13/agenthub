@@ -134,7 +134,21 @@ fn spawn_source(value: &Value) -> &Value {
     value.pointer("/subagent/thread_spawn").unwrap_or(value)
 }
 
-fn read_graph(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
+static GRAPH_CACHE: crate::read_cache::ReadCache<HashMap<String, AgentRecord>> =
+    crate::read_cache::ReadCache::new(4 * 1024 * 1024).with_entry_limit(16);
+
+fn read_graph(paths: &CodexPaths) -> Result<std::sync::Arc<HashMap<String, AgentRecord>>> {
+    let state_db = paths.state_db();
+    let wal_path = PathBuf::from(format!("{}-wal", state_db.display()));
+    GRAPH_CACHE.read_sources(
+        &state_db,
+        &[state_db.clone(), wal_path],
+        |graph, _| 256 + graph.len() as u64 * 256,
+        || read_graph_uncached(paths),
+    )
+}
+
+fn read_graph_uncached(paths: &CodexPaths) -> Result<HashMap<String, AgentRecord>> {
     let conn = Connection::open_with_flags(paths.state_db(), OpenFlags::SQLITE_OPEN_READ_ONLY)
         .context("子智能体索引暂时不可用")?;
     let cols = crate::db::table_columns(&conn, "threads")?;
@@ -350,6 +364,7 @@ static NATIVE_CACHE: crate::jsonl_cache::JsonlCache<NativeState> =
     crate::jsonl_cache::JsonlCache::new(crate::resource_limits::SUBAGENT_CACHE_BYTES);
 
 pub(super) fn evict_idle(max_idle: std::time::Duration) {
+    GRAPH_CACHE.evict_idle(max_idle);
     NATIVE_CACHE.evict_idle(max_idle);
     lifecycle::evict_idle(max_idle);
 }
@@ -599,7 +614,7 @@ fn record_activity(
 /// Lifecycle fields belong to an event; status belongs to the current child turn.
 pub fn enrich_subagent_blocks(paths: &CodexPaths, detail: &mut ThreadDetail) {
     let graph = read_graph(paths);
-    enrich_subagent_blocks_with_graph(paths, detail, graph.as_ref().ok());
+    enrich_subagent_blocks_with_graph(paths, detail, graph.as_deref().ok());
 }
 
 fn enrich_subagent_blocks_with_graph(
@@ -817,25 +832,26 @@ fn verified_detail(
     );
     let graph_stamp_after = crate::file_stamp::FileStamp::sqlite_pair(&state_db);
     let reloaded_graph;
-    let current_graph = if graph_stamp_before.is_some() && graph_stamp_before == graph_stamp_after {
-        &graph
-    } else {
-        reloaded_graph = read_graph(paths)?;
-        validate_relation(
-            paths,
-            &reloaded_graph,
-            &request.root_thread_id,
-            &request.agent_id,
-        )?;
-        let current = reloaded_graph
-            .get(&request.agent_id)
-            .context("子智能体关联已变化")?;
-        ensure!(
-            current.parents == record.parents && validate_rollout(paths, current)? == path,
-            "子智能体关联已变化，请重试"
-        );
-        &reloaded_graph
-    };
+    let current_graph: &HashMap<String, AgentRecord> =
+        if graph_stamp_before.is_some() && graph_stamp_before == graph_stamp_after {
+            graph.as_ref()
+        } else {
+            reloaded_graph = read_graph(paths)?;
+            validate_relation(
+                paths,
+                &reloaded_graph,
+                &request.root_thread_id,
+                &request.agent_id,
+            )?;
+            let current = reloaded_graph
+                .get(&request.agent_id)
+                .context("子智能体关联已变化")?;
+            ensure!(
+                current.parents == record.parents && validate_rollout(paths, current)? == path,
+                "子智能体关联已变化，请重试"
+            );
+            reloaded_graph.as_ref()
+        };
     enrich_subagent_blocks_with_graph(paths, &mut detail, Some(current_graph));
     Ok(SubagentDetailResponse {
         root_thread_id: request.root_thread_id.clone(),

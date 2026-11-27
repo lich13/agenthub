@@ -1,5 +1,7 @@
-use agenthub_core::services::ssh_rpc::{self, Request, Response};
-use serde_json::Value;
+#[cfg(test)]
+use agenthub_core::services::ssh_rpc::Response;
+use agenthub_core::services::ssh_rpc::{self, Request};
+use serde_json::{value::RawValue, Value};
 use std::{
     collections::HashMap,
     process::Stdio,
@@ -34,7 +36,7 @@ impl CallError {
         !matches!(self, Self::Remote(_))
     }
 }
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, CallError>>>>>;
+type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Box<RawValue>, CallError>>>>>;
 pub(crate) struct Client {
     input: AsyncMutex<ChildStdin>,
     pending: Pending,
@@ -106,9 +108,10 @@ impl Client {
         let connected = Arc::new(AtomicBool::new(true));
         let reader_connected = connected.clone();
         let reader = tokio::spawn(async move {
-            while let Ok(Some(response)) = ssh_rpc::read::<_, Response>(&mut output).await {
-                if let Some(reply) = replies.lock().expect("SSH replies").remove(&response.id) {
-                    let _ = reply.send(match (response.result, response.error) {
+            while let Ok(Some((id, result, error))) = ssh_rpc::read_raw_response(&mut output).await
+            {
+                if let Some(reply) = replies.lock().expect("SSH replies").remove(&id) {
+                    let _ = reply.send(match (result, error) {
                         (_, Some(error)) => Err(CallError::Remote(error)),
                         (Some(value), _) => Ok(value),
                         _ => Err(CallError::Remote("远程响应格式无效".into())),
@@ -202,12 +205,29 @@ impl Client {
         self.call_with_timeout(command, args, Duration::from_secs(60))
             .await
     }
+    pub(crate) async fn call_raw(
+        &self,
+        command: &str,
+        args: Value,
+    ) -> Result<Box<RawValue>, CallError> {
+        self.call_raw_with_timeout(command, args, Duration::from_secs(60))
+            .await
+    }
     async fn call_with_timeout(
         &self,
         command: &str,
         args: Value,
         timeout: Duration,
     ) -> Result<Value, CallError> {
+        let raw = self.call_raw_with_timeout(command, args, timeout).await?;
+        serde_json::from_str(raw.get()).map_err(|_| CallError::Disconnected)
+    }
+    async fn call_raw_with_timeout(
+        &self,
+        command: &str,
+        args: Value,
+        timeout: Duration,
+    ) -> Result<Box<RawValue>, CallError> {
         #[derive(Clone, Copy)]
         enum CallPhase {
             Queued,

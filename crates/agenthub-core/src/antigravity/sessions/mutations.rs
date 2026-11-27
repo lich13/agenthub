@@ -8,7 +8,40 @@ fn now_unix_secs() -> u64 {
 }
 
 fn open_summaries_rw(db_path: &Path) -> Result<Connection> {
-    let conn = Connection::open(db_path).context("无法打开 Antigravity 索引数据库写入")?;
+    let before_file = crate::file_stamp::open_regular_nofollow(db_path)
+        .context("Antigravity 索引数据库不是安全普通文件")?;
+    let before_meta = before_file
+        .metadata()
+        .context("无法读取 Antigravity 索引数据库元数据")?;
+    drop(before_file);
+    for sidecar in [crate::file_stamp::wal_sidecar_path(db_path), {
+        let mut shm = db_path.as_os_str().to_os_string();
+        shm.push("-shm");
+        PathBuf::from(shm)
+    }] {
+        if let Ok(meta) = fs::symlink_metadata(&sidecar) {
+            ensure!(
+                !meta.file_type().is_symlink(),
+                "Antigravity 索引附属文件不能是符号链接"
+            );
+        }
+    }
+    let conn = Connection::open_with_flags(
+        db_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .context("无法打开 Antigravity 索引数据库写入")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let after_meta =
+            fs::symlink_metadata(db_path).context("无法校验 Antigravity 索引数据库")?;
+        ensure!(
+            !after_meta.file_type().is_symlink()
+                && (after_meta.dev(), after_meta.ino()) == (before_meta.dev(), before_meta.ino()),
+            "Antigravity 索引数据库文件身份已变化"
+        );
+    }
     let _ = conn.busy_timeout(Duration::from_millis(2500));
     Ok(conn)
 }

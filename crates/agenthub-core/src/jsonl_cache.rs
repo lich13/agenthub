@@ -591,66 +591,6 @@ impl<S: Default> JsonlCache<S> {
     }
 }
 
-pub(crate) fn scan_once(
-    path: &Path,
-    max_bytes: u64,
-    max_line_bytes: Option<u64>,
-    accept_complete_tail: bool,
-    mut consume: impl FnMut(&[u8], usize, u64) -> Result<()>,
-) -> Result<(u64, bool)> {
-    let before =
-        FileStamp::read_regular_nofollow(path, "会话必须是普通文件").context("无法读取会话文件")?;
-    ensure!(before.len <= max_bytes, "Claude 会话超出 512 MiB 读取上限");
-    let mut file = open_regular_nofollow(path)?;
-    ensure!(
-        FileStamp::from_open_file(&file) == Some(before),
-        "会话文件身份已变化，请重试"
-    );
-    let mut offset = 0u64;
-    let mut lines = 0usize;
-    let mut partial = false;
-    {
-        let mut input = BufReader::with_capacity(64 * 1024, (&mut file).take(before.len));
-        let mut line = Vec::new();
-        loop {
-            line.clear();
-            let length = if let Some(limit) = max_line_bytes {
-                let n = input
-                    .by_ref()
-                    .take(limit + 1)
-                    .read_until(b'\n', &mut line)?;
-                ensure!(n as u64 <= limit, "会话记录超出读取上限");
-                n
-            } else {
-                input.read_until(b'\n', &mut line)?
-            };
-            if length == 0 {
-                break;
-            }
-            if !(line.ends_with(b"\n")
-                || accept_complete_tail
-                    && serde_json::from_slice::<serde_json::Value>(&line).is_ok())
-            {
-                partial = true;
-                break;
-            }
-            lines += 1;
-            consume(&line, lines, offset)?;
-            offset += length as u64;
-        }
-    }
-    let pre_anchor = anchor(&mut file, offset)?;
-    let after = FileStamp::read_regular_nofollow(path, "会话必须是普通文件")?;
-    ensure!(
-        after == before
-            || (after.same_inode(&before)
-                && after.len > before.len
-                && anchor(&mut file, offset).ok() == Some(pre_anchor)),
-        "会话正在写入，请重试"
-    );
-    Ok((offset, partial))
-}
-
 /// A bounded revision journal lets clients refresh only historical rows which
 /// actually changed. An expired revision requests a safe refresh, never silence.
 #[derive(Default, Clone)]

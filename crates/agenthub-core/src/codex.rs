@@ -30,6 +30,7 @@ pub use paths::{
     resolve_codex_paths, resolve_codex_paths_with_options, CodexPathDiscoveryOptions, CodexPaths,
     ResolvedCodexPaths,
 };
+pub(crate) use rollout_events::valid_history_cursor;
 use rollout_events::{
     first_user_message_title, is_usable_thread_title, scan_rollout,
     should_repair_thread_title_from_local_metadata,
