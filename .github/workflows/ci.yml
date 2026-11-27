@@ -31,7 +31,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '26.13.1'
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore backend Cargo cache
+        id: backend-cargo-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -46,16 +48,32 @@ jobs:
       - name: Install script verification tools
         run: sudo apt-get update && sudo apt-get install -y shellcheck minisign
       - run: bash scripts/test-install-script.sh
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore cargo-audit binary
         id: cargo-audit-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cargo/bin/cargo-audit
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-audit-0.22.2-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-audit-0.22.2
       - name: Install cargo-audit
         if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
         run: cargo install cargo-audit --version 0.22.2 --locked --force
       - name: Enforce Rust advisory policy
         run: node scripts/security-audit.mjs cargo "${RUNNER_TEMP}/cargo-audit-workspace.json" Cargo.lock
+      - name: Save cargo-audit binary
+        if: success() && github.ref == 'refs/heads/main' && steps.cargo-audit-cache.conclusion == 'success' && steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: ${{ steps.cargo-audit-cache.outputs.cache-primary-key }}
+      - name: Save backend Cargo cache
+        if: success() && github.ref == 'refs/heads/main' && steps.backend-cargo-cache.conclusion == 'success' && steps.backend-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.backend-cargo-cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
@@ -69,34 +87,75 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Compute macOS code tree hash
+        id: code-tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          hash="$(bash scripts/ci-code-tree-hash.sh)"
+          echo "hash=${hash}" >> "${GITHUB_OUTPUT}"
+      - name: Check verified macOS code tree
+        id: macos-verified
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/macos-verified-marker
+          key: macos-verified-${{ steps.code-tree.outputs.hash }}
+          lookup-only: true
       - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # pinned action; explicit toolchain below
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
         with:
           toolchain: 1.100.0
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore macOS Cargo cache
+        id: macos-cargo-cache
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-            macos/.build
-          key: ${{ runner.os }}-${{ runner.arch }}-rust-swift6-agenthub-macos-${{ hashFiles('Cargo.lock', 'macos/Package.swift') }}
-          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-swift6-agenthub-macos-
+          key: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-agenthub-cargo-macos-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-rust-1.100.0-agenthub-cargo-macos-
       - name: Verify Swift 6 toolchain
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
         run: swift --version
       - name: Build Rust FFI static archive & run macOS FFI tests
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
         env:
           MACOSX_DEPLOYMENT_TARGET: "12.0"
         run: |
           cargo test -p agenthub-ffi --locked
           cargo build -p agenthub-ffi --target aarch64-apple-darwin --release --locked
       - name: Build native Swift 6 app (Debug & Release WMO)
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
         env:
           AGENTHUB_FFI_LIB_DIR: ${{ github.workspace }}/target/aarch64-apple-darwin/release
         run: |
           swift build --package-path macos -c debug
           swift build --package-path macos -c release -Xswiftc -O -Xswiftc -whole-module-optimization
       - name: Run native Swift 6 parity & offscreen render tests
+        if: startsWith(github.ref, 'refs/tags/') || steps.macos-verified.outputs.cache-hit != 'true'
         env:
           AGENTHUB_FFI_LIB_DIR: ${{ github.workspace }}/target/aarch64-apple-darwin/release
           AGENTHUB_RENDER_TESTS: "1"
         run: swift test --package-path macos
+      - name: Save macOS Cargo cache
+        if: success() && github.ref == 'refs/heads/main' && steps.macos-verified.outputs.cache-hit != 'true' && steps.macos-cargo-cache.conclusion == 'success' && steps.macos-cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.macos-cargo-cache.outputs.cache-primary-key }}
+      - name: Write verified macOS code tree marker
+        if: success() && github.ref == 'refs/heads/main' && steps.macos-verified.outputs.cache-hit != 'true'
+        shell: bash
+        run: printf '%s\n' "${{ steps.code-tree.outputs.hash }}" > "${RUNNER_TEMP}/macos-verified-marker"
+      - name: Save verified macOS code tree marker
+        if: success() && github.ref == 'refs/heads/main' && steps.macos-verified.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/macos-verified-marker
+          key: macos-verified-${{ steps.code-tree.outputs.hash }}

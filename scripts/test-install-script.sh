@@ -11,6 +11,8 @@ required=(
   scripts/package-webd-linux-x86_64.sh
   scripts/sign-minisign-archive.py
   scripts/deploy-cloud.sh
+  scripts/ci-code-tree-hash.sh
+  scripts/test-ci-code-tree-hash.sh
   macos/Package.swift
   macos/Resources/icon.icns
   contracts/agenthub-contract.json
@@ -85,7 +87,8 @@ if unregistered.returncode == 0:
 print(f"AgentHub {version} install/release boundary checks: ok")
 PY
 
-shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh scripts/deploy-cloud.sh scripts/package-macos-swift-arm64.sh scripts/package-webd-linux-x86_64.sh
+shellcheck deploy/agenthub-webd/bootstrap.sh deploy/agenthub-webd/install.sh deploy/agenthub-webd/update.sh scripts/deploy-cloud.sh scripts/package-macos-swift-arm64.sh scripts/package-webd-linux-x86_64.sh scripts/ci-code-tree-hash.sh scripts/test-ci-code-tree-hash.sh
+bash scripts/test-ci-code-tree-hash.sh
 python3 scripts/test-install-safety.py
 python3 scripts/test-provider-write-paths.py
 python3 scripts/test-install-signatures.py
