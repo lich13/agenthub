@@ -2,8 +2,9 @@
 
 ## 当前版本
 
-当前源码版本为 **2.1.40**。API 协议 2，数据库 schema 3。完成 GitHub CI 有界内部滚动（`260pt` 限高＋首尾触边及外层飞掠惯性滚轮透传＋自适应滚动条宽度零截断）、Probe 四大核心配置区默认展开（`GitHub CI`、`通知配置`、`Bark`、`Hooks 与宿主接入` 默认展开，已启用平台内联事件细项胶囊开关，`高级设置` 及 `全平台实时态势`、`最近事件`、`执行记录` 默认收起）、全仓 `$de-gpt` P1→P4 深度减法治理（统一 `FileStamp`／`open_regular_nofollow`／`StampedCache`、Swift `RPCRequestEnvelope`、清理死代码／退役字段／重复缓存并收紧内部可见性），以及服务端／六大 Provider CPU·峰值内存·SQLite·产物体积优化与 macOS Swift 6 前端视觉细节、`O(1)` `BoundedLRUCache`、连接 `revision` 竞态及 SSH 三阶段取消安全治理。存量升级库保留遗留 `codex_desktop_submissions` 表与钥匙串项，二进制回退目标保持为 **v2.1.30**。
+当前源码版本为 **2.1.41**。API 协议 2，数据库 schema 3。完成全仓 `$de-gpt` 死代码与空壳分层清理（移除 Probe 无库分支、Antigravity 只写不读字段、仅测试辅助包装、Swift 无引用测试挂钩与已退役前端注释，合并只读 `flock` 探针、双端 Provider 会话分发胶水、Antigravity 原生 SQLite 投影／开库、原子文件写入与设置页分页条，精简 Cargo 依赖特性）、六项可靠性与空闲负载缺陷修复（B1 GitHub CI 空闲轮询不再重写 `github_ci_state`、B2 错误监控与 Antigravity 离线读缓存／历史回退读缓存 WAL 指纹排除 `ctime`、B3 只读锁探测显式区分未锁与 IO 错误并覆盖在线未水合删除与多跳孤立子会话门禁、B4 原生通知队列逐行越过结构损坏与坏密文并严格隔离错密钥数据与跨 Provider 队列、B5 作业后备执行器启动失败收尾释放互斥组、B6 附件缩略图失败状态与视口淘汰重试）、Grok Bot 检索单轮双重指纹核验名册与线程 ID 集合复用、前端未变轮询零冗余 `objectWillChange`、Probe／阅读器文案去噪一致性（同步 `DESIGN.md` 色值），以及 GitHub Actions CI 快取作用域收敛与 `macos-verified-<hash>` 代码树门禁优化。存量升级库保留遗留 `codex_desktop_submissions` 表与钥匙串项，二进制回退目标保持为 **v2.1.30**。
 
+- **v2.1.41** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.41`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.40 更新为 2.1.41 并启动；Probe 文案与能力胶囊、子智能体摘要与「复制答复」提示、附件缩略图失败状态与滚回重试、工作区总览反馈列颜色、设置页分页条及长列表滚动手感待用户验收。[提交 de0ee8c](https://github.com/lich13/agenthub/commit/de0ee8c67fe1860907c73e02a551736882643e9d) · [CI 优化提交 fb9a66a](https://github.com/lich13/agenthub/commit/fb9a66ac0fb7176d632fdefd1983deab8542625f) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.41) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45950183365)
 - **v2.1.40** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.40`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.39 原地更新并启动；GitHub CI `260pt` 有界内部滚动与边界滚轮透传、Probe 核心配置区默认展开与内联事件胶囊、深浅色气泡与紧凑代码块交互及 Bark／macOS 系统通知实收待用户验收。[提交 a4a8339](https://github.com/lich13/agenthub/commit/a4a833942590025788dd846fd81202d60892b8b5) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.40) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45878849794)
 
 - **v2.1.39** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.39`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.38 原地更新并启动；单屏可折叠 Probe 控制台（分面板独立保存与新异常单次展开）、`1000×680` 窄窗阅读与 `⌘F` 检索及 Bark／系统通知实收待用户验收。[提交 dff186f](https://github.com/lich13/agenthub/commit/dff186f5970c5944aa9ac2ecfc30f7848e05e6c5) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.39) · [Release CI](https://github.com/lich13/agenthub/actions/runs/45759917895)
@@ -22,6 +23,42 @@
 
 - **v2.1.31** 已发布八项资产。Linux 服务为 `agenthub-webd 2.1.31`，状态 `active`，健康检查 `ok`。Mac App 已由 2.1.30 原地更新并启动。[提交 a1401a7](https://github.com/lich13/agenthub/commit/a1401a7d29163b8838c23d90e8a398eb25227bd6) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.31) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44788221382)
 - **v2.1.30** 已发布八项资产，具备两种密文格式的读取能力，继续写旧格式。Linux 服务在该版部署后状态为 `active`，健康检查 `ok`。Mac App 已由 2.1.29 原地更新并启动。[提交 3fb2cdf](https://github.com/lich13/agenthub/commit/3fb2cdf361a5f62198bfd168bcd13132c4c57aec) · [Release](https://github.com/lich13/agenthub/releases/tag/v2.1.30) · [Release CI](https://github.com/lich13/agenthub/actions/runs/44777552143)
+
+## v2.1.41 实现与验证
+
+1. **`$de-gpt` 死代码清理与重复实现收口（P1／P2）**：删除 Probe 无数据库分支（`ProbeRuntime::status`／`status_with_options`、`aggregate_probe_status_with_options`、`open_readonly_panel_db`、`recent_probe_event_count`、`table_exists`）、Antigravity 只写不读字段（`ParsedExecutorMeta`、`parse_executor_metadata_blob`、`last_user_input_step_index`、`SubagentNodeMeta.sqlite_status`，保留 `cli_meta.rs` `executor_metadata` 强类型 SQL 校验）、仅剩测试调用的 `PlatformPaths::for_kind_with_home` 与 `ProbeEventInput::hook_stop`、退役标识专属断言及 Swift 零引用测试挂钩（`cachedCellCountForTesting`、`cachedCellForTesting`、`isAnimatingForTesting`、`readingHorizontalInsets` 未读纵向分量）与约 30 处退役 WebUI／CSS／`.ts`／`.tsx` 注释（保留协议常量 `desktop_embedded_tauri`）；精简 `axum`（关闭 `macros`）、`uuid`（关闭 `serde`）、`tokio/test-util`（仅留 `agenthub-webd` dev）与 `agenthub-ffi` 直接 `rustls` 依赖（共用 `agenthub_core::http_client_builder`）；收口三平台只读 `flock` 探测为 `file_stamp::probe_advisory_lock`、删除 `webd/src/api/provider_sessions.rs` 10 个转发壳并收口 `ffi/src/commands/dispatch/providers.rs` 12 个分发器共用辅助、合并 Antigravity 原生会话 SQLite 开库与 `status/not_fully_idle/raw_summary` 投影、合并 Claude 中断清理／Codex `user_input`／去重组件／`sha256_hex`／`github_ci` 仓库比对／`ADMIN_ID` 常量／`JobUseCases` 与 `ThreadUseCases` 入口／`config::write_bytes_atomic_0600`（FFI 显式保持 `0600`）及 Swift `SettingsPaginationBar`。
+2. **六项空闲负载与可靠性缺陷修复（P3：B1–B6）**：
+   - **B1（GitHub CI 空闲轮询重写状态）**：`github_ci::scan_due` 在与已存储切片逐项比对前先执行 `retain_summaries(&mut incoming)` 统一按 `(updated_at DESC, id DESC, run_attempt DESC)` 排序，消除创建顺序与更新顺序不一致导致的每 60s `github_ci_state` 全量重写，同时保持在途运行结束与空闲快照后新完成运行的通知语义不变。
+   - **B2（WAL 读缓存 `ctime` 误失效）**：新增 `WalReadStamp`、`FileStamp::sqlite_read_pair`／`sqlite_read_pair_followed`、`FileStamp::without_ctime` 与 `optional_sqlite_pair_stamp`（主库完整比对，`-wal` 仅比对设备／inode、长度、纳米 `mtime` 及有界边缘哈希），应用于 `ProbeErrorSourceStamp::read`、Antigravity `CONV_DB_META_CACHE`／`OFFLINE_DB_STEPS_CACHE`／`CONV_DB_STEPS_CACHE`／`STORE_AUX_INDEX_CACHE` 及 `HISTORY_CACHE.read_sources` 离线 `.db-wal` 历史回退路径，消除 Linux `root` 只读开库时 SQLite `fchown(-wal)` 仅推进 `ctime` 导致的每轮缓存失效（Codex `verified_detail` 父链复核仍维持完整 `sqlite_pair`）。
+   - **B3（只读锁探测吞错与门禁闭环）**：`probe_advisory_lock` 返回 `io::Result<bool>`（`NotFound -> Ok(false)`、`EWOULDBLOCK/EAGAIN -> Ok(true)`、`EINTR` 重试、非普通文件或其他 IO 错误显式报错）；写门禁（Codex `ensure_ids_not_running` 含 `table_columns` SQL 错误传播、Antigravity `ensure_offline_unlocked`／在线未水合目标删除前后锁校验／预检与执行门禁、DSH 主会话及子会话删除预检）转为目标失败，统一清理对已确认孤立子会话保留多跳缺失祖先链复核并将执行期锁探测 IO 错误逐项返回 `Failed`（预览继续排除不可验证项），纯列表／详情状态展示显式保留 `unwrap_or(false)`。
+   - **B4（结构损坏与坏密文不阻断原生通知队列）**：`pending_native_deliveries_with_retired` 与 `recover_interrupted_native_deliveries` 改用 `ValueRef` 逐行流式读取（支持按 Provider 先过滤再解密，隔离跨源坏行），将非 `BLOB` 列类型、缺失密文／`nonce` 或非法 `nonce` 长度归为无条件结构损坏立即收尾，而 AEAD 解密失败仅在同轮存在可解密记录时收尾为 `failed`／账本终态或 `unknown`、清空密文并保留 `event_key` 去重身份（整轮无可解密记录时照常报错且零改错密钥密文），逾时 `delivering` 收尾在 `Immediate` 事务内原子查询 Bark 账本且不伪造 Probe 事件，仅在发生坏行收尾时记单条不含内容的 `warn`。
+   - **B5（作业后备启动失败遗留永久 `running`）**：`jobs::spawn_job_task`／`spawn_fallback_job_with_builders` 在无 Tokio runtime 环境下的后备线程或单线程 runtime 创建失败时调用 `finalize_failed_job` 标记作业 `failed` 并释放 `JobRunner` `running` 互斥组。
+   - **B6（附件缩略图失败无提示且视口无限重发）**：`AttachmentViewportManager` 新增 `failedKeys` 并在 `LoadedAttachmentState` 纳入 `failedLowMask`／`failedOverflowIndices`（覆盖 `>= 64` 下标），回调前先清理 `inFlightTasks`，RPC 失败或图像解码失败时立即触发行重配显示「图片不可用」并在视口内跳过重复请求，滚出视口（含同会话跳转至无图窗口触发 `evictOutside`）或切换作用域（`resetScope`）后清除记录允许重试。
+3. **执行效率、前端去噪一致性与 CI 优化（P4／P5／P6）**：`sessions.search` 对 Grok Bot 采用读前后双重 `FileStamp` 核验、仅缓存截断后线程 ID 集合（省略全量 JSON 克隆与逐条体积统计）并在每条读取与返回前复核当前账户（中途切户立即丢弃重试防串号）；`ProviderWorkspaceStore.fetchSessionDetail`、`SubagentDrawerView` 与 `RuntimeConnectionStore` 2s 作业轮询仅在值变化时赋 `@Published` 属性；主线程 `JSONDecoder` 实测 Release WMO 下 500 条列表 `1.762 ms`、单页 120 块详情 `0.492 ms`（均 `< 2 ms`，按计划不拆 `Task.detached`）；`UnifiedWorkspaceHubStore.availableWorkspaceGroups` 改为惰性按需计算，5 处高频 `NSRegularExpression` 收口为静态常量；Probe 合并重复发送提示常量、移除能力胶囊旁重复等宽字与零状态重复句，`UnifiedWorkspaceHubStore.FeedbackNotice` 以显式布尔字段表达错误态，统一 `SessionStatusLabels`、「复制答复／已复制答复」、Plan 缺省标题「计划」与子智能体「`N 个运行中 · N 个已完成 · N 个创建中`」摘要，同步 `DESIGN.md` 8 项色值与 `22px` 时间线轨宽；`.github/workflows/ci.yml`（`fb9a66a`）将三类缓存拆分为仅在 `main` 写入的 `restore/save`、移除 `cargo-audit` 键中的 `Cargo.lock` 与 macOS 缓存中的 `macos/.build`，清理 `v2.1.39`／`v2.1.40` 标签作用域 5 项遗留缓存（`5.78 GB`），并新增 `scripts/ci-code-tree-hash.sh` 在非标签运行命中 `macos-verified-<hash>` 时跳过 macOS 原生构建测试步骤。
+
+线上 Linux 生产服务（部署前 `v2.1.40` `a4a8339` vs 部署后 `v2.1.41` `de0ee8c`，不含前序未发布本地提交 `8771d50`、`22025e9`）、本机合成负载（基线 `22025e9` vs `de0ee8c`）与 GitHub Actions CI 实测前后对照如下（临时取样脚本已清理）：
+
+| 实测场景／指标 | 改动前 | 改动后（`v2.1.41` `de0ee8c`） | 关键状态／效率变化 |
+| --- | ---: | ---: | --- |
+| 线上服务 130s 空闲 `github_ci_state`（`13,831 B`）写库 | `a4a8339`：`0→60→130s` 连续 **2 次重写** | `0→60→130s` **0 次变动**（哈希恒定） | 空闲 CI 状态重复全量写库 **100% 消除** |
+| 线上服务常驻普通 15s tick `rchar`／`read` 次数 | `a4a8339`：`99.6–116.0 KB` / `15–19` 次 | **`87.2 KB` / `11` 次**（130s 总 `rchar` `-21.4%`、`write_bytes` `-36.9%`） | 错误监控在 `logs_2.sqlite-wal` 未变时不再每轮重开库 |
+| 线上服务只读 RPC `antigravity.list` ×20（13 会话） | `a4a8339`：读 **`191.09 MB`**（`7,220` 次 `read`），CPU `290 ms`／墙钟 `372.1 ms` | 读 **`674.2 KB`**（`700` 次 `read`），CPU `170 ms`／墙钟 `267.9 ms` | 消除 root `fchown(-wal)` 缓存失效，读取量下降 **99.65%（283×）**，CPU **-41.4%** |
+| 本机 Antigravity 30 个离线 WAL `.db` `list_sessions` ×20 | `22025e9`：`168.24 ms`（CPU `168.24 ms`） | `72.63 ms`（CPU `66.39 ms`） | 耗时下降 **56.8%**、CPU 下降 **60.5%** |
+| 本机 Grok Bot `sessions.search` 120 线程 ×20 | `22025e9`：`876.42 ms`（CPU `875.96 ms`） | `598.50 ms`（CPU `541.95 ms`） | 耗时下降 **31.7%**、CPU 下降 **38.1%** |
+| 本机 Swift 未变详情轮询 ×20 `objectWillChange`／主线程解码 | `22025e9`：`60` 次 / `1.762 ms`（列表）、`0.492 ms`（详情） | **`0` 次** / `1.741 ms`、`0.501 ms` | 未变轮询零重发布；主线程解码 `< 2 ms` 保留原线程 |
+| GitHub Actions `cargo-audit`／`Backend` 作业耗时（锁文件变更轮） | `v2.1.40`：重装 `167s` / Backend `467s` | `de0ee8c`：命中缓存 **`0s`（跳过重装）** / Backend **`237s`** | `cargo-audit` 键解耦 `Cargo.lock`，Backend 耗时 **-49.3%** |
+| GitHub Actions macOS 缓存体积／缓存总量／标签污染 | `v2.1.40`：`2.35 GB` / 总量 `11.55 GB`（含 5 项标签缓存 `5.78 GB`） | 冷存 `551.9 MB`（`2.1.41` 存 `805.9 MB`，还原 `18s`）/ 总量 **`9.60 GB`** / 标签缓存 **`0`** | 移除 `macos/.build` 缩减 **65.7%–76.5%**，总量回落至 10GB 配额内 |
+| 仓库变更规模（`22025e9..de0ee8c`） | `334` 文件 / `198,009` 行 | `335` 文件 / `200,698` 行（`+4,250 / -1,561`） | 删减 `1,561` 行死码／重复壳，新增单测与 B1–B6 边界防护 |
+
+下表比较 v2.1.40 与 v2.1.41 对应标签 CI 生成并正式发布的同类资产：
+
+| 发布资产 | v2.1.40 字节（`a4a8339`） | v2.1.41 字节（`de0ee8c`） | 变化 |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 DMG（Release CI） | 16,529,505 | 16,569,545 | +40,040（+0.242%） |
+| macOS updater（Release CI） | 15,434,394 | 15,469,191 | +34,797（+0.225%） |
+| Linux x86_64 webd（Release CI） | 7,364,329 | 7,386,763 | +22,434（+0.305%） |
+
+- **自动化验证证据**：`codex-ask review --base origin/main` 审查闭环（采纳 7 项阻断／重要边界修正，`cli_meta.rs` 强类型 SQL 按计划保留），`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets --locked -- -D warnings`、`cargo test --workspace --locked`、Release FFI + Swift Debug／Release WMO 构建、`AGENTHUB_RENDER_TESTS=1 swift test --package-path macos`（全量 XCTest 与离屏渲染断言通过）、`bash scripts/test-install-script.sh`、`python3 scripts/check-versions.py --tag v2.1.41`、`python3 scripts/privacy-check.py --git-objects`、GitHub Actions `Backend & contract checks`＋`macOS Swift 6 checks`＋`Release` 八项签名资产校验、远端 `agenthub-webd 2.1.41` 部署健康检查与本机 `AgentHub.app 2.1.41` 签名安装启动核验全部通过。Swift 侧全量审计未经 Codex（仅经本地静态／渲染测试与代码核查）。
 
 ## v2.1.40 实现与验证
 
