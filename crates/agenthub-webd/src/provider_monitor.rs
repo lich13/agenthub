@@ -32,7 +32,10 @@ pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<
         })
         .await;
     }
-    db.recover_interrupted_native_deliveries()?;
+    let retired = db.recover_interrupted_native_deliveries(None)?;
+    if retired > 0 {
+        tracing::warn!(retired, "retired unreadable interrupted native deliveries");
+    }
 
     for provider in [
         NativeProvider::Grok,
@@ -81,7 +84,10 @@ pub(crate) async fn run_provider_hook(
         return Ok(());
     }
     let db = super::open_panel_db(&config)?;
-    db.recover_interrupted_native_deliveries()?;
+    let retired = db.recover_interrupted_native_deliveries(Some(provider))?;
+    if retired > 0 {
+        tracing::warn!(retired, "retired unreadable interrupted native deliveries");
+    }
     let scan = scan(provider).await.unwrap_or(NativeScan {
         streams: vec![],
         errors: 1,
@@ -102,7 +108,10 @@ pub(crate) async fn run_antigravity_hook(
         return Ok(());
     }
     let db = super::open_panel_db(&config)?;
-    db.recover_interrupted_native_deliveries()?;
+    let retired = db.recover_interrupted_native_deliveries(Some(provider))?;
+    if retired > 0 {
+        tracing::warn!(retired, "retired unreadable interrupted native deliveries");
+    }
     let conversation_id = conversation_id.filter(|id| !id.trim().is_empty());
     let scan = match conversation_id {
         Some(id) => super::antigravity::scan_one(id).await,
@@ -127,7 +136,10 @@ async fn deliver_pending(
     db: &PanelDb,
     provider: Option<NativeProvider>,
 ) -> Result<()> {
-    let deliveries = db.pending_native_deliveries(100, provider)?;
+    let (deliveries, retired) = db.pending_native_deliveries_with_retired(100, provider)?;
+    if retired > 0 {
+        tracing::warn!(retired, "retired unreadable pending native deliveries");
+    }
     for delivery in deliveries {
         let config = &load_config()?;
         let enabled = delivery.provider.enabled(config)

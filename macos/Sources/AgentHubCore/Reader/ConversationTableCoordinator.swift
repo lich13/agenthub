@@ -74,9 +74,6 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
     private var codeLayoutCache = BoundedLRUCache<SegmentWidthKey, (normalized: String, codeHeight: CGFloat, docWidth: CGFloat)>(maxEntries: 256)
     private var tableLayoutCache = BoundedLRUCache<SegmentWidthKey, (colWidths: [CGFloat], rowHeights: [CGFloat], totalWidth: CGFloat, totalHeight: CGFloat)>(maxEntries: 128)
 
-    var cachedCellCountForTesting: Int { cellCache.count }
-    func cachedCellForTesting(rowId: String) -> ConversationRowCellView? { cellCache.peek(rowId) }
-
     struct ScrollAnchorSnapshot: Equatable, Sendable {
         let timelineId: String
         let deltaY: CGFloat
@@ -144,10 +141,19 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
     struct LoadedAttachmentState: Equatable, Sendable {
         let lowMask: UInt64
         let overflowIndices: [Int]
+        let failedLowMask: UInt64
+        let failedOverflowIndices: [Int]
 
-        init(lowMask: UInt64 = 0, overflowIndices: [Int] = []) {
+        init(
+            lowMask: UInt64 = 0,
+            overflowIndices: [Int] = [],
+            failedLowMask: UInt64 = 0,
+            failedOverflowIndices: [Int] = []
+        ) {
             self.lowMask = lowMask
             self.overflowIndices = overflowIndices
+            self.failedLowMask = failedLowMask
+            self.failedOverflowIndices = failedOverflowIndices
         }
     }
 
@@ -158,6 +164,8 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         else { return LoadedAttachmentState() }
         var mask: UInt64 = 0
         var overflow: [Int] = []
+        var failedMask: UInt64 = 0
+        var failedOverflow: [Int] = []
         let msgId = msg?.id ?? item.id
         for (idx, att) in attachments.enumerated() where att.kind == "image" && att.reason == nil {
             let key = "\(sessionScopeKey):\(msgId):\(att.id)"
@@ -167,9 +175,20 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 } else {
                     overflow.append(idx)
                 }
+            } else if attachmentViewport.hasFailed(for: key) {
+                if idx < 64 {
+                    failedMask |= (1 << UInt64(idx))
+                } else {
+                    failedOverflow.append(idx)
+                }
             }
         }
-        return LoadedAttachmentState(lowMask: mask, overflowIndices: overflow)
+        return LoadedAttachmentState(
+            lowMask: mask,
+            overflowIndices: overflow,
+            failedLowMask: failedMask,
+            failedOverflowIndices: failedOverflow
+        )
     }
 
     private func reloadRowForAttachmentKey(_ targetKey: String) {
@@ -947,7 +966,11 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
     func refreshViewportAttachmentsAndTimeline() {
         guard let tableView, let clipView = scrollView?.contentView else { return }
 
-        if hasAnyUserImageAttachments || attachmentViewport.loadedCount > 0 {
+        if hasAnyUserImageAttachments
+            || attachmentViewport.loadedCount > 0
+            || attachmentViewport.failedCount > 0
+            || attachmentViewport.inFlightCount > 0
+        {
             let expandedBounds = clipView.bounds.insetBy(dx: 0, dy: -AttachmentViewportManager.viewportMargin)
             let expandedRange = tableView.rows(in: expandedBounds)
             var inViewportAttachmentKeys = Set<String>()
@@ -1051,6 +1074,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         guard row >= 0, row < rows.count else { return nil }
         if sessionScopeKey != cellCacheScopeKey {
             cellCache.removeAll()
+            attachmentViewport.resetScope(sessionScopeKey)
             cellCacheScopeKey = sessionScopeKey
         }
         let item = rows[row]

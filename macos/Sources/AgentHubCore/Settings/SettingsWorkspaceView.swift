@@ -13,7 +13,7 @@ struct SettingsWorkspaceView: View {
             let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    // Settings Header & .settings-tabs Underline Tab Bar (styles.css:544-549)
+                    // Settings Header & Underline Tab Bar
                     VStack(alignment: .leading, spacing: 12) {
                         Text("设置")
                             .font(DesignFonts.body(20, weight: .bold))
@@ -98,7 +98,7 @@ struct MaintenanceOpsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // .ops-header ("设置与维护" + Refresh, OpsWorkspace.tsx:67-85)
+            // Section Header ("设置与维护" + Refresh)
             HStack(spacing: 10) {
                 HStack(spacing: 10) {
                     LucideIcon(.slidersHorizontal, size: 18)
@@ -119,7 +119,7 @@ struct MaintenanceOpsView: View {
                 .accessibilityLabel("刷新版本与状态")
             }
 
-            // 3-Column .appearance-segmented Radio Group (styles.css:551-562)
+            // 3-Column Appearance Segmented Radio Group
             VStack(alignment: .leading, spacing: 10) {
                 Text("外观")
                     .font(DesignFonts.body(14, weight: .semibold))
@@ -490,7 +490,7 @@ struct UnifiedThreadCleanupSection: View {
 
                                 Spacer(minLength: 4)
 
-                                // 17x17pt Checkbox (styles.css:631)
+                                // 17x17pt Checkbox
                                 Button {
                                     confirmation = nil
                                     if isSelected {
@@ -520,7 +520,7 @@ struct UnifiedThreadCleanupSection: View {
                                 .accessibilityLabel("选择 \(meta.label)")
                             }
 
-                            // 5pt .unified-scope-bar usage ratio bar (styles.css:634-637)
+                            // 5pt scope usage ratio bar
                             if let sp, sp.scanned, !sp.issues.isEmpty {
                                 Text(sp.issues.joined(separator: "\n"))
                                     .font(DesignFonts.body(11))
@@ -577,7 +577,7 @@ struct UnifiedThreadCleanupSection: View {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .strokeBorder((isSelected ? scopePalette.accentBorder : palette.borderStrong).color, lineWidth: 1)
                         )
-                        // 2.5pt --a top accent border when checked (styles.css:627-628)
+                        // 2.5pt top accent border when checked
                         .overlay(alignment: .top) {
                             if isSelected {
                                 UnevenTopAccentBar(color: scopePalette.accent.color, height: 2.5, cornerRadius: 12)
@@ -606,7 +606,7 @@ struct UnifiedThreadCleanupSection: View {
                             }
                         }
                         if sp.candidates.count > 100 {
-                            paginationBar(page: $candidatePage, totalCount: sp.candidates.count)
+                            SettingsPaginationBar(page: $candidatePage, totalCount: sp.candidates.count)
                         }
                     }
                     .padding(10)
@@ -626,7 +626,7 @@ struct UnifiedThreadCleanupSection: View {
                                     .foregroundStyle(palette.errFg.color)
                             }
                             if failures.count > 100 {
-                                paginationBar(page: $resultPage, totalCount: failures.count)
+                                SettingsPaginationBar(page: $resultPage, totalCount: failures.count)
                             }
                         }
                     }
@@ -738,21 +738,6 @@ struct UnifiedThreadCleanupSection: View {
         let start = max(0, page * 100)
         let end = min(items.count, start + 100)
         return start < end ? items[start..<end] : []
-    }
-
-    private func paginationBar(page: Binding<Int>, totalCount: Int) -> some View {
-        let pages = max(1, Int(ceil(Double(totalCount) / 100.0)))
-        return FlowButtonRow(spacing: 8, lineSpacing: 6) {
-            Button("上一页") { page.wrappedValue = max(0, page.wrappedValue - 1) }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(page.wrappedValue == 0)
-            Text("第 \(page.wrappedValue + 1) / \(pages) 页")
-                .font(DesignFonts.body(12))
-                .foregroundStyle(palette.textMuted.color)
-            Button("下一页") { page.wrappedValue = min(pages - 1, page.wrappedValue + 1) }
-                .buttonStyle(SecondaryButtonStyle())
-                .disabled(page.wrappedValue + 1 >= pages)
-        }
     }
 
     private func runPreview(includeUnified: Bool) {
@@ -948,18 +933,7 @@ struct CodexAccountScopeSection: View {
                             }
                         }
                         if result.items.count > 100 {
-                            let pages = max(1, Int(ceil(Double(result.items.count) / 100.0)))
-                            FlowButtonRow(spacing: 8, lineSpacing: 6) {
-                                Button("上一页") { page = max(0, page - 1) }
-                                    .buttonStyle(SecondaryButtonStyle())
-                                    .disabled(page == 0)
-                                Text("第 \(page + 1) / \(pages) 页")
-                                    .font(DesignFonts.body(12))
-                                    .foregroundStyle(palette.textMuted.color)
-                                Button("下一页") { page = min(pages - 1, page + 1) }
-                                    .buttonStyle(SecondaryButtonStyle())
-                                    .disabled(page + 1 >= pages)
-                            }
+                            SettingsPaginationBar(page: $page, totalCount: result.items.count)
                         }
                     }
                 }
@@ -1120,6 +1094,27 @@ struct CodexAccountScopeSection: View {
         } catch {
             guard store.revision == fixedRev else { return }
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+private struct SettingsPaginationBar: View {
+    @Environment(\.agentHubPalette) private var palette
+    @Binding var page: Int
+    let totalCount: Int
+
+    var body: some View {
+        let pages = max(1, (totalCount + 99) / 100)
+        FlowButtonRow(spacing: 8, lineSpacing: 6) {
+            Button("上一页") { page = max(0, page - 1) }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(page == 0)
+            Text("第 \(page + 1) / \(pages) 页")
+                .font(DesignFonts.body(12))
+                .foregroundStyle(palette.textMuted.color)
+            Button("下一页") { page = min(pages - 1, page + 1) }
+                .buttonStyle(SecondaryButtonStyle())
+                .disabled(page + 1 >= pages)
         }
     }
 }

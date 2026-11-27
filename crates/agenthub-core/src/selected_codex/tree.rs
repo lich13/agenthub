@@ -354,38 +354,12 @@ pub(crate) fn has_orphan_artifacts(paths: &CodexPaths, id: &str) -> bool {
     false
 }
 
-pub(crate) fn is_writer_locked(paths: &CodexPaths, id: &str) -> bool {
+pub(crate) fn probe_writer_locked(paths: &CodexPaths, id: &str) -> std::io::Result<bool> {
     let lock_path = paths
         .home
         .join("thread-writer-locks")
         .join(format!("{id}.lock"));
-    if !lock_path.is_file() {
-        return false;
-    }
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    let Ok(file) = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&lock_path)
-    else {
-        return false;
-    };
-    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-    if rc == 0 {
-        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
-        unsafe {
-            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-        }
-        false
-    } else {
-        let err = std::io::Error::last_os_error();
-        matches!(
-            err.raw_os_error(),
-            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-        )
-    }
+    crate::file_stamp::probe_advisory_lock(&lock_path, libc::LOCK_SH)
 }
 
 pub(crate) fn ensure_ids_not_running(
@@ -394,24 +368,23 @@ pub(crate) fn ensure_ids_not_running(
     conn: Option<&Connection>,
 ) -> Result<()> {
     for id in tree_ids {
-        ensure!(
-            !is_writer_locked(paths, id),
-            "线程 {id} 仍持有写入锁，无法清理"
-        );
+        let locked = probe_writer_locked(paths, id)
+            .with_context(|| format!("无法校验线程 {id} 的写入锁状态"))?;
+        ensure!(!locked, "线程 {id} 仍持有写入锁，无法清理");
     }
     let Some(conn) = conn else {
         return Ok(());
     };
-    let active_job_tables: Vec<(&str, &str)> = [
+    let mut active_job_tables = Vec::new();
+    for (table, key) in [
         ("jobs", "thread_id"),
         ("agent_job_items", "assigned_thread_id"),
-    ]
-    .into_iter()
-    .filter(|(table, key)| {
-        crate::archive::table_columns(conn, table)
-            .is_ok_and(|cols| cols.contains(*key) && cols.contains("status"))
-    })
-    .collect();
+    ] {
+        let cols = crate::archive::table_columns(conn, table)?;
+        if cols.contains(key) && cols.contains("status") {
+            active_job_tables.push((table, key));
+        }
+    }
     for id in tree_ids {
         if let Some(row) = row_value(conn, "threads", "id", id)? {
             for field in [

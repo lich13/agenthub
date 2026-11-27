@@ -1163,7 +1163,7 @@ pub(crate) fn load_events_from_source(
             logs.join("transcript_full.jsonl"),
             logs.join("transcript.jsonl"),
             db.clone(),
-            db.with_extension("db-wal"),
+            crate::file_stamp::wal_sidecar_path(&db),
         ],
         history_weight,
         || read_offline_transcript_events(paths, id).map(ProviderHistorySnapshot::new_literal),

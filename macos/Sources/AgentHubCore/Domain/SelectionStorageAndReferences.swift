@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Session Storage Formatting (sessionStorage.ts)
+// MARK: - Session Storage Formatting
 
 struct FormattedSessionStorage: Codable, Equatable, Sendable {
     var label: String
@@ -95,7 +95,7 @@ enum SessionStorageFormatter {
     }
 }
 
-// MARK: - Multi-Select Session Selection State Machine (sessionSelection.ts)
+// MARK: - Multi-Select Session Selection State Machine
 
 struct SessionSelectionState: Codable, Equatable, Sendable {
     var scope: String

@@ -89,7 +89,6 @@ pub(crate) async fn start_update_action(
     action: UpdateAction,
     audit_action: Option<&str>,
 ) -> ApiResponse {
-    let auth = crate::audit::actor();
     let platform = state.platform().clone();
     require_capability(
         &platform,
@@ -99,7 +98,7 @@ pub(crate) async fn start_update_action(
         },
     )?;
     let plan = update_service::plan_update_action(&platform, action)?;
-    let id = linux_adapter::start_update_action_plan(&state, &auth, plan, audit_action)?;
+    let id = linux_adapter::start_update_action_plan(&state, plan, audit_action)?;
     ok(json!({"job_id": id}))
 }
 

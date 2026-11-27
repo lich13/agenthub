@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// MARK: - Session Search Floating Trigger & ⌘F Modal (SessionSearch.tsx)
+// MARK: - Session Search Floating Trigger & ⌘F Modal
 
 enum SessionSearchMatchKind {
     static func label(for kind: String) -> String {

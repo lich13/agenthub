@@ -2,6 +2,11 @@ import Foundation
 
 // MARK: - Project Workspace Path Normalization, Worktree Coalescing & Grouping Engine
 
+enum SessionStatusLabels {
+    static let waiting = "等待处理"
+    static let replyNeeded = "待回复"
+}
+
 enum ProjectWorkspaceGroupingMode: String, Codable, Equatable, Sendable {
     case flat
     case byWorkspace
@@ -350,10 +355,10 @@ enum ProjectWorkspaceEngine {
 
     static func itemPriorityStatus(_ item: UnifiedSessionSummaryItem) -> ProjectWorkspaceAggregateStatus {
         if item.archived { return .idle }
-        if item.statusChipBadge == "等待处理"
-            || item.statusChipBadge == "待回复"
-            || item.statusText == "等待处理"
-            || item.statusText == "待回复"
+        if item.statusChipBadge == SessionStatusLabels.waiting
+            || item.statusChipBadge == SessionStatusLabels.replyNeeded
+            || item.statusText == SessionStatusLabels.waiting
+            || item.statusText == SessionStatusLabels.replyNeeded
             || item.statusChipTone == .warning
         {
             return .attention

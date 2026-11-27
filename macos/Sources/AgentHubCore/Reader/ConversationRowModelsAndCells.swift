@@ -160,7 +160,7 @@ enum ConversationRowBuilder {
                     ))
                 } else if ConversationViewModel.isPlanBlock(block) {
                     let cleaned = VisibleMarkdownEngine.visibleMarkdown(
-                        (block.text ?? "").replacingOccurrences(of: "</?proposed_plan>", with: "", options: .regularExpression)
+                        (block.text ?? "").replacing(MarkdownPatterns.proposedPlanTag, with: "")
                     )
                     let md = cleaned.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "暂无计划内容" : cleaned
                     let statusText = block.planStatus ?? block.status ?? block.turnId ?? block.kind
@@ -427,7 +427,7 @@ enum ConversationRowBuilder {
                         id: key,
                         timelineId: tid,
                         timelineAliases: sourceIds,
-                        kind: .plan(markdown: cleaned.isEmpty ? "暂无计划内容" : cleaned, statusText: ev.status ?? "plan", fallbackTitle: fallbackTitle)
+                        kind: .plan(markdown: cleaned.isEmpty ? "暂无计划内容" : cleaned, statusText: ev.status ?? "计划", fallbackTitle: fallbackTitle)
                     ))
                 } else if let text = ev.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     let cleaned = VisibleMarkdownEngine.visibleMarkdown(text)
@@ -564,6 +564,7 @@ enum ConversationRowBuilder {
 final class AttachmentViewportManager {
     static let viewportMargin: CGFloat = 240
     private var loadedImages: [String: NSImage] = [:]
+    private var failedKeys: Set<String> = []
     private var inFlightTasks: [String: (token: UInt64, task: Task<Void, Never>)] = [:]
     private var nextTaskToken: UInt64 = 0
     private var activeScopeKey: String = ""
@@ -575,7 +576,12 @@ final class AttachmentViewportManager {
         loadedImages[key]
     }
 
+    func hasFailed(for key: String) -> Bool {
+        failedKeys.contains(key)
+    }
+
     var loadedCount: Int { loadedImages.count }
+    var failedCount: Int { failedKeys.count }
     var inFlightCount: Int { inFlightTasks.count }
 
     func resetScope(_ scopeKey: String) {
@@ -590,6 +596,7 @@ final class AttachmentViewportManager {
         }
         inFlightTasks.removeAll()
         loadedImages.removeAll()
+        failedKeys.removeAll()
     }
 
     func evictOutside(visibleKeys: Set<String>) {
@@ -597,6 +604,7 @@ final class AttachmentViewportManager {
         for k in keysToDrop {
             loadedImages.removeValue(forKey: k)
         }
+        failedKeys.formIntersection(visibleKeys)
         let staleTasks = inFlightTasks.keys.filter { !visibleKeys.contains($0) }
         for k in staleTasks {
             inFlightTasks.removeValue(forKey: k)?.task.cancel()
@@ -608,7 +616,7 @@ final class AttachmentViewportManager {
         request: SessionAttachmentRequest,
         store: RuntimeConnectionStore
     ) {
-        guard loadedImages[key] == nil, inFlightTasks[key] == nil else { return }
+        guard loadedImages[key] == nil, !failedKeys.contains(key), inFlightTasks[key] == nil else { return }
         let sourceRevision = store.revision
         let boundScope = activeScopeKey
         nextTaskToken &+= 1
@@ -620,17 +628,25 @@ final class AttachmentViewportManager {
                     self.inFlightTasks.removeValue(forKey: key)
                 }
             }
-            guard let resp: SessionAttachmentResponse = try? await store.rpc(
+            let resp: SessionAttachmentResponse? = try? await store.rpc(
                 "sessions.attachmentRead",
                 args: RPCRequestEnvelope(request: request), at: sourceRevision
-            ),
-                !Task.isCancelled,
-                self.inFlightTasks[key]?.token == token,
-                store.revision == sourceRevision,
-                self.activeScopeKey == boundScope,
-                let data = Data(base64Encoded: resp.base64),
-                let img = NSImage(data: data)
+            )
+            guard !Task.isCancelled,
+                  self.inFlightTasks[key]?.token == token,
+                  store.revision == sourceRevision,
+                  self.activeScopeKey == boundScope
             else { return }
+            self.inFlightTasks.removeValue(forKey: key)
+            guard let resp,
+                  let data = Data(base64Encoded: resp.base64),
+                  let img = NSImage(data: data)
+            else {
+                self.failedKeys.insert(key)
+                self.onImageUpdated?(key)
+                return
+            }
+            self.failedKeys.remove(key)
             self.loadedImages[key] = img
             self.onImageUpdated?(key)
         }
@@ -638,6 +654,7 @@ final class AttachmentViewportManager {
     }
 
     func injectForTesting(key: String, image: NSImage) {
+        failedKeys.remove(key)
         loadedImages[key] = image
     }
 }

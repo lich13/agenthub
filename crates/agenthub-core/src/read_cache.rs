@@ -14,14 +14,21 @@ struct Stamp {
     edge_hash: [u8; 32],
 }
 
+fn is_wal_source_path(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().ends_with(b"-wal")
+}
+
 impl Stamp {
-    fn read(path: &Path, hash_edges: bool) -> Option<Self> {
+    fn read(path: &Path, hash_edges: bool, omit_ctime: bool) -> Option<Self> {
         // Coarse filesystem clocks can give a same-sized rewrite the same stamp.
         // Read bounded edges so an appended/replaced native record cannot reuse
         // a snapshot merely because its metadata timestamps share one clock tick.
         if hash_edges {
             let mut f = open_regular_nofollow(path).ok()?;
-            let stamp = FileStamp::from_open_file(&f)?;
+            let mut stamp = FileStamp::from_open_file(&f)?;
+            if omit_ctime {
+                stamp = stamp.without_ctime();
+            }
             let mut digest = Sha256::new();
             let mut edge = [0_u8; 4096];
             let head = f.read(&mut edge).ok()?;
@@ -36,8 +43,11 @@ impl Stamp {
                 edge_hash: digest.finalize().into(),
             })
         } else {
-            let stamp = FileStamp::of_nofollow(path)?;
+            let mut stamp = FileStamp::of_nofollow(path)?;
             stamp.modified?;
+            if omit_ctime {
+                stamp = stamp.without_ctime();
+            }
             Some(Self {
                 file: stamp,
                 edge_hash: [0; 32],
@@ -113,7 +123,7 @@ impl<T> ReadCache<T> {
         self.read_stamped(
             path,
             || {
-                Stamp::read(path, self.hash_edges)
+                Stamp::read(path, self.hash_edges, false)
                     .map(|stamp| SourceStamp::Files(vec![Some(stamp)]))
             },
             weight,
@@ -133,7 +143,7 @@ impl<T> ReadCache<T> {
             || {
                 let stamps: Vec<_> = sources
                     .iter()
-                    .map(|path| Stamp::read(path, self.hash_edges))
+                    .map(|path| Stamp::read(path, self.hash_edges, is_wal_source_path(path)))
                     .collect();
                 stamps
                     .iter()
@@ -276,6 +286,16 @@ impl<T> ReadCache<T> {
             .sum()
     }
 
+    #[cfg(test)]
+    pub(crate) fn peek_arc(&self, path: &Path) -> Option<Arc<T>> {
+        self.entries
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.path == path)
+            .map(|entry| entry.value.clone())
+    }
+
     pub(crate) fn evict_idle(&self, max_idle: std::time::Duration) -> usize {
         if let Ok(mut entries) = self.entries.lock() {
             let before = entries.len();
@@ -338,5 +358,89 @@ mod tests {
         assert!(cache
             .read(&path, |_, size| size, || Ok(fs::read_to_string(&path)?))
             .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_sources_omits_wal_ctime_during_and_across_reads_while_preserving_edge_hash() {
+        use std::{
+            io::{Seek, SeekFrom, Write},
+            os::unix::fs::PermissionsExt,
+            time::Duration,
+        };
+
+        let dir =
+            std::env::temp_dir().join(format!("agenthub-wal-sources-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("conv.db");
+        let wal = dir.join("conv.db-wal");
+        let key = dir.join("offline-history");
+        fs::write(&db, b"main-db").unwrap();
+        fs::write(&wal, b"wal-frame-A").unwrap();
+        fs::set_permissions(&wal, fs::Permissions::from_mode(0o644)).unwrap();
+
+        let cache = ReadCache::new(4096);
+        let loads = Cell::new(0usize);
+        let sources = [db.clone(), wal.clone()];
+
+        // 1. Mid-`load()` `-wal` `ctime` change (simulating root read-only SQLite open `fchown`) still caches!
+        let v1 = cache
+            .read_sources(
+                &key,
+                &sources,
+                |_, size| size,
+                || {
+                    loads.set(loads.get() + 1);
+                    std::thread::sleep(Duration::from_millis(5));
+                    fs::set_permissions(&wal, fs::Permissions::from_mode(0o600)).unwrap();
+                    Ok(fs::read_to_string(&wal)?)
+                },
+            )
+            .unwrap();
+        assert_eq!(loads.get(), 1);
+        assert_eq!(v1.as_str(), "wal-frame-A");
+        assert!(cache.cached_weight(&key) > 0);
+
+        // 2. Subsequent `-wal` `ctime`-only change hits cache without re-running `load()`.
+        std::thread::sleep(Duration::from_millis(5));
+        fs::set_permissions(&wal, fs::Permissions::from_mode(0o644)).unwrap();
+        let v2 = cache
+            .read_sources(
+                &key,
+                &sources,
+                |_, size| size,
+                || {
+                    loads.set(loads.get() + 1);
+                    Ok(fs::read_to_string(&wal)?)
+                },
+            )
+            .unwrap();
+        assert_eq!(loads.get(), 1);
+        assert!(Arc::ptr_eq(&v1, &v2));
+
+        // 3. Same-length in-place WAL byte rewrite (even if mtime is restored) invalidates via `edge_hash`!
+        let orig_mtime = fs::metadata(&wal).unwrap().modified().unwrap();
+        {
+            let mut f = fs::OpenOptions::new().write(true).open(&wal).unwrap();
+            f.seek(SeekFrom::Start(0)).unwrap();
+            f.write_all(b"wal-frame-B").unwrap();
+            f.set_times(fs::FileTimes::new().set_modified(orig_mtime))
+                .unwrap();
+        }
+        let v3 = cache
+            .read_sources(
+                &key,
+                &sources,
+                |_, size| size,
+                || {
+                    loads.set(loads.get() + 1);
+                    Ok(fs::read_to_string(&wal)?)
+                },
+            )
+            .unwrap();
+        assert_eq!(loads.get(), 2);
+        assert_eq!(v3.as_str(), "wal-frame-B");
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -1711,3 +1711,69 @@ fn bot_toggle_same_second_requires_the_same_observed_unfinished_attempt() {
         }
     }
 }
+
+#[tokio::test]
+async fn idle_poll_with_out_of_order_github_runs_does_not_rewrite_database_state() {
+    let fixture = Database::new();
+    let server = Server::new().await;
+    let time = 1_800_000_000_000_i64;
+    server.set("/user", json!(account()));
+    server.set(
+        "/user/repos?affiliation=owner&per_page=100",
+        json!([{"id": 10, "full_name": "fixture/repo", "archived": false}]),
+    );
+    // GitHub returns runs ordered by created_at DESC (run 2 first, run 1 second),
+    // while run 1 has a newer updated_at than run 2 so `retain_summaries` stores [run 1, run 2].
+    let mut older_updated = run(2, "completed", Some("success"), 1, time - 5_000);
+    older_updated.created_at = jiff::Timestamp::from_millisecond(time - 6_000)
+        .unwrap()
+        .to_string();
+    let mut newer_updated = run(1, "completed", Some("success"), 1, time - 1_000);
+    newer_updated.created_at = jiff::Timestamp::from_millisecond(time - 10_000)
+        .unwrap()
+        .to_string();
+    server.set(
+        "/repos/fixture/repo/actions/runs?per_page=10",
+        json!({"workflow_runs": [older_updated, newer_updated]}),
+    );
+
+    let mut config = Config::current_defaults().unwrap();
+    config.probe.notifications.notify_github_ci = true;
+
+    let mut monitor = server.monitor();
+    monitor
+        .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+            Ok("token".into())
+        })
+        .await
+        .unwrap();
+
+    let read_stored = || -> (String, i64) {
+        let conn = rusqlite::Connection::open(fixture.db.path()).unwrap();
+        conn.query_row(
+            "SELECT value, updated_at FROM settings WHERE key='github_ci_state'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    };
+    let (value_before, updated_before) = read_stored();
+
+    // Force immediate re-polls with identical out-of-order GitHub response: state must not be rewritten.
+    for step in 1..=3 {
+        monitor.next_poll_ms = 0;
+        monitor.repository_due_ms.clear();
+        monitor
+            .tick_with_token(&fixture.db, &|| Ok(config.clone()), async {
+                Ok("token".into())
+            })
+            .await
+            .unwrap();
+        let (value_after, updated_after) = read_stored();
+        assert_eq!(
+            value_after, value_before,
+            "idle poll {step} rewrote github_ci_state"
+        );
+        assert_eq!(updated_after, updated_before);
+    }
+}

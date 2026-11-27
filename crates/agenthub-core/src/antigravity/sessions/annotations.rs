@@ -389,7 +389,6 @@ pub(crate) struct ParsedRawSummary {
     pub(crate) waiting_steps: Vec<ParsedWaitingStep>,
     pub(crate) workspaces: Vec<String>,
     pub(crate) annotations: AnnotationOverlay,
-    pub(crate) last_user_input_step_index: Option<u64>,
     pub(crate) trajectory_meta: ParsedTrajectoryMeta,
     pub(crate) has_active_children: bool,
     pub(crate) not_fully_idle: bool,
@@ -426,14 +425,6 @@ impl ParsedRawSummary {
         }
         None
     }
-}
-
-#[derive(Debug, Default, Clone)]
-pub(crate) struct ParsedExecutorMeta {
-    pub(crate) termination_reason: u64,
-    pub(crate) last_step_idx: Option<u64>,
-    pub(crate) execution_id: Option<String>,
-    pub(crate) has_execution_error: bool,
 }
 
 fn decode_field_varint(field: &WireField<'_>) -> Option<u64> {
@@ -850,7 +841,6 @@ pub(crate) fn parse_raw_summary(raw: &[u8]) -> ParsedRawSummary {
                     }
                 }
             }
-            (16, 0) => parsed.last_user_input_step_index = decode_field_varint(&field),
             (17, 2) => parsed.trajectory_meta = parse_trajectory_metadata_blob(field.payload),
             (18, 0) => parsed.has_active_children = decode_field_varint(&field).unwrap_or(0) != 0,
             (21, 0) => parsed.not_fully_idle = decode_field_varint(&field).unwrap_or(0) != 0,
@@ -866,28 +856,6 @@ pub(crate) fn parse_raw_summary(raw: &[u8]) -> ParsedRawSummary {
         }
     }
     parsed
-}
-
-pub(crate) fn parse_executor_metadata_blob(raw: &[u8]) -> Option<ParsedExecutorMeta> {
-    let fields = parse_wire_fields(raw)?;
-    let mut meta = ParsedExecutorMeta::default();
-    for f in fields {
-        match (f.number, f.wire_type) {
-            (1, 0) => meta.termination_reason = decode_field_varint(&f).unwrap_or(0),
-            (3, 0) => meta.last_step_idx = decode_field_varint(&f),
-            (9, 2) => {
-                if let Ok(s) = std::str::from_utf8(f.payload) {
-                    let s = s.trim();
-                    if !s.is_empty() {
-                        meta.execution_id = Some(s.to_owned());
-                    }
-                }
-            }
-            (12, 2) if !f.payload.is_empty() => meta.has_execution_error = true,
-            _ => {}
-        }
-    }
-    Some(meta)
 }
 
 /// Losslessly patches `CascadeTrajectorySummary` field 15 (`ConversationAnnotations`):

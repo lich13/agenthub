@@ -625,3 +625,276 @@ fn later_message_still_notifies_while_an_earlier_interaction_is_pending() {
             .as_deref()
             .is_some_and(|text| text.contains("/fixture/private/report(final).pdf"))));
 }
+
+#[test]
+fn search_prevents_cross_account_metadata_leak_on_mid_read_or_mid_search_switch_and_truncates_roster_ids(
+) {
+    use crate::services::{
+        search::{SearchScope, SearchUseCases, SessionSearchRequest},
+        sessions::SessionProvider,
+    };
+
+    struct HookReset;
+    impl Drop for HookReset {
+        fn drop(&mut self) {
+            TEST_MID_ROSTER_READ_HOOK.with(|c| *c.borrow_mut() = None);
+            TEST_MID_SEARCH_LOAD_HOOK.with(|c| *c.borrow_mut() = None);
+        }
+    }
+    let _reset = HookReset;
+
+    let f = Fixture::new("acct-a");
+    let scope_a = encode_scope("acct-a");
+    let scope_b = encode_scope("acct-b");
+
+    // 1. Post-truncate ID set only: 4 rows in roster, max_sessions = 2 -> only top 2 IDs retained.
+    f.rows(json!([
+        {"id": "bot-1", "title": "Oldest", "lastActivityAt": 1000},
+        {"id": "bot-2", "title": "Second", "lastActivityAt": 2000},
+        {"id": "bot-3", "title": "Third", "lastActivityAt": 3000},
+        {"id": "bot-4", "title": "Newest", "lastActivityAt": 4000}
+    ]));
+    let (trunc_summaries, trunc_roster) = prepare_search(&f.paths, None, 2).unwrap();
+    assert_eq!(trunc_summaries.len(), 2);
+    assert_eq!(trunc_roster.thread_ids.len(), 2);
+    assert!(trunc_roster.thread_ids.contains("bot-4"));
+    assert!(trunc_roster.thread_ids.contains("bot-3"));
+    assert!(!trunc_roster.thread_ids.contains("bot-1"));
+
+    // Setup Account A and Account B slices with a shared query token + account-private titles/messages.
+    f.rows(json!([
+        {"id": "a-meta", "title": "SharedToken SecretAccountA_Title", "lastActivityAt": 5000},
+        {"id": "a-body", "title": "PlainA", "lastActivityAt": 4000}
+    ]));
+    f.write(
+        &replica_key(&scope_a, "a-meta"),
+        1,
+        json!({"entries": [{"kind":"message","id":"m1","role":"user","content":"body a1","timestampMs":5000}]}),
+    );
+    f.write(
+        &replica_key(&scope_a, "a-body"),
+        1,
+        json!({"entries": [{"kind":"message","id":"m2","role":"user","content":"SharedToken SecretAccountA_Body","timestampMs":4000}]}),
+    );
+    f.write(
+        &key(&scope_b, "roster.last-roster"),
+        4,
+        json!({"rows": [{"id": "b-1", "title": "SharedToken AccountB_Title", "lastActivityAt": 6000}]}),
+    );
+    f.write(
+        &replica_key(&scope_b, "b-1"),
+        1,
+        json!({"entries": [{"kind":"message","id":"mb1","role":"assistant","content":"SharedToken AccountB_Body","isStreaming":false,"timestampMs":6000}]}),
+    );
+
+    let service = SearchUseCases::with_grokbot_for_test(&f.root, f.paths.clone());
+
+    // 2. Account switches from A -> B mid-`read_verified_roster` (after reading A's roster):
+    // must NOT return unverified Account A summaries; retries and returns only Account B!
+    let root_for_hook = f.root.clone();
+    let switched_once = std::rc::Rc::new(std::cell::Cell::new(false));
+    let switched_flag = switched_once.clone();
+    TEST_MID_ROSTER_READ_HOOK.with(|c| {
+        *c.borrow_mut() = Some(Box::new(move || {
+            if !switched_flag.get() {
+                switched_flag.set(true);
+                let p = slice_path(&root_for_hook, &format!("{PREFIX}client-meta.account-slot"));
+                let repl = p.with_extension("replacement");
+                fs::write(
+                    &repl,
+                    json!({"schemaVersion": 1, "value": "acct-b"}).to_string(),
+                )
+                .unwrap();
+                fs::rename(repl, p).unwrap();
+            }
+        }));
+    });
+    let mid_roster_res = service
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Grokbot,
+            scope: SearchScope::Provider,
+            session_key: None,
+            query: "SharedToken".into(),
+            cursor: None,
+            limit: None,
+        })
+        .unwrap();
+    assert!(switched_once.get());
+    assert!(!mid_roster_res.results.is_empty());
+    assert!(mid_roster_res.results.iter().all(|r| {
+        r.native_id == "b-1"
+            && !r.title.contains("SecretAccountA")
+            && !r.snippet.contains("SecretAccountA")
+    }));
+    TEST_MID_ROSTER_READ_HOOK.with(|c| *c.borrow_mut() = None);
+
+    // 3. Switch back to Account A, then switch A -> B mid-search (DURING `load_all_events_for_search`,
+    // AFTER `a-meta`'s title match was already pushed to `attempt_matches`!):
+    // must discard Account A metadata/events and return ONLY Account B results!
+    f.write(
+        &format!("{PREFIX}client-meta.account-slot"),
+        1,
+        json!("acct-a"),
+    );
+    let root_for_load = f.root.clone();
+    let switched_mid_load = std::rc::Rc::new(std::cell::Cell::new(false));
+    let load_flag = switched_mid_load.clone();
+    TEST_MID_SEARCH_LOAD_HOOK.with(|c| {
+        *c.borrow_mut() = Some(Box::new(move || {
+            if !load_flag.get() {
+                load_flag.set(true);
+                let p = slice_path(&root_for_load, &format!("{PREFIX}client-meta.account-slot"));
+                let repl = p.with_extension("replacement");
+                fs::write(
+                    &repl,
+                    json!({"schemaVersion": 1, "value": "acct-b"}).to_string(),
+                )
+                .unwrap();
+                fs::rename(repl, p).unwrap();
+            }
+        }));
+    });
+    let mid_search_res = service
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Grokbot,
+            scope: SearchScope::Provider,
+            session_key: None,
+            query: "SharedToken".into(),
+            cursor: None,
+            limit: None,
+        })
+        .unwrap();
+    assert!(switched_mid_load.get());
+    assert!(!mid_search_res.results.is_empty());
+    assert!(mid_search_res.results.iter().all(|r| {
+        r.native_id == "b-1"
+            && !r.title.contains("SecretAccountA")
+            && !r.snippet.contains("SecretAccountA")
+    }));
+    TEST_MID_SEARCH_LOAD_HOOK.with(|c| *c.borrow_mut() = None);
+
+    // 3b. `SearchScope::Thread` on Account A when active account switches A -> B mid-`load_all_events_for_search`
+    // (after `a-meta` title match was already pushed to `attempt_matches`) discards stale matches and errors.
+    f.write(
+        &format!("{PREFIX}client-meta.account-slot"),
+        1,
+        json!("acct-a"),
+    );
+    let root_for_thread = f.root.clone();
+    let switched_mid_thread = std::rc::Rc::new(std::cell::Cell::new(false));
+    let thread_flag = switched_mid_thread.clone();
+    TEST_MID_SEARCH_LOAD_HOOK.with(|c| {
+        *c.borrow_mut() = Some(Box::new(move || {
+            if !thread_flag.get() {
+                thread_flag.set(true);
+                let p = slice_path(
+                    &root_for_thread,
+                    &format!("{PREFIX}client-meta.account-slot"),
+                );
+                let repl = p.with_extension("replacement");
+                fs::write(
+                    &repl,
+                    json!({"schemaVersion": 1, "value": "acct-b"}).to_string(),
+                )
+                .unwrap();
+                fs::rename(repl, p).unwrap();
+            }
+        }));
+    });
+    let thread_switch_err = service
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Grokbot,
+            scope: SearchScope::Thread,
+            session_key: Some(session_key(&scope_a, "a-meta")),
+            query: "SharedToken".into(),
+            cursor: None,
+            limit: None,
+        })
+        .unwrap_err()
+        .to_string();
+    assert!(switched_mid_thread.get());
+    assert!(
+        thread_switch_err.contains("不在当前账户中"),
+        "{thread_switch_err}"
+    );
+    TEST_MID_SEARCH_LOAD_HOOK.with(|c| *c.borrow_mut() = None);
+
+    // 3c. Same-account `roster.last-roster` mutation mid-`read_verified_roster` retries and drops removed rows.
+    let root_for_roster_mut = f.root.clone();
+    let scope_b_for_hook = scope_b.clone();
+    let mutated_roster_once = std::rc::Rc::new(std::cell::Cell::new(false));
+    let roster_mut_flag = mutated_roster_once.clone();
+    TEST_MID_ROSTER_READ_HOOK.with(|c| {
+        *c.borrow_mut() = Some(Box::new(move || {
+            if !roster_mut_flag.get() {
+                roster_mut_flag.set(true);
+                let p = slice_path(
+                    &root_for_roster_mut,
+                    &key(&scope_b_for_hook, "roster.last-roster"),
+                );
+                let repl = p.with_extension("replacement");
+                fs::write(
+                    &repl,
+                    json!({
+                        "schemaVersion": 4,
+                        "value": {"rows": [{"id": "b-fresh", "title": "SharedToken FreshOnlyTitle", "lastActivityAt": 7000}]}
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+                fs::rename(repl, p).unwrap();
+            }
+        }));
+    });
+    let roster_mut_res = service
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Grokbot,
+            scope: SearchScope::Provider,
+            session_key: None,
+            query: "SharedToken".into(),
+            cursor: None,
+            limit: None,
+        })
+        .unwrap();
+    assert!(mutated_roster_once.get());
+    assert!(!roster_mut_res.results.is_empty());
+    assert!(roster_mut_res
+        .results
+        .iter()
+        .all(|r| r.native_id == "b-fresh" && !r.title.contains("AccountB_Title")));
+    TEST_MID_ROSTER_READ_HOOK.with(|c| *c.borrow_mut() = None);
+
+    // 4. Continuous thrashing across all bounded attempts returns an explicit error instead of stale data.
+    let root_thrash = f.root.clone();
+    let toggle = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let toggle_ref = toggle.clone();
+    TEST_MID_ROSTER_READ_HOOK.with(|c| {
+        *c.borrow_mut() = Some(Box::new(move || {
+            let next = toggle_ref.get() + 1;
+            toggle_ref.set(next);
+            let acct = if next.is_multiple_of(2) {
+                "acct-a"
+            } else {
+                "acct-b"
+            };
+            let p = slice_path(&root_thrash, &format!("{PREFIX}client-meta.account-slot"));
+            let repl = p.with_extension("replacement");
+            fs::write(
+                &repl,
+                json!({"schemaVersion": 1, "value": acct}).to_string(),
+            )
+            .unwrap();
+            fs::rename(repl, p).unwrap();
+        }));
+    });
+    assert!(service
+        .search(SessionSearchRequest {
+            provider: SessionProvider::Grokbot,
+            scope: SearchScope::Provider,
+            session_key: None,
+            query: "SharedToken".into(),
+            cursor: None,
+            limit: None,
+        })
+        .is_err());
+}

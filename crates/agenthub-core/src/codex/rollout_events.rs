@@ -716,47 +716,16 @@ fn user_input_answer_block(value: &Value, raw_index: usize) -> Option<MessageBlo
         return None;
     }
     let payload = value.get("payload").unwrap_or(value);
-    let answers = parse_user_input_answers(payload);
     let call_id = event_call_id(value)
         .or_else(|| payload_call_id(payload))
         .or_else(|| payload_item_id(value, payload));
-    Some(MessageBlock {
-        subagent: None,
-        user_message: None,
-        phase: None,
-        id: block_id(value, raw_index),
-        role: "assistant".to_string(),
-        kind: "request_user_input_result".to_string(),
-        display_kind: Some("question_result".to_string()),
-        status: Some("completed".to_string()),
-        text: Some(answer_summary(&answers)),
-        summary: Some(answer_summary(&answers)),
-        input: None,
-        truncated: Some(false),
-        resolved: Some(true),
-        answers,
-        plan_status: None,
-        group_id: call_id.clone(),
-        tool_name: Some("request_user_input".to_string()),
+    let turn_id = event_turn_id(value).or_else(|| payload_turn_id(payload));
+    Some(user_input_result_block(
+        (value, payload, raw_index),
         call_id,
-        turn_id: event_turn_id(value)
-            .or_else(|| {
-                payload
-                    .get("turnId")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            })
-            .or_else(|| {
-                payload
-                    .get("turn_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
-        item_id: payload_item_id(value, payload),
-        created_at: event_time(value),
-        questions: Vec::new(),
-        payload: Some(value.clone()),
-    })
+        turn_id,
+        parse_user_input_answers(payload),
+    ))
 }
 
 fn user_input_output_block(
@@ -765,7 +734,21 @@ fn user_input_output_block(
     raw_index: usize,
     call_id: Option<String>,
 ) -> MessageBlock {
-    let answers = parse_user_input_output_answers(payload);
+    user_input_result_block(
+        (value, payload, raw_index),
+        call_id,
+        event_turn_id(value),
+        parse_user_input_output_answers(payload),
+    )
+}
+
+fn user_input_result_block(
+    (value, payload, raw_index): (&Value, &Value, usize),
+    call_id: Option<String>,
+    turn_id: Option<String>,
+    answers: Vec<UserInputAnswer>,
+) -> MessageBlock {
+    let summary = answer_summary(&answers);
     MessageBlock {
         subagent: None,
         user_message: None,
@@ -775,8 +758,8 @@ fn user_input_output_block(
         kind: "request_user_input_result".to_string(),
         display_kind: Some("question_result".to_string()),
         status: Some("completed".to_string()),
-        text: Some(answer_summary(&answers)),
-        summary: Some(answer_summary(&answers)),
+        text: Some(summary.clone()),
+        summary: Some(summary),
         input: None,
         truncated: Some(false),
         resolved: Some(true),
@@ -785,7 +768,7 @@ fn user_input_output_block(
         group_id: call_id.clone(),
         tool_name: Some("request_user_input".to_string()),
         call_id,
-        turn_id: event_turn_id(value),
+        turn_id,
         item_id: payload_item_id(value, payload),
         created_at: event_time(value),
         questions: Vec::new(),
@@ -1000,20 +983,17 @@ fn plan_group_key(block: &MessageBlock, fallback_index: usize) -> String {
         .unwrap()
 }
 
+fn payload_turn_id(payload: &Value) -> Option<String> {
+    payload
+        .get("turnId")
+        .or_else(|| payload.get("turn_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 fn plan_group_id(value: &Value, payload: &Value) -> Option<String> {
     event_turn_id(value)
-        .or_else(|| {
-            payload
-                .get("turnId")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(|| {
-            payload
-                .get("turn_id")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
+        .or_else(|| payload_turn_id(payload))
         .map(|turn| format!("plan-turn-{turn}"))
         .or_else(|| payload_item_id(value, payload).map(|item| format!("plan-item-{item}")))
 }

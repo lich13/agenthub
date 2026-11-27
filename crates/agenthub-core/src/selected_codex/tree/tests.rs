@@ -434,3 +434,49 @@ fn estimate_bytes_batch_matches_single_preview_across_rollouts_locks_snapshots_a
     assert!(!batch.contains_key("../invalid-id"));
     assert!(!batch.contains_key("00000000-0000-4000-8000-999999999999"));
 }
+
+#[cfg(unix)]
+#[test]
+fn ensure_ids_not_running_propagates_lock_probe_and_sqlite_errors() {
+    let f = Fixture::new();
+    let locks_dir = f.paths.home.join("thread-writer-locks");
+    fs::create_dir_all(&locks_dir).unwrap();
+    let real_file = f.paths.home.join("target-lock");
+    fs::write(&real_file, b"").unwrap();
+    let lock_path = locks_dir.join(format!("{OTHER}.lock"));
+    std::os::unix::fs::symlink(&real_file, &lock_path).unwrap();
+
+    let lock_err = super::ensure_ids_not_running(&f.paths, &[OTHER.to_owned()], None)
+        .unwrap_err()
+        .to_string();
+    assert!(lock_err.contains("写入锁状态"), "{lock_err}");
+    fs::remove_file(&lock_path).unwrap();
+
+    // Missing `agent_job_items` table is still treated as absent, not an error.
+    let db_path = f.paths.home.join("state_5.sqlite");
+    let drop_conn = Connection::open(&db_path).unwrap();
+    drop_conn
+        .execute_batch(&format!(
+            "DROP TABLE agent_job_items; UPDATE threads SET status = 'idle' WHERE id = '{OTHER}';"
+        ))
+        .unwrap();
+    assert!(super::ensure_ids_not_running(&f.paths, &[OTHER.to_owned()], Some(&drop_conn)).is_ok());
+    drop(drop_conn);
+
+    // Exclusive SQLite lock during `table_columns` surfaces as a target error instead of silently passing.
+    let locker = Connection::open(&db_path).unwrap();
+    locker.execute_batch("BEGIN EXCLUSIVE;").unwrap();
+    let reader = Connection::open(&db_path).unwrap();
+    reader
+        .busy_timeout(std::time::Duration::from_millis(0))
+        .unwrap();
+    let db_err = super::ensure_ids_not_running(&f.paths, &[OTHER.to_owned()], Some(&reader))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        db_err.contains("locked") || db_err.contains("busy"),
+        "{db_err}"
+    );
+    drop(reader);
+    drop(locker);
+}

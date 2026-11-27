@@ -1,7 +1,11 @@
 use crate::overview::DesktopState;
-use agenthub_core::{config::Config, db::PanelDb, platform::PlatformPaths};
+use agenthub_core::{
+    config::{write_bytes_atomic_0600, Config},
+    db::PanelDb,
+    platform::PlatformPaths,
+};
 use anyhow::{anyhow, Context, Result};
-use std::{fs, io::Write, path::Path};
+use std::{fs, path::Path};
 use zeroize::{Zeroize, Zeroizing};
 
 pub(crate) fn init_desktop_state(isolated_root: Option<&Path>) -> Result<DesktopState> {
@@ -29,7 +33,7 @@ pub(crate) fn build_isolated_desktop_state(isolated_root: &Path) -> Result<Deskt
         let serialized = seed
             .to_toml_string()
             .context("serialize isolated config.toml")?;
-        write_atomic_0600(&config_file, serialized.as_bytes())?;
+        write_bytes_atomic_0600(&config_file, serialized.as_bytes())?;
     }
 
     // Seed remote-connection.json read-only once if the user already has saved SSH hosts.
@@ -37,7 +41,7 @@ pub(crate) fn build_isolated_desktop_state(isolated_root: &Path) -> Result<Deskt
     let production_remote = production_platform.data_dir.join("remote-connection.json");
     if !isolated_remote.exists() && production_remote.is_file() {
         if let Ok(bytes) = fs::read(&production_remote) {
-            let _ = write_atomic_0600(&isolated_remote, &bytes);
+            let _ = write_bytes_atomic_0600(&isolated_remote, &bytes);
         }
     }
 
@@ -50,7 +54,7 @@ pub(crate) fn build_isolated_desktop_state(isolated_root: &Path) -> Result<Deskt
     if !env_file.exists() {
         let key = Zeroizing::new(agenthub_core::crypto::SecretBox::random_key_material());
         let contents = Zeroizing::new(format!("AGENTHUB_SECRET_KEY={}\n", key.as_str()));
-        write_atomic_0600(&env_file, contents.as_bytes())?;
+        write_bytes_atomic_0600(&env_file, contents.as_bytes())?;
     }
 
     let mut config = Config::load_runtime(&platform.config_file)?;
@@ -75,25 +79,5 @@ fn create_dir_0700(path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
-    Ok(())
-}
-
-fn write_atomic_0600(target: &Path, bytes: &[u8]) -> Result<()> {
-    let parent = target
-        .parent()
-        .ok_or_else(|| anyhow!("target path missing parent directory"))?;
-    let mut temp = tempfile::Builder::new()
-        .prefix(".isolated-cfg-")
-        .tempfile_in(parent)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        temp.as_file()
-            .set_permissions(fs::Permissions::from_mode(0o600))?;
-    }
-    temp.write_all(bytes)?;
-    temp.as_file().sync_all()?;
-    temp.persist(target)
-        .map_err(|err| anyhow!("persist isolated file failed: {}", err.error))?;
     Ok(())
 }

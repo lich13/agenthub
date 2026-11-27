@@ -192,6 +192,15 @@ fn row_title(row: &Value) -> String {
         .into()
 }
 fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSessionSummary> {
+    summary_inner(paths, scope, row, true)
+}
+
+fn summary_inner(
+    paths: &GrokBotPaths,
+    scope: &str,
+    row: &Value,
+    include_storage: bool,
+) -> Result<ProviderSessionSummary> {
     let id = row["id"]
         .as_str()
         .filter(|s| !s.is_empty())
@@ -201,7 +210,7 @@ fn summary(paths: &GrokBotPaths, scope: &str, row: &Value) -> Result<ProviderSes
         fs::symlink_metadata(&path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink());
     let pending = row.get("awaitingUserResponse").filter(|v| !v.is_null());
     Ok(ProviderSessionSummary {
-        storage_size: available
+        storage_size: (include_storage && available)
             .then(|| crate::session_storage::file_size(&paths.persistence, &path)),
         id: id.into(),
         session_key: session_key(scope, id),
@@ -409,6 +418,244 @@ fn events(replica: &Value) -> Vec<ProviderHistoryEvent> {
         })
         .collect()
 }
+pub(crate) const GROKBOT_VERIFY_ATTEMPTS: usize = 4;
+
+#[derive(Debug)]
+pub(crate) struct GrokBotAccountChanged;
+
+impl std::fmt::Display for GrokBotAccountChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Grok Bot 当前账户已切换，请重新搜索")
+    }
+}
+
+impl std::error::Error for GrokBotAccountChanged {}
+
+pub(crate) struct GrokBotSearchRoster {
+    scope: Option<String>,
+    prefix: String,
+    account_stamp: Option<crate::file_stamp::FileStamp>,
+    roster_stamp: Option<crate::file_stamp::FileStamp>,
+    roster_shortcut_valid: bool,
+    pub(crate) thread_ids: std::collections::HashSet<String>,
+}
+
+type GrokBotStampPair = (
+    Option<crate::file_stamp::FileStamp>,
+    Option<crate::file_stamp::FileStamp>,
+);
+
+enum VerifiedGrokBotRoster {
+    NoAccount {
+        account_stamp: Option<crate::file_stamp::FileStamp>,
+    },
+    Active {
+        scope: String,
+        roster_val: Value,
+        account_stamp: Option<crate::file_stamp::FileStamp>,
+        roster_stamp: Option<crate::file_stamp::FileStamp>,
+    },
+}
+
+#[cfg(test)]
+type GrokBotTestHookSlot = std::cell::RefCell<Option<Box<dyn FnMut()>>>;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_MID_ROSTER_READ_HOOK: GrokBotTestHookSlot = std::cell::RefCell::new(None);
+    static TEST_MID_SEARCH_LOAD_HOOK: GrokBotTestHookSlot = std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn run_test_hook(slot: &'static std::thread::LocalKey<GrokBotTestHookSlot>) {
+    let hook = slot.with(|cell| cell.borrow_mut().take());
+    if let Some(mut f) = hook {
+        f();
+        slot.with(|cell| *cell.borrow_mut() = Some(f));
+    }
+}
+
+fn account_slot_stamp(paths: &GrokBotPaths) -> Option<crate::file_stamp::FileStamp> {
+    crate::file_stamp::FileStamp::of_nofollow(&slice_path(
+        &paths.persistence,
+        &format!("{PREFIX}client-meta.account-slot"),
+    ))
+}
+
+fn account_and_roster_stamps(paths: &GrokBotPaths, scope: &str) -> GrokBotStampPair {
+    let roster_path = slice_path(&paths.persistence, &key(scope, "roster.last-roster"));
+    (
+        account_slot_stamp(paths),
+        crate::file_stamp::FileStamp::of_nofollow(&roster_path),
+    )
+}
+
+fn read_verified_roster(paths: &GrokBotPaths) -> Result<VerifiedGrokBotRoster> {
+    for _ in 0..GROKBOT_VERIFY_ATTEMPTS {
+        let acc_before = account_slot_stamp(paths);
+        let Some(scope) = account(paths)? else {
+            #[cfg(test)]
+            run_test_hook(&TEST_MID_ROSTER_READ_HOOK);
+            if account_slot_stamp(paths) == acc_before && account(paths)?.is_none() {
+                return Ok(VerifiedGrokBotRoster::NoAccount {
+                    account_stamp: acc_before,
+                });
+            }
+            continue;
+        };
+        let roster_path = slice_path(&paths.persistence, &key(&scope, "roster.last-roster"));
+        let ros_before = crate::file_stamp::FileStamp::of_nofollow(&roster_path);
+        let roster_val = read_slice(&paths.persistence, &key(&scope, "roster.last-roster"), 4)?
+            .unwrap_or_else(|| serde_json::json!({"rows":[]}));
+        #[cfg(test)]
+        run_test_hook(&TEST_MID_ROSTER_READ_HOOK);
+        let after = account_and_roster_stamps(paths, &scope);
+        if after == (acc_before, ros_before) && account(paths)?.as_deref() == Some(scope.as_str()) {
+            return Ok(VerifiedGrokBotRoster::Active {
+                scope,
+                roster_val,
+                account_stamp: after.0,
+                roster_stamp: after.1,
+            });
+        }
+    }
+    anyhow::bail!("Grok Bot 账户或会话列表正在变更，请稍后重试")
+}
+
+pub(crate) fn prepare_search(
+    paths: &GrokBotPaths,
+    thread_session_key: Option<&str>,
+    max_sessions: usize,
+) -> Result<(Vec<ProviderSessionSummary>, GrokBotSearchRoster)> {
+    if let Some(session) = thread_session_key {
+        let VerifiedGrokBotRoster::Active {
+            scope,
+            roster_val,
+            account_stamp,
+            roster_stamp,
+        } = read_verified_roster(paths)?
+        else {
+            anyhow::bail!("Grok Bot 当前账户不可用");
+        };
+        let prefix = format!("{}:", hex::encode(Sha256::digest(&scope)));
+        let id = session
+            .strip_prefix(&prefix)
+            .context("Grok Bot 线程不在当前账户中")?;
+        let row = roster_rows(&roster_val)?
+            .iter()
+            .find(|row| row["id"].as_str() == Some(id))
+            .context("Grok Bot 线程不在当前账户中")?;
+        let sum = summary_inner(paths, &scope, row, false)?;
+        let mut thread_ids = std::collections::HashSet::with_capacity(1);
+        thread_ids.insert(sum.id.clone());
+        return Ok((
+            vec![sum],
+            GrokBotSearchRoster {
+                scope: Some(scope),
+                prefix,
+                account_stamp,
+                roster_stamp,
+                roster_shortcut_valid: true,
+                thread_ids,
+            },
+        ));
+    }
+    let (scope, roster_val, account_stamp, roster_stamp) = match read_verified_roster(paths)? {
+        VerifiedGrokBotRoster::NoAccount { account_stamp } => {
+            return Ok((
+                vec![],
+                GrokBotSearchRoster {
+                    scope: None,
+                    prefix: String::new(),
+                    account_stamp,
+                    roster_stamp: None,
+                    roster_shortcut_valid: false,
+                    thread_ids: std::collections::HashSet::new(),
+                },
+            ));
+        }
+        VerifiedGrokBotRoster::Active {
+            scope,
+            roster_val,
+            account_stamp,
+            roster_stamp,
+        } => (scope, roster_val, account_stamp, roster_stamp),
+    };
+    let mut summaries = roster_rows(&roster_val)?
+        .iter()
+        .filter(|r| r["isRemovedFromSidebar"] != true)
+        .map(|r| summary_inner(paths, &scope, r, false))
+        .collect::<Result<Vec<_>>>()?;
+    summaries.sort_by_cached_key(|r| {
+        (
+            std::cmp::Reverse(crate::timestamps::sort_key_nanos(r.updated_at.as_deref())),
+            r.id.clone(),
+        )
+    });
+    summaries.truncate(max_sessions);
+    let thread_ids = summaries.iter().map(|s| s.id.clone()).collect();
+    let prefix = format!("{}:", hex::encode(Sha256::digest(&scope)));
+    Ok((
+        summaries,
+        GrokBotSearchRoster {
+            scope: Some(scope),
+            prefix,
+            account_stamp,
+            roster_stamp,
+            roster_shortcut_valid: true,
+            thread_ids,
+        },
+    ))
+}
+
+pub(crate) fn verify_search_scope_unchanged(
+    paths: &GrokBotPaths,
+    state: &GrokBotSearchRoster,
+) -> Result<bool> {
+    if account_slot_stamp(paths) != state.account_stamp {
+        return Ok(false);
+    }
+    if account(paths)?.as_deref() != state.scope.as_deref() {
+        return Ok(false);
+    }
+    Ok(account_slot_stamp(paths) == state.account_stamp)
+}
+
+pub(crate) fn load_all_events_for_search(
+    paths: &GrokBotPaths,
+    state: &mut GrokBotSearchRoster,
+    session: &str,
+) -> Result<Arc<Vec<ProviderHistoryEvent>>> {
+    #[cfg(test)]
+    run_test_hook(&TEST_MID_SEARCH_LOAD_HOOK);
+    let Some(scope) = state.scope.as_deref() else {
+        return Err(GrokBotAccountChanged.into());
+    };
+    if state.roster_shortcut_valid {
+        let current_stamps = account_and_roster_stamps(paths, scope);
+        if current_stamps == (state.account_stamp, state.roster_stamp) {
+            if let Some(id) = session.strip_prefix(&state.prefix) {
+                if state.thread_ids.contains(id) {
+                    let res = snapshot_for_id(paths, scope, id).map(|snap| snap.events.clone());
+                    if !verify_search_scope_unchanged(paths, state)? {
+                        return Err(GrokBotAccountChanged.into());
+                    }
+                    return res;
+                }
+            }
+        }
+        state.roster_shortcut_valid = false;
+    }
+    if !verify_search_scope_unchanged(paths, state)? {
+        return Err(GrokBotAccountChanged.into());
+    }
+    let res = load_all_events(paths, session);
+    if !verify_search_scope_unchanged(paths, state)? {
+        return Err(GrokBotAccountChanged.into());
+    }
+    res
+}
+
 pub fn load_all_events(
     paths: &GrokBotPaths,
     session: &str,
@@ -417,14 +664,14 @@ pub fn load_all_events(
 }
 fn snapshot(paths: &GrokBotPaths, session: &str) -> Result<Arc<ProviderHistorySnapshot>> {
     let (scope, row) = locate(paths, session)?;
-    snapshot_for_row(paths, &scope, &row)
+    let id = row["id"].as_str().context("Grok Bot 线程身份缺失")?;
+    snapshot_for_id(paths, &scope, id)
 }
-fn snapshot_for_row(
+fn snapshot_for_id(
     paths: &GrokBotPaths,
     scope: &str,
-    row: &Value,
+    id: &str,
 ) -> Result<Arc<ProviderHistorySnapshot>> {
-    let id = row["id"].as_str().context("Grok Bot 线程身份缺失")?;
     let k = replica_key(scope, id);
     let path = slice_path(&paths.persistence, &k);
     provider_sessions::HISTORY_CACHE.read(&path, provider_sessions::history_weight, || {
@@ -450,11 +697,8 @@ pub fn detail(
         .map(|event| event.kind.as_str())
         .unwrap_or("unknown")
         .into();
-    provider_sessions::paginate_provider_detail(
-        summary,
-        snapshot_for_row(paths, &scope, &row)?.as_ref(),
-        request,
-    )
+    let snap = snapshot_for_id(paths, &scope, &summary.id)?;
+    provider_sessions::paginate_provider_detail(summary, snap.as_ref(), request)
 }
 fn pending_events(row: &Value, replica: Option<&Value>) -> Vec<NativeTurnEvent> {
     let mut pending = Vec::new();

@@ -1,5 +1,20 @@
 use super::*;
 
+async fn run_blocking<A, T, F>(
+    ctx: DispatchContext<'_>,
+    args_json: &str,
+    work: F,
+) -> Result<String, String>
+where
+    A: serde::de::DeserializeOwned + Send + 'static,
+    T: serde::Serialize + Send + 'static,
+    F: FnOnce(DesktopState, A) -> anyhow::Result<T> + Send + 'static,
+{
+    let args: A = parse_args(args_json)?;
+    let state = ctx.state.clone();
+    encode(crate::commands::blocking(move || work(state, args)).await)
+}
+
 pub(super) async fn claude_hooks(
     ctx: DispatchContext<'_>,
     args_json: &str,
@@ -20,34 +35,26 @@ pub(super) async fn claude_hooks(
 }
 
 pub(super) async fn grok_list(ctx: DispatchContext<'_>, args_json: &str) -> Result<String, String> {
-    let args: QueryLimitRequest = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .grok()?
-                .list(args.limit.unwrap_or(100), args.q.as_deref())
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: QueryLimitRequest| {
+        AgentHubUseCases::new(state.platform())
+            .grok()?
+            .list(args.limit.unwrap_or(100), args.q.as_deref())
+    })
+    .await
 }
 
 pub(super) async fn grok_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: GrokDetailArgs = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform()).grok()?.page(
-                &args.id,
-                args.limit,
-                args.before.as_deref(),
-            )
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: GrokDetailArgs| {
+        AgentHubUseCases::new(state.platform()).grok()?.page(
+            &args.id,
+            args.limit,
+            args.before.as_deref(),
+        )
+    })
+    .await
 }
 
 pub(super) async fn grok_rename(
@@ -69,26 +76,22 @@ pub(super) async fn grok_delete_preview(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: IdOnlyArgs = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .grok()?
-                .delete_preview(&args.id)
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: IdOnlyArgs| {
+        AgentHubUseCases::new(state.platform())
+            .grok()?
+            .delete_preview(&args.id)
+    })
+    .await
 }
 
 pub(super) async fn grok_delete_execute(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<GrokDeleteRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<GrokDeleteRequest>| {
             let result = AgentHubUseCases::new(state.platform())
                 .grok()?
                 .delete_execute(args.request)?;
@@ -99,99 +102,79 @@ pub(super) async fn grok_delete_execute(
                 );
             }
             Ok(result)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn claude_list(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: QueryLimitRequest = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .claude()?
-                .list(args.limit.unwrap_or(100), args.q.as_deref())
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: QueryLimitRequest| {
+        AgentHubUseCases::new(state.platform())
+            .claude()?
+            .list(args.limit.unwrap_or(100), args.q.as_deref())
+    })
+    .await
 }
 
 pub(super) async fn claude_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let request: ClaudeDetailRequest = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .claude()?
-                .detail(request)
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, request: ClaudeDetailRequest| {
+        AgentHubUseCases::new(state.platform())
+            .claude()?
+            .detail(request)
+    })
+    .await
 }
 
 pub(super) async fn claude_ownership_diagnostics(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: SessionKeyOnlyArgs = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .claude()?
-                .ownership_diagnostics(&args.session_key)
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: SessionKeyOnlyArgs| {
+        AgentHubUseCases::new(state.platform())
+            .claude()?
+            .ownership_diagnostics(&args.session_key)
+    })
+    .await
 }
 
 pub(super) async fn claude_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: ClaudeRenameRequest = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .claude()?
-                .rename(&args.session_key, &args.title)
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: ClaudeRenameRequest| {
+        AgentHubUseCases::new(state.platform())
+            .claude()?
+            .rename(&args.session_key, &args.title)
+    })
+    .await
 }
 
 pub(super) async fn claude_delete_preview(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: SessionKeyOnlyArgs = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
-            AgentHubUseCases::new(state.platform())
-                .claude()?
-                .delete_preview(&args.session_key)
-        })
-        .await,
-    )
+    run_blocking(ctx, args_json, |state, args: SessionKeyOnlyArgs| {
+        AgentHubUseCases::new(state.platform())
+            .claude()?
+            .delete_preview(&args.session_key)
+    })
+    .await
 }
 
 pub(super) async fn claude_delete_execute(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ClaudeDeleteRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ClaudeDeleteRequest>| {
             let result = AgentHubUseCases::new(state.platform())
                 .claude()?
                 .delete_execute(args.request)?;
@@ -202,196 +185,196 @@ pub(super) async fn claude_delete_execute(
                 );
             }
             Ok(result)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn antigravity_list(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: OptionalWrappedRequest<ProviderListRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: OptionalWrappedRequest<ProviderListRequest>| {
             AgentHubUseCases::new(state.platform())
                 .antigravity()?
                 .list(args.request.unwrap_or_default())
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn antigravity_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderDetailRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderDetailRequest>| {
             AgentHubUseCases::new(state.platform())
                 .antigravity()?
                 .detail(args.request)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn antigravity_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderRenameRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderRenameRequest>| {
             AgentHubUseCases::new(state.platform())
                 .antigravity()?
                 .rename(&args.request.session_key, &args.request.title)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn antigravity_archive(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderSessionRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderSessionRequest>| {
             AgentHubUseCases::new(state.platform())
                 .antigravity()?
                 .archive(&args.request.session_key)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn antigravity_restore(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderSessionRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderSessionRequest>| {
             AgentHubUseCases::new(state.platform())
                 .antigravity()?
                 .restore(&args.request.session_key)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn dsh_list(ctx: DispatchContext<'_>, args_json: &str) -> Result<String, String> {
-    let args: OptionalWrappedRequest<ProviderListRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: OptionalWrappedRequest<ProviderListRequest>| {
             AgentHubUseCases::new(state.platform())
                 .dsh()?
                 .list(args.request.unwrap_or_default())
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn dsh_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderDetailRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderDetailRequest>| {
             AgentHubUseCases::new(state.platform())
                 .dsh()?
                 .detail(args.request)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn dsh_rename(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderRenameRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderRenameRequest>| {
             AgentHubUseCases::new(state.platform())
                 .dsh()?
                 .rename(&args.request.session_key, &args.request.title)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn dsh_archive(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderSessionRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderSessionRequest>| {
             AgentHubUseCases::new(state.platform())
                 .dsh()?
                 .archive(&args.request.session_key)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn dsh_restore(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderSessionRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderSessionRequest>| {
             AgentHubUseCases::new(state.platform())
                 .dsh()?
                 .restore(&args.request.session_key)
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn grokbot_list(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: OptionalWrappedRequest<ProviderListRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: OptionalWrappedRequest<ProviderListRequest>| {
             AgentHubUseCases::new(state.platform())
                 .grokbot()?
                 .list(args.request.unwrap_or_default())
-        })
-        .await,
+        },
     )
+    .await
 }
 
 pub(super) async fn grokbot_detail(
     ctx: DispatchContext<'_>,
     args_json: &str,
 ) -> Result<String, String> {
-    let args: WrappedRequest<ProviderDetailRequest> = parse_args(args_json)?;
-    let state = ctx.state.clone();
-    encode(
-        crate::commands::blocking(move || {
+    run_blocking(
+        ctx,
+        args_json,
+        |state, args: WrappedRequest<ProviderDetailRequest>| {
             AgentHubUseCases::new(state.platform())
                 .grokbot()?
                 .detail(args.request)
-        })
-        .await,
+        },
     )
+    .await
 }

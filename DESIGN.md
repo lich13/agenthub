@@ -17,7 +17,7 @@ AgentHub（底层包标识 `com.lich13.agenthub`）follows a quiet, refined read
 - Remove `oai-mem-citation`, `citation_entries`, `rollout_ids` and standalone `memory_citation` metadata before rendering, copying or downloading. Keep fenced/inline code examples, ordinary memory prose and native session files intact. Plans use the cleaned heading for download names.
 - Probe settings show notification and error-monitor controls only. Goal recovery controls are removed. Settings combine update, archive cleanup, hidden-thread cleanup, Codex account-scope clearing and job history under `更新与维护`; the retired system status panel and polling do not exist.
 - Markdown file links copy their source path for remote machines, while local macOS threads reveal a resolved path in Finder and offer a neighboring copy action. Codex ordinary final replies that explicitly wait for user feedback use the existing Bark reply-needed event. Native synchronous/asynchronous questions use the same event while unanswered, with their title, question text and options. An asynchronous acknowledgement and background progress do not dismiss a question; native matched answers update only the corresponding items. Claude completion requires terminal evidence and no pending tools; an empty result falls back to the current turn's last assistant text. Compatibility warnings remain readable without disabling safe management; only fatal parse or identity errors suppress notification scanning.
-- The reading column has a 20px timeline rail outside the document flow. Its complete user-message index is independent of loaded or folded body pages. Only a bounded range of marks mounts; scrolling and Home/End/arrow keys reach every entry. A single hover/focus preview sizes to its text, capped at 288px, without a duplicate tooltip. Selecting an unloaded entry reads one bounded window; older/newer paging and 返回最新 preserve the reading context. Assistant replies, plans and activities retain search anchors without rail marks. `⌘F` on macOS opens machine-scoped 当前线程/当前 Provider search; the trimmed query is sent once it has been stable for 200ms.
+- The reading column has a 22px timeline rail outside the document flow. Its complete user-message index is independent of loaded or folded body pages. Only a bounded range of marks mounts; scrolling and Home/End/arrow keys reach every entry. A single hover/focus preview sizes to its text, capped at 288px, without a duplicate tooltip. Selecting an unloaded entry reads one bounded window; older/newer paging and 返回最新 preserve the reading context. Assistant replies, plans and activities retain search anchors without rail marks. `⌘F` on macOS opens machine-scoped 当前线程/当前 Provider search; the trimmed query is sent once it has been stable for 200ms.
 
 ## User messages and attachments
 
@@ -31,9 +31,9 @@ Image attachments sit above the bubble in reserved 96px square thumbnails, with 
 
 ## Visual tokens
 
-Light: `--bg-rail: #f8f9fb`, `--bg-surface: #f3f5f8`, `--bg-stage: #ffffff`, `--bg-elevated: #ffffff`, `--user-bubble: #f3f5f8`, `--bg-selected: #e4e8ef`, `--text-primary: #0f172a`, `--text-muted: #64748b`, `--border-subtle: #e2e8f0`.
+Light: `--bg-rail: #f8f9fb`, `--bg-surface: #f3f5f8`, `--bg-stage: #ffffff`, `--bg-elevated: #ffffff`, `--user-bubble: #f3f5f8`, `--bg-selected: #e4e8ef`, `--text-primary: #0f172a`, `--text-muted: #4b5563`, `--border-subtle: #e2e8f0`.
 
-Dark: `--bg-rail: #12151c`, `--bg-surface: #171b24`, `--bg-stage: #1b202b`, `--bg-elevated: #222836`, `--user-bubble: #262d3d`, `--bg-selected: #283042`, `--text-primary: #f1f5f9`, `--text-muted: #94a3b8`, `--border-subtle: #283040`.
+Dark: `--bg-rail: #111318`, `--bg-surface: #1b1f27`, `--bg-stage: #161920`, `--bg-elevated: #222731`, `--user-bubble: #262d3d`, `--bg-selected: #2a313d`, `--text-primary: #f8fafc`, `--text-muted: #94a3b8`, `--border-subtle: #262c36`.
 
 Use system fonts, stable control sizes and at least 4.5:1 text contrast. Focus indicators and essential borders meet 3:1. Long titles and paths wrap; only code and tables scroll horizontally.
 

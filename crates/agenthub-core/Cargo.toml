@@ -35,6 +35,6 @@ walkdir.workspace = true
 zstd = "0.14.3"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
+tokio.workspace = true
 syn = { version = "=2.0.117", features = ["full", "visit"] }
 quote = "=1.0.45"

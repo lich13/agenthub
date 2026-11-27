@@ -33,7 +33,7 @@ Grok activity display uses one native-process snapshot per list and bounded incr
 
 ## Release matrix
 
-- CI keeps `Backend & contract checks` (`ubuntu-24.04`) and `macOS Swift 6 checks` (`macos-15`). Tauri, WebView, Node/pnpm frontend builds, Playwright browser smoke, and Linux desktop packages are retired.
+- CI keeps `Backend & contract checks` (`ubuntu-24.04`) and `macOS Swift 6 checks` (`macos-15`). On non-tag runs, `macOS Swift 6 checks` skips native toolchain, build and test steps when a `macos-verified-<hash>` cache marker from `main` matches the code tree hashed by `scripts/ci-code-tree-hash.sh` (excluding root `*.md` and `docs/**/*.md`); tag runs and `Backend & contract checks` always run in full. Tauri, WebView, Node/pnpm frontend builds, Playwright browser smoke, and Linux desktop packages are retired.
 - Release keeps the macOS ARM64 app/updater (`scripts/package-macos-swift-arm64.sh`) and Linux webd (`scripts/package-webd-linux-x86_64.sh`) stages. The eight assets are the DMG/checksum, updater archive/signature, `latest.json` for `darwin-aarch64`, and webd tarball/checksum/signature. Verify archives with the preinstalled Minisign validator and trusted public key before extraction; never fall back to checksum-only updates.
 - Cloud deployment remains manual and explicit through `scripts/deploy-cloud.sh`; production configuration is never committed.
 

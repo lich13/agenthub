@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// MARK: - .subagent-summary Bar Directly Below Detail Glass Header (DESIGN.md:113, styles.css:790-794)
+// MARK: - Subagent Summary Bar Below Detail Glass Header (DESIGN.md:113)
 
 struct SubagentSummaryBarView: View {
     @Environment(\.agentHubPalette) private var palette
@@ -98,43 +98,36 @@ struct SubagentSummaryBarView: View {
                                     .font(DesignFonts.body(12, weight: .medium))
                                     .foregroundStyle(baseFg)
 
-                                if runningCount > 0 {
-                                    HStack(spacing: 6) {
-                                        RunningIndicator(size: 13)
-                                        Text("\(runningCount) 个运行中")
-                                            .font(DesignFonts.body(12, weight: .semibold))
-                                            .foregroundStyle(palette.accent.color)
+                                let segments: [(id: String, text: String, isRunning: Bool, isError: Bool)] = {
+                                    var items: [(String, String, Bool, Bool)] = []
+                                    if runningCount > 0 { items.append(("running", "\(runningCount) 个运行中", true, false)) }
+                                    if completedCount > 0 { items.append(("completed", "\(completedCount) 个已完成", false, false)) }
+                                    if creatingCount > 0 { items.append(("creating", "\(creatingCount) 个创建中", false, false)) }
+                                    if failedCount > 0 { items.append(("failed", "\(failedCount) 个失败", false, true)) }
+                                    if interruptedCount > 0 { items.append(("interrupted", "\(interruptedCount) 个已中断", false, false)) }
+                                    if unknownCount > 0 { items.append(("unknown", "\(unknownCount) 个状态未知", false, false)) }
+                                    if unavailableCount > 0 { items.append(("unavailable", "\(unavailableCount) 个不可用", false, true)) }
+                                    return items
+                                }()
+
+                                ForEach(Array(segments.enumerated()), id: \.element.id) { index, seg in
+                                    if index > 0 {
+                                        Text("·")
+                                            .font(DesignFonts.body(12, weight: .medium))
+                                            .foregroundStyle(baseFg)
                                     }
-                                }
-                                if completedCount > 0 {
-                                    Text("\(completedCount) 已完成")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(baseFg)
-                                }
-                                if creatingCount > 0 {
-                                    Text("\(creatingCount) 正在创建")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(baseFg)
-                                }
-                                if failedCount > 0 {
-                                    Text("\(failedCount) 失败")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(palette.errFg.color)
-                                }
-                                if interruptedCount > 0 {
-                                    Text("\(interruptedCount) 已中断")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(baseFg)
-                                }
-                                if unknownCount > 0 {
-                                    Text("\(unknownCount) 状态未知")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(baseFg)
-                                }
-                                if unavailableCount > 0 {
-                                    Text("\(unavailableCount) 不可用")
-                                        .font(DesignFonts.body(12, weight: .medium))
-                                        .foregroundStyle(palette.errFg.color)
+                                    if seg.isRunning {
+                                        HStack(spacing: 6) {
+                                            RunningIndicator(size: 13)
+                                            Text(seg.text)
+                                                .font(DesignFonts.body(12, weight: .semibold))
+                                                .foregroundStyle(palette.accent.color)
+                                        }
+                                    } else {
+                                        Text(seg.text)
+                                            .font(DesignFonts.body(12, weight: .medium))
+                                            .foregroundStyle(seg.isError ? palette.errFg.color : baseFg)
+                                    }
                                 }
                             }
                         }
@@ -852,7 +845,7 @@ private final class SubagentPanelController: ObservableObject {
         guard isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) else { return }
         if rows.isEmpty { loading = true }
         defer {
-            if isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot) {
+            if isCurrentSubagent(agentId: agentId, generation: generation, revision: capturedRev, rootKey: capturedRoot), loading {
                 loading = false
             }
         }

@@ -3,7 +3,6 @@ use crate::security::redact_output;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -96,23 +95,17 @@ pub struct CodexTurnErrorIncident {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProbeErrorSourceStamp {
-    db: Option<crate::file_stamp::FileStamp>,
-    wal: Option<crate::file_stamp::FileStamp>,
-}
+pub struct ProbeErrorSourceStamp(Option<crate::file_stamp::SqliteReadStampPair>);
 
 impl ProbeErrorSourceStamp {
     pub fn read(logs_db_path: &Path) -> Self {
-        let mut wal_os = logs_db_path.as_os_str().to_os_string();
-        wal_os.push("-wal");
-        Self {
-            db: crate::file_stamp::FileStamp::of_followed(logs_db_path),
-            wal: crate::file_stamp::FileStamp::of_followed(Path::new(&wal_os)),
-        }
+        Self(crate::file_stamp::FileStamp::sqlite_read_pair_followed(
+            logs_db_path,
+        ))
     }
 
     pub fn exists(&self) -> bool {
-        self.db.is_some()
+        self.0.is_some()
     }
 }
 
@@ -221,8 +214,8 @@ fn parse_turn_error_row(row: LogRow) -> Option<CodexTurnErrorIncident> {
         extract_scope_value(scope, "turn.id=").and_then(|value| required_identity(Some(value)))?;
     let summary = bounded_redacted_summary(error)?;
     let classification = classify_codex_turn_error(&summary);
-    let error_sha256 = sha256_hex(summary.as_bytes());
-    let incident_key = sha256_hex(format!("{thread_id}\0{turn_id}\0{error_sha256}").as_bytes());
+    let error_sha256 = crate::sha256_hex(summary.as_bytes());
+    let incident_key = crate::sha256_hex(format!("{thread_id}\0{turn_id}\0{error_sha256}"));
     Some(CodexTurnErrorIncident {
         source_ts: row.ts,
         source_ts_nanos: row.ts_nanos,
@@ -350,10 +343,6 @@ fn cursor_tuple_exists(conn: &Connection, cursor: &ProbeErrorCursor) -> Result<b
         |row| row.get::<_, bool>(0),
     )
     .map_err(Into::into)
-}
-
-fn sha256_hex(value: &[u8]) -> String {
-    hex::encode(Sha256::digest(value))
 }
 
 fn logs_database_identity(path: &Path) -> Result<String> {

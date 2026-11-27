@@ -8,6 +8,22 @@ import sys
 
 
 VERSION_NOTES: dict[str, dict[str, list[str]]] = {
+    "2.1.41": {
+        "summary": [
+            "完成全仓死代码与空壳分层减法清理，修复空闲状态重写、WAL 读缓存失效、锁探测吞错、坏密文阻断通知与附件缩略图重试隐患，统一前端文案去噪并优化 GitHub Actions 快取与代码树门禁"
+        ],
+        "features": [],
+        "fixes": [
+            "完成全仓深度减法与重复实现收口：删除 Probe 无库分支、Antigravity 只写不读字段、仅测试辅助包装、Swift 无引用测试挂钩与已退役前端注释，精简 axum/tokio/uuid/rustls 依赖特性；合并三平台只读 flock 锁探测、webd 与 FFI Provider 会话转发胶水、Antigravity 原生 SQLite 投影与开库、原子文件写入及设置页分页条。",
+            "修复服务端空闲负载与可靠性缺陷：GitHub CI 在比对前统一排序 incoming 运行列表，消除空闲轮询重复重写 github_ci_state；为错误监控与 Antigravity 离线读缓存引入不计 -wal ctime 的 SQLite 配对指纹（保留主库完整指纹与写后 mtime 失效），消除 root 服务只读开库 fchown 触发的每轮缓存失效；统一只读锁探测显式传播非未锁 IO 错误并在写门禁、范围裁剪与纯显示场景按边界处理；原生通知队列逐行解码越过损坏密文（保留密钥异常整体报错与 Provider 隔离），修复作业后备执行器启动失败遗留永久 running 状态；Grok Bot 检索单轮复用已核验账户与名冊。",
+            "优化 macOS 前端发布频率、附件容错与界面一致性：未变化的会话详情、子智能体抽屉与后台作业轮询不再触发冗余 objectWillChange，侧栏工作区分组改为按需延迟构建并静态化高频 NSRegularExpression；附件缩略图读取或解码失败时即时刷新为「图片不可用」并在视口内抑制重复 RPC、滚出视口后允许重试；清理 Probe 重复提示语、等宽副文案与零状态重复句，以类型化状态替代字符串子串判断，统一「复制答复／已复制答复」、「计划」与子智能体状态计数文案，并同步 DESIGN.md 色值表。",
+            "优化 GitHub Actions CI 快取与仅文档变更执行耗时：将 Backend、cargo-audit 与 macOS 编译缓存拆分为 restore/save 并仅在 main 未精确命中且步骤成功时写入，移除 cargo-audit 缓存键中的 Cargo.lock 与 macOS 缓存中的 macos/.build；新增 scripts/ci-code-tree-hash.sh 按排除根目录与 docs 下 Markdown 后的 Git 代码树哈希复用 main 已验证标记跳过非标签 macOS 原生构建测试步骤。",
+        ],
+        "migration": [
+            "API 协议 2、数据库 schema 3。沿用已有配置、凭据、通知游标与会话数据，先升级 Linux 服务再升级 Mac App。新库不再创建 codex_desktop_submissions 表，存量升级库保留历史表与钥匙串项以兼容二进制回退目标 v2.1.30。",
+            "早于 schema 3 的数据库先经过 v2.0.10。",
+        ],
+    },
     "2.1.40": {
         "summary": [
             "重塑 GitHub CI 260pt 有界滚动与 Probe 核心设置默认展开，完成全仓深度减法清理，并全面优化前后端算法、内存占用与产物体积"

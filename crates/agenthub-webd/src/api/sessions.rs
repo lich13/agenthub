@@ -46,10 +46,9 @@ pub(crate) async fn bulk_execute(
     state: AppState,
     request: SessionBatchExecuteRequest,
 ) -> ApiResponse {
-    let auth = crate::audit::actor();
     let detail = serde_json::json!({"provider": request.provider, "operation": request.operation, "count": request.items.len()});
     state.db.record_audit(
-        Some(&auth.admin_id),
+        Some(crate::audit::ADMIN_ID),
         "sessions.bulkExecute.requested",
         Some("sessions"),
         None,
@@ -68,6 +67,12 @@ pub(crate) async fn bulk_execute(
     let _ = state
         .db
         .prune_cursors_after_batch_execute(provider, operation, &result);
-    state.db.record_audit(Some(&auth.admin_id), "sessions.bulkExecute.completed", Some("sessions"), None,         serde_json::json!({"succeeded": result.items.iter().filter(|item| item.status == "succeeded").count(), "blocked": result.items.iter().filter(|item| item.status == "blocked").count(), "failed": result.items.iter().filter(|item| item.status == "failed").count()}))?;
+    state.db.record_audit(
+        Some(crate::audit::ADMIN_ID),
+        "sessions.bulkExecute.completed",
+        Some("sessions"),
+        None,
+        serde_json::json!({"succeeded": result.items.iter().filter(|item| item.status == "succeeded").count(), "blocked": result.items.iter().filter(|item| item.status == "blocked").count(), "failed": result.items.iter().filter(|item| item.status == "failed").count()}),
+    )?;
     ok(result)
 }

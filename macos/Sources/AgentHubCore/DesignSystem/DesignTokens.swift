@@ -118,9 +118,9 @@ public struct RGBAColor: Equatable, Sendable {
 }
 
 public struct AccentPalette: Equatable, Sendable {
-    public let accent: RGBAColor       // --a
-    public let accentSoft: RGBAColor   // --as
-    public let accentBorder: RGBAColor // --ab
+    public let accent: RGBAColor
+    public let accentSoft: RGBAColor
+    public let accentBorder: RGBAColor
 }
 
 public struct SemanticShadow: Equatable, Sendable {
@@ -132,38 +132,38 @@ public struct SemanticShadow: Equatable, Sendable {
 
 public struct DesignPalette: Equatable, Sendable {
     public let scheme: ColorSchemeKind
-    public let railBg: RGBAColor           // --r
-    public let background: RGBAColor       // --bg
-    public let surface: RGBAColor          // --s
-    public let elevated: RGBAColor         // --e
-    public let glass: RGBAColor            // --g (alpha .88)
-    public let hover: RGBAColor            // --h
-    public let selected: RGBAColor         // --sl
-    public let userBubble: RGBAColor       // --ub
-    public let codeBg: RGBAColor           // --c
-    public let textPrimary: RGBAColor      // --fg
-    public let textSecondary: RGBAColor    // --fg2
-    public let textMuted: RGBAColor        // --m
-    public let borderSubtle: RGBAColor     // --bd
-    public let borderStrong: RGBAColor     // --bs
-    public let trackOff: RGBAColor         // --tk
-    public let buttonBg: RGBAColor         // --bt
-    public let buttonHover: RGBAColor      // --bh
-    public let buttonFg: RGBAColor         // --bf
-    public let okFg: RGBAColor             // --ok
-    public let okBg: RGBAColor             // --ob
-    public let okBorder: RGBAColor         // --od
-    public let warnFg: RGBAColor           // --w
-    public let warnBg: RGBAColor           // --wb
-    public let warnBorder: RGBAColor       // --wd
-    public let errFg: RGBAColor            // --er
-    public let errBg: RGBAColor            // --eb
-    public let errBorder: RGBAColor        // --ed
-    public let accent: RGBAColor           // --a
-    public let accentSoft: RGBAColor       // --as
-    public let accentBorder: RGBAColor     // --ab
-    public let shadow1: SemanticShadow     // --s1
-    public let shadow2: SemanticShadow     // --s2
+    public let railBg: RGBAColor
+    public let background: RGBAColor
+    public let surface: RGBAColor
+    public let elevated: RGBAColor
+    public let glass: RGBAColor
+    public let hover: RGBAColor
+    public let selected: RGBAColor
+    public let userBubble: RGBAColor
+    public let codeBg: RGBAColor
+    public let textPrimary: RGBAColor
+    public let textSecondary: RGBAColor
+    public let textMuted: RGBAColor
+    public let borderSubtle: RGBAColor
+    public let borderStrong: RGBAColor
+    public let trackOff: RGBAColor
+    public let buttonBg: RGBAColor
+    public let buttonHover: RGBAColor
+    public let buttonFg: RGBAColor
+    public let okFg: RGBAColor
+    public let okBg: RGBAColor
+    public let okBorder: RGBAColor
+    public let warnFg: RGBAColor
+    public let warnBg: RGBAColor
+    public let warnBorder: RGBAColor
+    public let errFg: RGBAColor
+    public let errBg: RGBAColor
+    public let errBorder: RGBAColor
+    public let accent: RGBAColor
+    public let accentSoft: RGBAColor
+    public let accentBorder: RGBAColor
+    public let shadow1: SemanticShadow
+    public let shadow2: SemanticShadow
 
     public static func resolve(
         scheme: ColorSchemeKind,
@@ -297,26 +297,24 @@ public enum LayoutMetrics {
     public static let timelineRailWidth: CGFloat = 22
     public static let timelinePreviewMaxWidth: CGFloat = 288
 
-    public static let fallbackAppVersion: String = "2.1.40"
+    public static let fallbackAppVersion: String = "2.1.41"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,
         hasTimelineRail: Bool,
         isSubagent: Bool = false
-    ) -> (leading: CGFloat, trailing: CGFloat, top: CGFloat, bottom: CGFloat) {
+    ) -> (leading: CGFloat, trailing: CGFloat) {
         if availableWidth <= narrowBreakpoint {
-            return (leading: 32, trailing: 16, top: 16, bottom: 16)
+            return (leading: 32, trailing: 16)
         }
         if isSubagent {
-            return (leading: 36, trailing: 40, top: 16, bottom: 16)
+            return (leading: 36, trailing: 40)
         }
         let centered = (availableWidth - readingColumnMaxWidth) / 2.0
         let leftFloor: CGFloat = hasTimelineRail ? 42 : 46
         return (
             leading: max(leftFloor, centered),
-            trailing: max(46, centered),
-            top: 22,
-            bottom: 32
+            trailing: max(46, centered)
         )
     }
 }

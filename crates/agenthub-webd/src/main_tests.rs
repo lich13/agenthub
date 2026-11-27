@@ -592,7 +592,14 @@ async fn hook_stop_records_probe_event_but_returns_codex_stop_json_and_redacted_
 
     let event = build_probe_event(
         &config,
-        ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+        ProbeEventInput::hook_stop_with_context(
+            Some("thread-a"),
+            Some("turn-1"),
+            None,
+            None,
+            None,
+            "hook-stop",
+        ),
     );
     let result = handle_built_probe_event(&|| Ok(config.clone()), &db, event)
         .await
@@ -1186,7 +1193,14 @@ async fn hook_stop_dedupe_skips_duplicate_bark_without_leaking_device_key() {
         &db,
         build_probe_event(
             &config,
-            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-a"),
+                Some("turn-1"),
+                None,
+                None,
+                None,
+                "hook-stop",
+            ),
         ),
     )
     .await
@@ -1196,7 +1210,14 @@ async fn hook_stop_dedupe_skips_duplicate_bark_without_leaking_device_key() {
         &db,
         build_probe_event(
             &config,
-            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-a"),
+                Some("turn-1"),
+                None,
+                None,
+                None,
+                "hook-stop",
+            ),
         ),
     )
     .await
@@ -2851,7 +2872,14 @@ async fn hook_stop_cli_payload_keeps_stdout_codex_only_and_stderr_diagnostics() 
         &db,
         build_probe_event(
             &config,
-            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-a"), "hook-stop"),
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-a"),
+                Some("turn-a"),
+                None,
+                None,
+                None,
+                "hook-stop",
+            ),
         ),
     )
     .await

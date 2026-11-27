@@ -1,7 +1,6 @@
 use super::annotations::{
-    extract_db_error_text, extract_db_planner_texts, extract_db_user_input_text,
-    parse_executor_metadata_blob, parse_raw_summary, parse_trajectory_metadata_blob,
-    ParsedRawSummary,
+    extract_db_error_text, extract_db_planner_texts, extract_db_user_input_text, parse_raw_summary,
+    parse_trajectory_metadata_blob, ParsedRawSummary,
 };
 use super::*;
 use crate::native_probe::{self, NativeProvider, NativeStreamSnapshot, NativeTurnEvent};
@@ -170,7 +169,7 @@ pub(crate) fn load_fts_meta_rows(conn: &Connection) -> Result<BTreeMap<String, F
 #[derive(Clone, PartialEq, Eq)]
 struct AuxIndexStamp {
     has_conn: bool,
-    db: Option<SqliteStampPair>,
+    db: Option<SqliteReadStampPair>,
     conv_meta: Option<FileStamp>,
     last_conv: Option<FileStamp>,
     sidecars: Vec<(PathBuf, FileStamp)>,
@@ -187,13 +186,22 @@ fn optional_regular_stamp(path: &Path) -> Option<Option<FileStamp>> {
     }
 }
 
-fn optional_sqlite_pair_stamp(db_path: &Path) -> Option<Option<SqliteStampPair>> {
+fn optional_wal_read_stamp(path: &Path) -> Option<Option<WalReadStamp>> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && !meta.file_type().is_symlink() => {
+            Some(Some(WalReadStamp::from_metadata(&meta)))
+        }
+        Ok(_) => Some(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Some(None),
+        Err(_) => None,
+    }
+}
+
+fn optional_sqlite_pair_stamp(db_path: &Path) -> Option<Option<SqliteReadStampPair>> {
     let Some(main) = optional_regular_stamp(db_path)? else {
         return Some(None);
     };
-    let mut wal_os = db_path.as_os_str().to_os_string();
-    wal_os.push("-wal");
-    let wal = optional_regular_stamp(&PathBuf::from(wal_os))?;
+    let wal = optional_wal_read_stamp(&crate::file_stamp::wal_sidecar_path(db_path))?;
     Some(Some((main, wal)))
 }
 
@@ -521,11 +529,9 @@ fn load_store_auxiliary_index_uncached(
     (idx, complete)
 }
 
-use crate::file_stamp::{FileStamp, StampedCache};
+use crate::file_stamp::{FileStamp, SqliteReadStampPair, StampedCache, WalReadStamp};
 
-type SqliteStampPair = (FileStamp, Option<FileStamp>);
-
-static CONV_DB_META_CACHE: StampedCache<SqliteStampPair, Option<ConvDbMetadata>> =
+static CONV_DB_META_CACHE: StampedCache<SqliteReadStampPair, Option<ConvDbMetadata>> =
     StampedCache::new(512, 4 * 1024 * 1024);
 
 #[derive(Clone)]
@@ -574,7 +580,7 @@ struct CachedDbStepsTurnSummary {
 
 static OFFLINE_TRANSCRIPT_CACHE: StampedCache<FileStamp, Option<CachedTranscriptTurnSummary>> =
     StampedCache::new(512, 8 * 1024 * 1024);
-static OFFLINE_DB_STEPS_CACHE: StampedCache<SqliteStampPair, Option<CachedDbStepsTurnSummary>> =
+static OFFLINE_DB_STEPS_CACHE: StampedCache<SqliteReadStampPair, Option<CachedDbStepsTurnSummary>> =
     StampedCache::new(512, 8 * 1024 * 1024);
 
 pub(crate) fn evict_idle_meta_cache(max_idle: std::time::Duration) {
@@ -591,8 +597,6 @@ pub(crate) struct ConvDbMetadata {
     pub(crate) is_subagent: bool,
     pub(crate) cwd: Option<String>,
     pub(crate) step_count: usize,
-    pub(crate) latest_termination_reason: u64,
-    pub(crate) has_execution_error: bool,
 }
 
 pub(crate) fn inspect_conv_db_metadata(
@@ -613,14 +617,14 @@ pub(crate) fn inspect_conv_db_metadata_checked(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     }
-    let Some(stamp) = FileStamp::sqlite_pair(&db_path) else {
+    let Some(stamp) = FileStamp::sqlite_read_pair(&db_path) else {
         return Ok(None);
     };
     if let Some(cached_val) = CONV_DB_META_CACHE.get(&db_path, &stamp) {
         return Ok(cached_val);
     }
     let computed = inspect_conv_db_metadata_uncached(&db_path, id)?;
-    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+    if FileStamp::sqlite_read_pair(&db_path).as_ref() == Some(&stamp) {
         let weight = 192
             + computed.as_ref().map_or(0, |m| {
                 m.parent_ids
@@ -637,23 +641,9 @@ pub(crate) fn inspect_conv_db_metadata_checked(
 
 fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<ConvDbMetadata>> {
     use rusqlite::OptionalExtension;
-    let mut f = match fs::File::open(db_path) {
-        Ok(file) => file,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    let mut header = Vec::with_capacity(16);
-    (&mut f).take(16).read_to_end(&mut header)?;
-    if header.as_slice() != b"SQLite format 3\0" {
+    let Some(conn) = super::open_conv_sqlite_readonly(db_path)? else {
         return Ok(None);
-    }
-    drop(f);
-    let conn = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
-    let _ = conn.execute_batch("PRAGMA cache_size = -512; PRAGMA temp_store = MEMORY;");
+    };
     let mut out = ConvDbMetadata::default();
 
     let tables: std::collections::HashSet<String> = {
@@ -754,7 +744,7 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
             .find(|c| cols.contains(*c))
         {
             let order_col = if cols.contains("idx") { "idx" } else { "rowid" };
-            if let Some(raw) = conn
+            let _ = conn
                 .query_row(
                     &format!(
                         "SELECT \"{blob_col}\" FROM executor_metadata ORDER BY {order_col} DESC LIMIT 1"
@@ -763,13 +753,7 @@ fn inspect_conv_db_metadata_uncached(db_path: &Path, id: &str) -> Result<Option<
                     |r| r.get::<_, Option<Vec<u8>>>(0),
                 )
                 .optional()?
-                .flatten()
-            {
-                if let Some(exec_meta) = parse_executor_metadata_blob(&raw) {
-                    out.latest_termination_reason = exec_meta.termination_reason;
-                    out.has_execution_error = exec_meta.has_execution_error;
-                }
-            }
+                .flatten();
         }
     }
 
@@ -1271,14 +1255,14 @@ fn inspect_offline_db_steps_cached(
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(err.into()),
     }
-    let Some(stamp) = FileStamp::sqlite_pair(&db_path) else {
+    let Some(stamp) = FileStamp::sqlite_read_pair(&db_path) else {
         return Ok(None);
     };
     if let Some(cached_val) = OFFLINE_DB_STEPS_CACHE.get(&db_path, &stamp) {
         return Ok(cached_val);
     }
     let computed = inspect_offline_db_steps_uncached(&db_path)?;
-    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
+    if FileStamp::sqlite_read_pair(&db_path).as_ref() == Some(&stamp) {
         let weight = 256
             + computed.as_ref().map_or(0, |s| {
                 s.failed_body.len() as u64
@@ -1954,7 +1938,6 @@ mod tests {
         assert_eq!(snap_b.events[0].turn_id, "cli-wait:0:3:proof-b");
         assert_eq!(snap_b.events[0].body, "问题二：是否同时升级本机？");
 
-        evict_idle_meta_cache(std::time::Duration::ZERO);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -2096,12 +2079,14 @@ mod tests {
 
         drop(err_writer);
         drop(writer);
-        evict_idle_meta_cache(std::time::Duration::ZERO);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn store_aux_index_cache_skips_caching_on_transient_lock_and_recovers_fts_archived_state() {
+        let _cache_guard = crate::antigravity::sessions::tests::TEST_GLOBAL_CACHE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let empty_root =
             std::env::temp_dir().join(format!("agenthub-ag-aux-empty-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&empty_root).unwrap();
@@ -2181,7 +2166,7 @@ mod tests {
         reader.busy_timeout(std::time::Duration::ZERO).unwrap();
 
         writer.execute_batch("BEGIN EXCLUSIVE;").unwrap();
-        let stamp_locked = FileStamp::sqlite_pair(&store.summaries_db()).unwrap();
+        let stamp_locked = FileStamp::sqlite_read_pair(&store.summaries_db()).unwrap();
         assert!(
             load_fts_meta_rows(&reader).is_err(),
             "transient SQLITE_BUSY must surface Err rather than empty BTreeMap"
@@ -2192,8 +2177,8 @@ mod tests {
         writer.execute_batch("ROLLBACK;").unwrap();
         assert_eq!(
             stamp_locked,
-            FileStamp::sqlite_pair(&store.summaries_db()).unwrap(),
-            "ROLLBACK in DELETE journal mode preserves identical SqliteStampPair"
+            FileStamp::sqlite_read_pair(&store.summaries_db()).unwrap(),
+            "ROLLBACK in DELETE journal mode preserves identical SqliteReadStampPair"
         );
 
         let aux_after_unlock = load_store_auxiliary_index(&store, Some(&reader));

@@ -7,7 +7,7 @@ use agenthub_core::codex::{
     thread_detail_page, CodexPaths, ThreadDetail, ThreadStatus,
 };
 use agenthub_core::{
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{sessions::SessionProvider, use_cases::AgentHubUseCases},
     user_message::{SessionAttachmentRequest, SessionAttachmentResponse},
 };
@@ -2265,7 +2265,7 @@ fn compressed_history_keeps_search_timeline_and_attachments_beyond_128_mib() {
     let mut request = attachment_request(&detail);
     request.root_thread_id = None;
     assert_eq!(fixture.read_attachment(request).unwrap().base64, PNG);
-    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Linux, &fixture.directory);
+    let platform = PlatformPaths::linux_server();
     let found = SearchUseCases::new(&platform, fixture.paths.clone())
         .unwrap()
         .search(SessionSearchRequest {

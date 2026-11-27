@@ -115,7 +115,7 @@ Antigravity 优先通过本机同用户运行中的 language server Connect-RPC�
 
 DeepSeek Harness 从 `DSH_HOME`（默认 `~/.dsh`）的 `storages/workspace.json` v2、`storages/session_projcache/*.json` 与 `sessions/<id>/session.v1..v4.jsonl[.zstd]` 无锁只读列表和分页详情。改名先对 `session.lock` 获取非阻塞排他 `flock`（占用时立即拒绝），按 80 UTF-8 字节规范化标题，并以明文 JSONL 或带内容校验和的独立 Zstandard 帧追加 `session/title` 记录，同时最佳努力同步 `session_projcache`。归档、恢复与含 `origin=subagent` 后代闭包的永久删除均先扫描宿主进程表，若检测到运行中的 `DeepSeek Harness`／`dsh` 进程则拒绝写入，避免被宿主进程内存快照覆盖。 改名追加前校验完整记录与压缩帧：合法末行缺换行时补分隔；半条 JSON 或半帧报错并保持原文件，不自动修复历史。
 
-Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按需建立的时间线，分页只复制请求页，附件单独刷新。DSH 以原生日志身份、大小及 mtime/ctime 失效；Antigravity 离线同时检查完整／简要转录及 SQLite／WAL，在线仅复用原生 owner、摘要和完整终态未变化的结果，运行中不缓存。详情与附件复用同次请求的摘要扫描；本路径未实现追加增量解析，超预算快照仍可读取但不保留。
+Antigravity 与 DSH 共用有界 `ReadCache`，快照包含不可变事件及按需建立的时间线，分页只复制请求页，附件单独刷新。DSH 以原生日志身份、大小及 mtime/ctime 失效；Antigravity 离线同时检查完整／简要转录及 SQLite／WAL（读缓存与错误监控的 `-wal` 指纹只比对设备／inode、大小与 mtime 而不取 ctime，避免 root 服务只读打开 WAL 库时 SQLite 对 `-wal` 执行 `fchown` 仅更新 ctime 导致读缓存每轮失效；Codex 子代理父链复核仍保留完整 ctime 比对），在线仅复用原生 owner、摘要和完整终态未变化的结果，运行中不缓存。详情与附件复用同次请求的摘要扫描；本路径未实现追加增量解析，超预算快照仍可读取但不保留。
 
 ## 消息、搜索与界面状态
 
@@ -290,7 +290,7 @@ Claude reader 一次性升级查询已删除，通知基线仅首次建立或启
 
 升级依赖时先确认 manifest、feature 和实际依赖链，再定向更新 `Cargo.lock`、运行 Rust 与 Swift 检查及两项 CI；不得自动全量升级。契约 `schemaVersion` 与 API 协议单独校验。
 
-CI 保留 `Backend & contract checks`（`ubuntu-24.04`）与 `macOS Swift 6 checks`（`macos-15`）。第三方 Action 固定 SHA，权限按作业收敛，超时均为 45 分钟。Cargo test、clippy 和正式构建均使用 `--locked`；缓存区分平台、架构、工具版本与锁文件，覆盖 Cargo、`macos/.build` 与固定版本 `cargo-audit`。`cargo audit` 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。`macos-15` 同时验证 Debug 编译、Release `-O -whole-module-optimization` 编译、`agenthub-ffi` 测试与开启 `AGENTHUB_RENDER_TESTS=1` 的全部 Swift XCTest（含离屏真实视图光栅化断言）。
+CI 保留 `Backend & contract checks`（`ubuntu-24.04`）与 `macOS Swift 6 checks`（`macos-15`）。第三方 Action 固定 SHA，权限按作业收敛，超时均为 45 分钟。Cargo test、clippy 和正式构建均使用 `--locked`；缓存拆分为 `restore`／`save` 并只在 `refs/heads/main` 未精确命中且前置步骤成功时保存（标签与 PR 只读不写），Cargo 编译缓存区分平台、架构、工具版本与锁文件（macOS 缓存不再包含 `macos/.build`），固定版本 `cargo-audit` 缓存键不含 `Cargo.lock`。`cargo audit` 保留 JSON artifact：高危、严重及无法判级的活动漏洞阻断，低/中危和 RustSec informational 警告进入 summary；扫描失败、数据库获取失败或报告不完整也阻断。`macos-15` 同时验证 Debug 编译、Release `-O -whole-module-optimization` 编译、`agenthub-ffi` 测试与开启 `AGENTHUB_RENDER_TESTS=1` 的全部 Swift XCTest（含离屏真实视图光栅化断言）；非标签触发时，按排除根目录 `*.md` 与 `docs/**/*.md` 后的 Git 代码树哈希（`scripts/ci-code-tree-hash.sh`）查找 `main` 已完整通过的 `macos-verified-<hash>` 标记，命中时跳过工具链与原生构建测试步骤并以原作业名成功结束，标签发布与 Backend 作业始终完整执行。
 
 Release guard 核对 tag/版本、契约、隐私、发布说明和同提交两项成功 CI。guard/Linux/macOS/publish 超时为 10/45/60/15 分钟。发布仅有 macOS ARM64、Linux x86_64 webd 和汇总阶段，共八项资产：DMG/校验文件、updater 归档/签名、`latest.json`、`agenthub-webd-linux-x86_64.tar.gz`/校验文件/分离签名。updater 只映射 `darwin-aarch64`，文件名的 darwin-arm64 是同一架构；webd 不能成为桌面 updater 条目。
 

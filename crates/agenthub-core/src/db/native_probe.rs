@@ -27,18 +27,54 @@ fn identity_record(delivery: &NativeDelivery, identity: &str) -> Result<String> 
     Ok(record.to_string())
 }
 
+fn bark_outcome_terminal_status(bark: &Value) -> &'static str {
+    if matches!(bark["status"].as_str(), Some("waiting_retry" | "retrying")) {
+        "queued"
+    } else if bark["status"] == "unknown" {
+        "unknown"
+    } else if bark.get("sent").and_then(Value::as_bool) == Some(true) {
+        "sent"
+    } else if bark.get("skipped").and_then(Value::as_bool) == Some(true) {
+        "skipped"
+    } else {
+        "failed"
+    }
+}
+
+enum NativePayloadDecode {
+    Ok(Box<NativeDelivery>),
+    StructurallyCorrupt,
+    DecryptedCorruptJson,
+    DecryptFailed(anyhow::Error),
+}
+
 impl PanelDb {
-    fn decode_native_payload(
+    fn decode_native_payload_classified(
         &self,
-        key: String,
-        ciphertext: Vec<u8>,
-        nonce: Vec<u8>,
-    ) -> Result<NativeDelivery> {
-        Ok(serde_json::from_slice(&self.crypto.decrypt(
-            &["native_notification", &key],
-            &ciphertext,
-            &nonce,
-        )?)?)
+        key: &str,
+        ciphertext: rusqlite::types::ValueRef<'_>,
+        nonce: rusqlite::types::ValueRef<'_>,
+    ) -> NativePayloadDecode {
+        let (rusqlite::types::ValueRef::Blob(ciphertext), rusqlite::types::ValueRef::Blob(nonce)) =
+            (ciphertext, nonce)
+        else {
+            return NativePayloadDecode::StructurallyCorrupt;
+        };
+        if !crate::crypto::SecretBox::has_valid_nonce_format(nonce) {
+            return NativePayloadDecode::StructurallyCorrupt;
+        }
+        match self
+            .crypto
+            .decrypt(&["native_notification", key], ciphertext, nonce)
+        {
+            Ok(plaintext) => match serde_json::from_slice::<NativeDelivery>(&plaintext) {
+                Ok(delivery) if delivery.event_key == key => {
+                    NativePayloadDecode::Ok(Box::new(delivery))
+                }
+                Ok(_) | Err(_) => NativePayloadDecode::DecryptedCorruptJson,
+            },
+            Err(err) => NativePayloadDecode::DecryptFailed(err),
+        }
     }
 
     /// Queue events and advance cursors together. First enable baselines every
@@ -478,17 +514,75 @@ impl PanelDb {
         limit: usize,
         provider: Option<NativeProvider>,
     ) -> Result<Vec<NativeDelivery>> {
-        let conn = self.conn.lock().expect("db mutex");
-        let mut stmt = conn.prepare_cached("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key LIMIT ?1")?;
-        let rows = stmt
-            .query_map(
-                params![limit.min(100), provider.map(NativeProvider::as_str)],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.into_iter()
-            .map(|(key, ciphertext, nonce)| self.decode_native_payload(key, ciphertext, nonce))
-            .collect()
+        self.pending_native_deliveries_with_retired(limit, provider)
+            .map(|(deliveries, _)| deliveries)
+    }
+
+    pub fn pending_native_deliveries_with_retired(
+        &self,
+        limit: usize,
+        provider: Option<NativeProvider>,
+    ) -> Result<(Vec<NativeDelivery>, usize)> {
+        let target = limit.clamp(1, 100);
+        let mut conn = self.conn.lock().expect("db mutex");
+        let mut decoded = Vec::new();
+        let mut unconditional_bad = Vec::new();
+        let mut decrypt_bad = Vec::new();
+        let mut any_decrypted = false;
+        let mut first_decrypt_err: Option<anyhow::Error> = None;
+        {
+            let mut stmt = conn.prepare_cached(
+                "SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='pending' AND (?1 IS NULL OR provider=?1) ORDER BY created_at,event_key",
+            )?;
+            let mut rows = stmt.query([provider.map(NativeProvider::as_str)])?;
+            while let Some(row) = rows.next()? {
+                let key: String = row.get(0)?;
+                match self.decode_native_payload_classified(&key, row.get_ref(1)?, row.get_ref(2)?)
+                {
+                    NativePayloadDecode::Ok(delivery) => {
+                        any_decrypted = true;
+                        decoded.push(*delivery);
+                        if decoded.len() >= target {
+                            break;
+                        }
+                    }
+                    NativePayloadDecode::DecryptedCorruptJson => {
+                        any_decrypted = true;
+                        unconditional_bad.push(key);
+                    }
+                    NativePayloadDecode::StructurallyCorrupt => {
+                        unconditional_bad.push(key);
+                    }
+                    NativePayloadDecode::DecryptFailed(err) => {
+                        if first_decrypt_err.is_none() {
+                            first_decrypt_err = Some(err);
+                        }
+                        decrypt_bad.push(key);
+                    }
+                }
+            }
+        }
+        if any_decrypted {
+            unconditional_bad.extend(decrypt_bad);
+        }
+        let mut retired = 0usize;
+        if !unconditional_bad.is_empty() {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let now = Self::now();
+            {
+                let mut retire_stmt = tx.prepare_cached(
+                    "UPDATE native_probe_deliveries SET status='failed',ciphertext=NULL,nonce=NULL,updated_at=?2 WHERE event_key=?1 AND status='pending'",
+                )?;
+                for key in &unconditional_bad {
+                    retired += retire_stmt.execute(params![key, now])?;
+                }
+            }
+            tx.commit()?;
+        }
+        if let Some(err) = first_decrypt_err.filter(|_| !any_decrypted) {
+            return Err(err);
+        }
+        Ok((decoded, retired))
     }
     pub fn claim_native_delivery(&self, key: &str) -> Result<bool> {
         let conn = self.conn.lock().expect("db mutex");
@@ -506,17 +600,7 @@ impl PanelDb {
             .map(|value| serde_json::from_str(&value))
             .transpose()?
             .unwrap_or(bark);
-        let status = if matches!(bark["status"].as_str(), Some("waiting_retry" | "retrying")) {
-            "queued"
-        } else if bark["status"] == "unknown" {
-            "unknown"
-        } else if bark.get("sent").and_then(Value::as_bool) == Some(true) {
-            "sent"
-        } else if bark.get("skipped").and_then(Value::as_bool) == Some(true) {
-            "skipped"
-        } else {
-            "failed"
-        };
+        let status = bark_outcome_terminal_status(&bark);
         let changed=tx.execute("UPDATE native_probe_deliveries SET status=?2,ciphertext=NULL,nonce=NULL,updated_at=?3 WHERE event_key=?1 AND status='delivering'",params![delivery.event_key,status,Self::now()])?;
         if changed > 0 {
             let summary = delivery.event.body.chars().take(240).collect::<String>();
@@ -526,26 +610,99 @@ impl PanelDb {
         tx.commit()?;
         Ok(())
     }
-    pub fn recover_interrupted_native_deliveries(&self) -> Result<()> {
-        let deliveries = {
-            let conn = self.conn.lock().expect("db mutex");
-            let mut stmt = conn.prepare_cached("SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1")?;
-            let rows = stmt
-                .query_map([Self::now() - 120], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows.into_iter()
-                .map(|(key, ciphertext, nonce)| self.decode_native_payload(key, ciphertext, nonce))
-                .collect::<Result<Vec<_>>>()?
+    pub fn recover_interrupted_native_deliveries(
+        &self,
+        provider: Option<NativeProvider>,
+    ) -> Result<usize> {
+        let (deliveries, retired) = {
+            let mut conn = self.conn.lock().expect("db mutex");
+            let mut good = Vec::new();
+            let mut unconditional_bad = Vec::new();
+            let mut decrypt_bad = Vec::new();
+            let mut any_decrypted = false;
+            let mut first_decrypt_err: Option<anyhow::Error> = None;
+            {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT event_key,ciphertext,nonce FROM native_probe_deliveries WHERE status='delivering' AND updated_at < ?1 AND (?2 IS NULL OR provider=?2) ORDER BY created_at,event_key",
+                )?;
+                let mut rows = stmt.query(params![
+                    Self::now() - 120,
+                    provider.map(NativeProvider::as_str)
+                ])?;
+                while let Some(row) = rows.next()? {
+                    let key: String = row.get(0)?;
+                    match self.decode_native_payload_classified(
+                        &key,
+                        row.get_ref(1)?,
+                        row.get_ref(2)?,
+                    ) {
+                        NativePayloadDecode::Ok(delivery) => {
+                            any_decrypted = true;
+                            good.push(*delivery);
+                        }
+                        NativePayloadDecode::DecryptedCorruptJson => {
+                            any_decrypted = true;
+                            unconditional_bad.push(key);
+                        }
+                        NativePayloadDecode::StructurallyCorrupt => {
+                            unconditional_bad.push(key);
+                        }
+                        NativePayloadDecode::DecryptFailed(err) => {
+                            if first_decrypt_err.is_none() {
+                                first_decrypt_err = Some(err);
+                            }
+                            decrypt_bad.push(key);
+                        }
+                    }
+                }
+            }
+            if any_decrypted {
+                unconditional_bad.extend(decrypt_bad);
+            }
+            let mut retired = 0usize;
+            if !unconditional_bad.is_empty() {
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let now = Self::now();
+                {
+                    let mut read_ledger = tx.prepare_cached(
+                        "SELECT outcome_json FROM probe_notification_deliveries WHERE event_key=?1 AND channel='bark'",
+                    )?;
+                    let mut settle_stmt = tx.prepare_cached(
+                        "UPDATE native_probe_deliveries SET status=?2,ciphertext=NULL,nonce=NULL,updated_at=?3 WHERE event_key=?1 AND status='delivering'",
+                    )?;
+                    for key in &unconditional_bad {
+                        let saved: Option<String> = read_ledger
+                            .query_row([format!("native:{key}")], |r| r.get(0))
+                            .optional()?
+                            .flatten();
+                        let outcome: Option<Value> =
+                            saved.map(|raw| serde_json::from_str(&raw)).transpose()?;
+                        let status = outcome
+                            .as_ref()
+                            .map_or("unknown", bark_outcome_terminal_status);
+                        retired += settle_stmt.execute(params![key, status, now])?;
+                    }
+                }
+                tx.commit()?;
+            }
+            if let Some(err) = first_decrypt_err.filter(|_| !any_decrypted) {
+                return Err(err);
+            }
+            (good, retired)
         };
         for delivery in deliveries {
             // The channel ledger owns recovery. Never create a second delivery here.
-            let outcome=self.notification_delivery_outcome(super::NotificationChannel::Bark,&format!("native:{}",delivery.event_key))?
-                .unwrap_or_else(||json!({"sent":false,"skipped":false,"status":"unknown","reason":"delivery_interrupted_outcome_unknown"}));
+            let outcome = self
+                .notification_delivery_outcome(
+                    super::NotificationChannel::Bark,
+                    &format!("native:{}", delivery.event_key),
+                )?
+                .unwrap_or_else(|| {
+                    json!({"sent":false,"skipped":false,"status":"unknown","reason":"delivery_interrupted_outcome_unknown"})
+                });
             self.finish_native_delivery(&delivery, outcome)?;
         }
-        Ok(())
+        Ok(retired)
     }
     pub fn native_notification_status(&self) -> Result<Value> {
         let conn = self.conn.lock().expect("db mutex");
@@ -2452,5 +2609,412 @@ mod local_provider_tests {
         let pending = db.pending_native_deliveries(10, Some(provider)).unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].session_key, "new-cli-2");
+    }
+
+    #[test]
+    fn corrupt_native_deliveries_skip_past_bad_rows_preserve_key_error_and_isolate_providers() {
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let make_delivery = |provider: NativeProvider, key: &str, id: &str| NativeDelivery {
+            event_key: key.to_owned(),
+            provider,
+            session_key: id.to_owned(),
+            thread_id: id.to_owned(),
+            title: "Fixture".to_owned(),
+            event: NativeTurnEvent {
+                prompt_id: None,
+                position: 1,
+                turn_id: "t1".to_owned(),
+                kind: "completion".to_owned(),
+                body: "done".to_owned(),
+                timestamp_ms: 1_800_000_000_000,
+            },
+        };
+        let insert_raw = |key: &str,
+                          provider: NativeProvider,
+                          status: &str,
+                          ct: &[u8],
+                          nonce: &[u8],
+                          created: i64,
+                          updated: i64| {
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO native_probe_deliveries(event_key,provider,event_json,status,ciphertext,nonce,created_at,updated_at)
+                     VALUES(?1,?2,'{}',?3,?4,?5,?6,?7)",
+                    params![key, provider.as_str(), status, ct, nonce, created, updated],
+                )
+                .unwrap();
+        };
+        let insert_good = |delivery: &NativeDelivery, status: &str, created: i64, updated: i64| {
+            let (ct, nonce) = db
+                .crypto
+                .encrypt(
+                    &["native_notification", &delivery.event_key],
+                    &serde_json::to_vec(delivery).unwrap(),
+                )
+                .unwrap();
+            insert_raw(
+                &delivery.event_key,
+                delivery.provider,
+                status,
+                &ct,
+                &nonce,
+                created,
+                updated,
+            );
+        };
+
+        // Case 1: All bad ciphertexts -> returns Err and leaves DB untouched (protects key/config error).
+        insert_raw(
+            "all-bad-1",
+            NativeProvider::Grok,
+            "pending",
+            b"corrupt-bytes",
+            &[0u8; 12],
+            1,
+            1,
+        );
+        assert!(db.pending_native_deliveries(100, None).is_err());
+        let (st_unchanged, ct_present): (String, bool) = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, ciphertext IS NOT NULL FROM native_probe_deliveries WHERE event_key='all-bad-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(st_unchanged, "pending");
+        assert!(ct_present);
+
+        // Case 2: 1 bad + 1 good -> retires bad row (keeps event_key, clears ciphertext) and returns good row.
+        let good_one = make_delivery(NativeProvider::Grok, "good-after-bad", "g1");
+        insert_good(&good_one, "pending", 2, 2);
+        let (decoded_1, retired_1) = db
+            .pending_native_deliveries_with_retired(100, Some(NativeProvider::Grok))
+            .unwrap();
+        assert_eq!(retired_1, 1);
+        assert_eq!(decoded_1.len(), 1);
+        assert_eq!(decoded_1[0].event_key, "good-after-bad");
+        let (bad_status, bad_ct_null): (String, bool) = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status, ciphertext IS NULL AND nonce IS NULL FROM native_probe_deliveries WHERE event_key='all-bad-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(bad_status, "failed");
+        assert!(bad_ct_null);
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM native_probe_deliveries", [])
+            .unwrap();
+
+        // Case 3: 100 bad + 1 good -> limit counts decodable rows, skips past 100 bad rows and retires all 100.
+        for idx in 0..100 {
+            let k = format!("bad-batch-{idx:03}");
+            insert_raw(
+                &k,
+                NativeProvider::Grok,
+                "pending",
+                b"corrupt",
+                &[1u8; 12],
+                10 + idx,
+                10 + idx,
+            );
+        }
+        let good_101 = make_delivery(NativeProvider::Grok, "good-101", "g101");
+        insert_good(&good_101, "pending", 200, 200);
+        let (decoded_101, retired_100) = db
+            .pending_native_deliveries_with_retired(100, Some(NativeProvider::Grok))
+            .unwrap();
+        assert_eq!(retired_100, 100);
+        assert_eq!(decoded_101.len(), 1);
+        assert_eq!(decoded_101[0].event_key, "good-101");
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM native_probe_deliveries", [])
+            .unwrap();
+
+        // Case 4: Provider-scoped Hook calls do not read or retire other providers' bad rows.
+        let stale = PanelDb::now() - 300;
+        insert_raw(
+            "grok-bad-pending",
+            NativeProvider::Grok,
+            "pending",
+            b"bad",
+            &[2u8; 12],
+            1,
+            1,
+        );
+        insert_raw(
+            "grok-bad-delivering",
+            NativeProvider::Grok,
+            "delivering",
+            b"bad",
+            &[3u8; 12],
+            1,
+            stale,
+        );
+        let claude_good = make_delivery(NativeProvider::Claude, "claude-ok", "c1");
+        insert_good(&claude_good, "pending", 2, 2);
+
+        assert_eq!(
+            db.recover_interrupted_native_deliveries(Some(NativeProvider::Claude))
+                .unwrap(),
+            0
+        );
+        let (claude_pending, claude_retired) = db
+            .pending_native_deliveries_with_retired(100, Some(NativeProvider::Claude))
+            .unwrap();
+        assert_eq!(claude_retired, 0);
+        assert_eq!(claude_pending.len(), 1);
+        assert_eq!(claude_pending[0].event_key, "claude-ok");
+        let grok_untouched: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM native_probe_deliveries WHERE provider='grok' AND ciphertext IS NOT NULL AND status IN ('pending','delivering')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(grok_untouched, 2);
+
+        // Case 5: Timed-out `delivering` bad + good rows settle from Bark ledger (or `unknown`) without Probe events for bad rows.
+        insert_raw(
+            "grok-bad-sent-ledger",
+            NativeProvider::Grok,
+            "delivering",
+            b"bad",
+            &[4u8; 12],
+            2,
+            stale,
+        );
+        let grok_good_delivering =
+            make_delivery(NativeProvider::Grok, "grok-good-delivering", "g-int");
+        insert_good(&grok_good_delivering, "delivering", 3, stale);
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO probe_notification_deliveries(event_key,channel,status,outcome_json,attempts,created_ms,updated_ms)
+                 VALUES('native:grok-bad-sent-ledger','bark','sent','{\"sent\":true,\"skipped\":false,\"status\":\"sent\"}',1,1,1),
+                       ('native:grok-good-delivering','bark','sent','{\"sent\":true,\"skipped\":false,\"status\":\"sent\"}',1,1,1)",
+                [],
+            )
+            .unwrap();
+
+        let recovered_retired = db.recover_interrupted_native_deliveries(None).unwrap();
+        assert_eq!(recovered_retired, 2);
+
+        let check_row = |k: &str| -> (String, bool) {
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT status, ciphertext IS NULL AND nonce IS NULL FROM native_probe_deliveries WHERE event_key=?1",
+                    [k],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(check_row("grok-bad-delivering"), ("unknown".into(), true));
+        assert_eq!(check_row("grok-bad-sent-ledger"), ("sent".into(), true));
+        assert_eq!(check_row("grok-good-delivering"), ("sent".into(), true));
+
+        let events = db.list_probe_events(10).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0].dedupe_key.as_deref(),
+            Some("grok-good-delivering")
+        );
+
+        // Case 6: Wrong-key rows return Err without wiping wrong-key ciphertexts even when an
+        // unrelated valid `pending` row or structurally corrupt sibling row exists in the same call;
+        // structural row corruption (`NULL`, non-BLOB column types, malformed nonce length) settles /
+        // retires unconditionally without setting `any_decrypted`.
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM native_probe_deliveries", [])
+            .unwrap();
+        let wrong_key = crate::crypto::SecretBox::from_key_material(&"22".repeat(32)).unwrap();
+        let legit_wrong_key = make_delivery(NativeProvider::Grok, "wrong-key-delivering", "wk1");
+        let (wk_ct, wk_nonce) = wrong_key
+            .encrypt(
+                &["native_notification", &legit_wrong_key.event_key],
+                &serde_json::to_vec(&legit_wrong_key).unwrap(),
+            )
+            .unwrap();
+        insert_raw(
+            &legit_wrong_key.event_key,
+            NativeProvider::Grok,
+            "delivering",
+            &wk_ct,
+            &wk_nonce,
+            10,
+            stale,
+        );
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at)
+                 VALUES('struct-sibling-deliv','grok','{}',X'ABCD',NULL,'delivering',9,?1)",
+                [stale],
+            )
+            .unwrap();
+        let valid_pending = make_delivery(NativeProvider::Grok, "grok-valid-pending", "vp1");
+        insert_good(&valid_pending, "pending", 11, 11);
+        assert!(db.recover_interrupted_native_deliveries(None).is_err());
+        assert_eq!(check_row("struct-sibling-deliv"), ("unknown".into(), true));
+        assert_eq!(
+            check_row("wrong-key-delivering"),
+            ("delivering".into(), false),
+            "wrong key delivering row must not be wiped via an unrelated pending row or structurally corrupt sibling"
+        );
+
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM native_probe_deliveries WHERE event_key='wrong-key-delivering'",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute_batch(&format!(
+                "INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at)
+                 VALUES('struct-deliv-null-nonce','grok','{{}}',X'ABCD',NULL,'delivering',1,{stale}),
+                       ('struct-deliv-text-ct','grok','{{}}','not-a-blob',X'000000000000000000000000','delivering',2,{stale}),
+                       ('struct-deliv-int-nonce','grok','{{}}',X'ABCD',42,'delivering',3,{stale}),
+                       ('struct-deliv-real-ct','grok','{{}}',3.14,X'000000000000000000000000','delivering',4,{stale}),
+                       ('struct-deliv-bad-nonce-len','grok','{{}}',X'ABCD',X'010203','delivering',5,{stale});
+                 INSERT INTO probe_notification_deliveries(event_key,channel,status,outcome_json,attempts,created_ms,updated_ms)
+                 VALUES('native:struct-deliv-null-nonce','bark','sent','{{\"sent\":true,\"skipped\":false,\"status\":\"sent\"}}',1,1,1);"
+            ))
+            .unwrap();
+        assert_eq!(db.recover_interrupted_native_deliveries(None).unwrap(), 5);
+        assert_eq!(check_row("struct-deliv-null-nonce"), ("sent".into(), true));
+        for key in [
+            "struct-deliv-text-ct",
+            "struct-deliv-int-nonce",
+            "struct-deliv-real-ct",
+            "struct-deliv-bad-nonce-len",
+        ] {
+            assert_eq!(check_row(key), ("unknown".into(), true));
+        }
+
+        // Mixed structurally corrupt + wrong-key `pending` rows when `limit < total pending`:
+        // structurally corrupt row retires unconditionally while wrong-key row stays untouched and returns Err.
+        let wrong_pending = make_delivery(NativeProvider::Claude, "claude-wrong-key-pend", "cwk1");
+        let (cwk_ct, cwk_nonce) = wrong_key
+            .encrypt(
+                &["native_notification", &wrong_pending.event_key],
+                &serde_json::to_vec(&wrong_pending).unwrap(),
+            )
+            .unwrap();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at)
+                 VALUES('struct-pend-mixed-null','claude_code','{}',NULL,NULL,'pending',0,0)",
+                [],
+            )
+            .unwrap();
+        insert_raw(
+            &wrong_pending.event_key,
+            NativeProvider::Claude,
+            "pending",
+            &cwk_ct,
+            &cwk_nonce,
+            1,
+            1,
+        );
+        assert!(db
+            .pending_native_deliveries_with_retired(1, Some(NativeProvider::Claude))
+            .is_err());
+        assert_eq!(check_row("struct-pend-mixed-null"), ("failed".into(), true));
+        assert_eq!(
+            check_row("claude-wrong-key-pend"),
+            ("pending".into(), false),
+            "wrong key pending row must remain untouched alongside structurally corrupt row"
+        );
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "DELETE FROM native_probe_deliveries WHERE event_key='claude-wrong-key-pend'",
+                [],
+            )
+            .unwrap();
+
+        // Sole structurally corrupt `pending` rows (with NO decodable pending rows for that provider) retire cleanly.
+        db.conn
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "INSERT INTO native_probe_deliveries(event_key,provider,event_json,ciphertext,nonce,status,created_at,updated_at)
+                 VALUES('struct-pend-null','claude_code','{}',NULL,NULL,'pending',1,1),
+                       ('struct-pend-text','claude_code','{}','corrupt-text','bad-nonce','pending',2,2),
+                       ('struct-pend-int-real','claude_code','{}',99,1.5,'pending',3,3),
+                       ('struct-pend-short-nonce','claude_code','{}',X'ABCD',X'0200','pending',4,4);",
+            )
+            .unwrap();
+        let (claude_struct_decoded, claude_struct_retired) = db
+            .pending_native_deliveries_with_retired(10, Some(NativeProvider::Claude))
+            .unwrap();
+        assert!(claude_struct_decoded.is_empty());
+        assert_eq!(claude_struct_retired, 4);
+        for key in [
+            "struct-pend-null",
+            "struct-pend-text",
+            "struct-pend-int-real",
+            "struct-pend-short-nonce",
+        ] {
+            assert_eq!(check_row(key), ("failed".into(), true));
+        }
+
+        // Case 7: Encrypted JSON with mismatched payload `event_key` is retired as corrupt JSON.
+        let mismatched_inner = make_delivery(NativeProvider::Grok, "other-inner-key", "m1");
+        let (mm_ct, mm_nonce) = db
+            .crypto
+            .encrypt(
+                &["native_notification", "outer-row-key"],
+                &serde_json::to_vec(&mismatched_inner).unwrap(),
+            )
+            .unwrap();
+        insert_raw(
+            "outer-row-key",
+            NativeProvider::Grok,
+            "pending",
+            &mm_ct,
+            &mm_nonce,
+            12,
+            12,
+        );
+        let (decoded_after_mm, retired_mm) = db
+            .pending_native_deliveries_with_retired(10, Some(NativeProvider::Grok))
+            .unwrap();
+        assert_eq!(retired_mm, 1);
+        assert_eq!(decoded_after_mm.len(), 1);
+        assert_eq!(decoded_after_mm[0].event_key, "grok-valid-pending");
+        assert_eq!(check_row("outer-row-key"), ("failed".into(), true));
     }
 }

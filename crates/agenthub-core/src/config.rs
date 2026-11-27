@@ -993,6 +993,18 @@ pub fn write_bytes_atomic_preserving_permissions(path: &Path, bytes: &[u8]) -> R
     write_atomic(path, bytes, permissions)
 }
 
+/// Atomically replace a file with explicit `0600` permissions.
+pub fn write_bytes_atomic_0600(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    let permissions = {
+        use std::os::unix::fs::PermissionsExt;
+        Some(fs::Permissions::from_mode(0o600))
+    };
+    #[cfg(not(unix))]
+    let permissions = None;
+    write_atomic(path, bytes, permissions)
+}
+
 #[cfg(any(target_os = "macos", test))]
 fn write_runtime_env(path: &Path, updated: &str) -> Result<()> {
     write_atomic(path, updated.as_bytes(), None)

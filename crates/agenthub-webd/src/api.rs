@@ -8,7 +8,6 @@ mod cleanup;
 mod grok;
 mod payload;
 mod probe;
-mod provider_sessions;
 pub(crate) mod rpc_dispatch;
 mod sessions;
 mod system;
@@ -31,10 +30,6 @@ pub(crate) use grok::{
 pub(crate) use probe::{
     get_probe_events, get_probe_settings, get_probe_status, load_probe_threads,
     patch_probe_settings, spawn_probe_status_refresh, start_probe_action,
-};
-pub(crate) use provider_sessions::{
-    antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
-    antigravity_restore, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
 };
 pub(crate) use system::{start_update_action, system_capabilities, system_update_status};
 pub(crate) use threads::{

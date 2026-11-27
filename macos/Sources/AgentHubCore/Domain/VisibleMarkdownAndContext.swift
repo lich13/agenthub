@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - UTF-16 Range & String Slicing Helpers (100% Parity with JS String Indexing)
+// MARK: - UTF-16 Range & String Slicing Helpers
 
 struct UTF16Range: Equatable, Sendable {
     var start: Int
@@ -21,7 +21,7 @@ extension String {
     }
 }
 
-// MARK: - VisibleMarkdown & Instruction Segments (visibleMarkdown.ts)
+// MARK: - VisibleMarkdown & Instruction Segments
 
 struct InstructionSegment: Codable, Equatable, Sendable, Identifiable {
     var kind: String // "markdown" | "instructions"
@@ -39,7 +39,7 @@ struct InstructionSegment: Codable, Equatable, Sendable, Identifiable {
     }
 }
 
-private extension String {
+extension String {
     func matches(_ pattern: NSRegularExpression) -> Bool {
         pattern.firstMatch(in: self, range: NSRange(startIndex..., in: self)) != nil
     }
@@ -49,7 +49,7 @@ private extension String {
     }
 }
 
-private enum MarkdownPatterns {
+enum MarkdownPatterns {
     static let headingPrefix = try! NSRegularExpression(pattern: "^#{1,6}\\s+")
     static let closingHashes = try! NSRegularExpression(pattern: "\\s+#+$")
     static let labelPunctuation = try! NSRegularExpression(pattern: "^[`*]+|[`*:]+$")
@@ -68,6 +68,9 @@ private enum MarkdownPatterns {
     static let whitespace = try! NSRegularExpression(pattern: "\\s+")
     static let fileNameEdges = try! NSRegularExpression(pattern: "^[.\\s]+|[.\\s]+$")
     static let markdownExtension = try! NSRegularExpression(pattern: "\\.md$", options: [.caseInsensitive])
+    static let semver = try! NSRegularExpression(pattern: #"^\d+\.\d+\.\d+(?:[-+].*)?$"#)
+    static let proposedPlanTag = try! NSRegularExpression(pattern: "</?proposed_plan>")
+    static let markdownBlockMarkers = try! NSRegularExpression(pattern: "^(#{1,6}\\s+|[-*+]\\s+|>\\s+|\\d+\\.\\s+)+")
     static let fileNameEnd = try! NSRegularExpression(pattern: "[.\\s]+$")
     static let reservedFileName = try! NSRegularExpression(pattern: "^(con|prn|aux|nul|com[1-9]|lpt[1-9])$", options: [.caseInsensitive])
     static let instructionLabels = [
@@ -616,7 +619,7 @@ enum VisibleMarkdownEngine {
     }
 }
 
-// MARK: - UserContext Projection & UserMessageSegments (userContext.ts & userMessageViewModel.ts)
+// MARK: - UserContext Projection & UserMessageSegments
 
 struct UserMessageProjection: Codable, Equatable, Sendable {
     var text: String
@@ -1118,7 +1121,7 @@ enum UserContextEngine {
     }
 }
 
-// MARK: - FilePath Links & Plan Export Filename (fileLinks.ts & planExport.ts)
+// MARK: - FilePath Links & Plan Export Filename
 
 struct FileLinkTarget: Equatable, Sendable {
     var path: String

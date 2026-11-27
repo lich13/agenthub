@@ -7,7 +7,6 @@ use crate::{
 };
 use anyhow::{anyhow, Result};
 use jiff::Timestamp;
-use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{path::Path, str::FromStr};
@@ -641,16 +640,9 @@ fn probe_codex_buckets(
     probe_codex_buckets_with_paths(&resolved.codex_paths(), limit).unwrap_or_default()
 }
 
-pub fn aggregate_probe_status_with_options(
-    config: &Config,
-    force_refresh: bool,
-) -> Result<ProbeStatusAggregation> {
-    aggregate_probe_status_with_db(config, None, force_refresh)
-}
-
 pub fn aggregate_probe_status_with_db(
     config: &Config,
-    db: Option<&crate::db::PanelDb>,
+    db: &crate::db::PanelDb,
     force_refresh: bool,
 ) -> Result<ProbeStatusAggregation> {
     let limit = config.probe.recent_limit.clamp(1, 200);
@@ -664,10 +656,7 @@ pub fn aggregate_probe_status_with_db(
         &recoverable_threads,
         force_refresh,
     )?;
-    let recent_event_count = match db {
-        Some(db) => db.recent_probe_event_count(limit as u32).unwrap_or(0),
-        None => recent_probe_event_count(&config.paths.db_path, limit as u32).unwrap_or(0),
-    };
+    let recent_event_count = db.recent_probe_event_count(limit as u32).unwrap_or(0);
     Ok(ProbeStatusAggregation {
         recent_event_count,
         running_threads,
@@ -1201,7 +1190,7 @@ fn stable_hash64_hex(value: &str) -> String {
     format!("{hash:016x}")
 }
 
-fn dedupe_component(value: &str) -> String {
+pub(crate) fn dedupe_component(value: &str) -> String {
     let normalized = value
         .chars()
         .map(|ch| {
@@ -1267,34 +1256,6 @@ pub fn probe_process_command(
             subcommand.into(),
         ],
     )
-}
-
-fn recent_probe_event_count(path: &Path, limit: u32) -> rusqlite::Result<usize> {
-    let conn = open_readonly_panel_db(path)?;
-    if !table_exists(&conn, "probe_events")? {
-        return Ok(0);
-    }
-    conn.query_row(
-        "SELECT COUNT(*) FROM (
-            SELECT 1 FROM probe_events ORDER BY created_at DESC, rowid DESC LIMIT ?1
-        )",
-        params![limit.clamp(1, 500)],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|count| count.max(0) as usize)
-}
-
-fn open_readonly_panel_db(path: &Path) -> rusqlite::Result<Connection> {
-    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-}
-
-fn table_exists(conn: &Connection, name: &str) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-        params![name],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|count| count > 0)
 }
 
 fn probe_reply_needed_thread_is_fresh(thread: &ThreadSummary) -> bool {
@@ -1475,7 +1436,12 @@ mod tests {
         let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.paths.db_path = root.join("panel.sqlite");
-        let agg = super::aggregate_probe_status_with_options(&config, false).unwrap();
+        let db = crate::db::PanelDb::open_with_secret_box(
+            &config.paths.db_path,
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let agg = super::aggregate_probe_status_with_db(&config, &db, false).unwrap();
         assert!(
             agg.active_sessions.iter().any(|s| s.provider == "grok"
                 && s.id == grok_session_id

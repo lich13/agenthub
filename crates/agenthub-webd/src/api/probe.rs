@@ -28,7 +28,6 @@ pub(crate) async fn patch_probe_settings(
     state: AppState,
     request: settings_service::ProbeSettingsSaveRequest,
 ) -> ApiResponse {
-    let auth = crate::audit::actor();
     let config_path = state.config_path().to_path_buf();
     if !config_path.exists() {
         return Err(api_error(format!(
@@ -41,7 +40,7 @@ pub(crate) async fn patch_probe_settings(
         .settings()
         .and_then(|settings| settings.save_probe_settings(request))?;
     let response_config =
-        linux_adapter::apply_probe_settings_save_plan(&state, &auth, &config_path, plan)?;
+        linux_adapter::apply_probe_settings_save_plan(&state, &config_path, plan)?;
     ok(probe_settings_value_for_config(&state, &response_config)?)
 }
 
@@ -66,10 +65,9 @@ pub(crate) async fn start_probe_action(
     state: AppState,
     action: probe_service::ProbeAction,
 ) -> ApiResponse {
-    let auth = crate::audit::actor();
     let config_path = state.config_path().to_path_buf();
     let plan = probe_service::plan_probe_action(action)?;
-    let id = linux_adapter::start_probe_action_plan(&state, &auth, plan, &config_path)?;
+    let id = linux_adapter::start_probe_action_plan(&state, plan, &config_path)?;
     ok(json!({"job_id": id}))
 }
 

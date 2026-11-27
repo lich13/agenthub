@@ -491,7 +491,7 @@ struct DeletePathCodeBlockView: View {
     }
 }
 
-// MARK: - Custom WebUI-Parity TaskMenu Popover (.task-menu-items / .context-task-menu)
+// MARK: - TaskMenu Popover
 
 @MainActor
 final class AgentHubTaskMenuPresenter {
@@ -1454,7 +1454,7 @@ struct ProjectWorkspaceGroupHeaderView: View {
     }
 }
 
-// MARK: - Bottom .session-batch-controls & Backdrop-Safe ConfirmDialog
+// MARK: - Bottom Session Batch Controls & Backdrop-Safe ConfirmDialog
 
 struct SessionBatchBarAndDialogView: View {
     @Environment(\.agentHubPalette) private var palette

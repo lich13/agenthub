@@ -1,6 +1,6 @@
 use agenthub_core::{
     jobs::ProcessCommand,
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::updates::{
         linux_update_job_spec, macos_updater_job_spec, macos_updater_no_update_output,
         macos_updater_update_available_output, update_job_plan, update_status,
@@ -45,7 +45,7 @@ fn macos_update_status_uses_app_updater_without_linux_leakage() {
     let home = temp_dir("agenthub-updates-macos-status");
     std::fs::create_dir_all(&home).unwrap();
 
-    let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
+    let platform = PlatformPaths::macos(&home);
 
     let status = update_status(&platform, Some("v0.1.103"), Some("network timeout"));
     let serialized = serde_json::to_string(&status).unwrap();
@@ -74,7 +74,7 @@ fn update_action_plans_are_shared_and_platform_scoped_without_shell_commands() {
 
     let mac_home = temp_dir("agenthub-updates-macos-job");
     std::fs::create_dir_all(&mac_home).unwrap();
-    let mac_platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let mac_platform = PlatformPaths::macos(&mac_home);
 
     let mac_plan = update_job_plan(&mac_platform, UpdateAction::Install);
     assert_eq!(mac_plan.method, UpdateExecutionMethod::MacosAppUpdater);

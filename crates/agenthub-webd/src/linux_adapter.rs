@@ -1,4 +1,4 @@
-use crate::{audit::AuditActor, state::AppState};
+use crate::{audit::ADMIN_ID, state::AppState};
 use agenthub_core::services::jobs::thread_state_action_response as core_thread_state_action_response;
 use agenthub_core::{
     codex,
@@ -14,7 +14,6 @@ use std::path::Path;
 
 pub(crate) fn apply_probe_settings_save_plan(
     state: &AppState,
-    auth: &AuditActor,
     config_path: &Path,
     plan: settings_service::ProbeSettingsSavePlan,
 ) -> Result<Config> {
@@ -23,7 +22,7 @@ pub(crate) fn apply_probe_settings_save_plan(
     state.replace_config(response_config.clone());
     state.notify_github_ci();
     state.db.record_audit(
-        Some(&auth.admin_id),
+        Some(ADMIN_ID),
         "probe_settings.updated",
         Some("probe"),
         Some("settings"),
@@ -35,7 +34,6 @@ pub(crate) fn apply_probe_settings_save_plan(
 
 pub(crate) fn start_probe_action_plan(
     state: &AppState,
-    auth: &AuditActor,
     plan: probe_service::ProbeActionPlan,
     config_path: &Path,
 ) -> Result<String> {
@@ -43,7 +41,7 @@ pub(crate) fn start_probe_action_plan(
     let spec = plan.job;
 
     state.db.record_audit(
-        Some(&auth.admin_id),
+        Some(ADMIN_ID),
         &format!("{}.started", spec.kind),
         Some("probe"),
         Some(&spec.title),
@@ -58,7 +56,6 @@ pub(crate) fn start_probe_action_plan(
 
 pub(crate) async fn apply_thread_state_action_plan(
     state: &AppState,
-    auth: &AuditActor,
     plan: &job_service::ThreadStateActionPlan,
 ) -> Result<job_service::ActionResponse> {
     let paths = state.codex_paths();
@@ -67,7 +64,7 @@ pub(crate) async fn apply_thread_state_action_plan(
             let archived = matches!(plan.action, ThreadStateAction::Archive);
             codex::set_thread_archived(&paths, &plan.thread_id, archived)?;
             state.db.record_audit(
-                Some(&auth.admin_id),
+                Some(ADMIN_ID),
                 if archived {
                     "thread.archived"
                 } else {
@@ -84,7 +81,7 @@ pub(crate) async fn apply_thread_state_action_plan(
                 .rename_thread(&paths, &plan.thread_id, name)
                 .await?;
             state.db.record_audit(
-                Some(&auth.admin_id),
+                Some(ADMIN_ID),
                 "thread.renamed",
                 Some("thread"),
                 Some(&plan.thread_id),
@@ -97,7 +94,6 @@ pub(crate) async fn apply_thread_state_action_plan(
 
 pub(crate) fn start_update_action_plan(
     state: &AppState,
-    auth: &AuditActor,
     plan: update_service::UpdateActionPlan,
     audit_action: Option<&str>,
 ) -> Result<String> {
@@ -114,7 +110,7 @@ pub(crate) fn start_update_action_plan(
     };
     if let Some(audit_action) = audit_action {
         state.db.record_audit(
-            Some(&auth.admin_id),
+            Some(ADMIN_ID),
             audit_action,
             Some("system"),
             Some("updates"),

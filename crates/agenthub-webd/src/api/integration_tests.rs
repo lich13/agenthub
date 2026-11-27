@@ -9,7 +9,7 @@ use agenthub_core::{
     config::Config,
     db::PanelDb,
     jobs::ProcessCommand,
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{
         probe::{probe_process_command, ProbeAction, PROBE_REPLY_NEEDED_FRESH_WINDOW_SECONDS},
         threads as thread_service,
@@ -401,10 +401,7 @@ async fn rpc_update_typed_commands_start_update_jobs() {
 
 #[test]
 fn linux_probe_process_command_preserves_paths_as_literal_arguments() {
-    let platform = PlatformPaths::for_kind_with_home(
-        PlatformKind::Macos,
-        std::path::Path::new("/synthetic/runtime security/home with spaces"),
-    );
+    let platform = PlatformPaths::macos("/synthetic/runtime security/home with spaces");
     let config_path =
         PathBuf::from("/synthetic/runtime security/config path with spaces; fixture.toml");
     let cases = [

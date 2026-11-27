@@ -37,6 +37,11 @@ pub fn http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
 }
 
+pub(crate) fn sha256_hex(value: impl AsRef<[u8]>) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(value.as_ref()))
+}
+
 pub mod native_probe;
 pub mod provider_sessions;
 

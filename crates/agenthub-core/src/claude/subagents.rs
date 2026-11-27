@@ -164,7 +164,7 @@ pub(super) fn detail(
     let before = reader::stamp(&path)?;
     let prefix = format!(
         "{}:",
-        digest(format!(
+        crate::sha256_hex(format!(
             "{}\0{id}\0{source}\0{parent_source}",
             request.session_key
         ))

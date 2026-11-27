@@ -299,6 +299,7 @@ final class ConversationRowCellView: NSTableCellView {
                                 coordinator?.onPreviewImage?(att.name, img)
                             }
                         } else {
+                            let failed = (att.reason != nil) || coordinator.attachmentViewport.hasFailed(for: key)
                             thumbBtn.image = LucideVectorCatalog.nsImage(
                                 for: .imageOff,
                                 size: 22,
@@ -307,8 +308,8 @@ final class ConversationRowCellView: NSTableCellView {
                             thumbBtn.imagePosition = .imageAbove
                             thumbBtn.font = DesignFonts.nsBodyFont(size: 11)
                             thumbBtn.contentTintColor = palette.textMuted.nsColor
-                            thumbBtn.title = (att.reason != nil) ? "图片不可用" : "图片"
-                            thumbBtn.toolTip = att.reason ?? att.name
+                            thumbBtn.title = failed ? "图片不可用" : "图片"
+                            thumbBtn.toolTip = att.reason ?? (failed ? "图片不可用" : att.name)
                             thumbBtn.isEnabled = false
                         }
                         attRow.addArrangedSubview(thumbBtn)
@@ -398,11 +399,11 @@ final class ConversationRowCellView: NSTableCellView {
                     iconSize: 17,
                     idleIcon: .copy,
                     palette: palette,
-                    toolTipText: "复制回答"
+                    toolTipText: "复制答复"
                 ) { [weak self, weak coordinator] in
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(a, forType: .string)
-                    coordinator?.onCopyFeedback?("已复制回答")
+                    coordinator?.onCopyFeedback?("已复制答复")
                     self?.updateFloatingCopyVisibility()
                 }
                 copyAnsBtn.onFeedbackStateChanged = { [weak self] in

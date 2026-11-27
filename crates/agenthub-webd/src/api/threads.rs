@@ -31,14 +31,13 @@ pub(crate) async fn account_scope_status(state: AppState) -> ApiResponse {
 }
 
 pub(crate) async fn account_scope_clear(state: AppState) -> ApiResponse {
-    let auth = crate::audit::actor();
     ok(
         agenthub_core::read_tasks::spawn_blocking(move || -> anyhow::Result<_> {
             let result = AgentHubUseCases::new(state.platform())
                 .threads()
                 .account_scope_clear(&state.codex_paths())?;
             state.db.record_audit(
-                Some(&auth.admin_id),
+                Some(crate::audit::ADMIN_ID),
                 "codex_account_scope.clear",
                 Some("codex_account_scope"),
                 None,
@@ -112,28 +111,25 @@ pub(crate) async fn thread_blocks(
 }
 
 pub(crate) async fn archive_thread(state: AppState, id: String) -> ApiResponse {
-    let auth = crate::audit::actor();
     let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .archive(&id)?;
-    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &plan).await?)
 }
 
 pub(crate) async fn restore_thread(state: AppState, id: String) -> ApiResponse {
-    let auth = crate::audit::actor();
     let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .restore(&id)?;
-    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &plan).await?)
 }
 
 pub(crate) async fn rename_thread(
     state: AppState,
     request: job_service::ThreadRenameRequest,
 ) -> ApiResponse {
-    let auth = crate::audit::actor();
     let plan = AgentHubUseCases::new(state.platform())
         .threads()
         .rename(request)?;
-    ok(linux_adapter::apply_thread_state_action_plan(&state, &auth, &plan).await?)
+    ok(linux_adapter::apply_thread_state_action_plan(&state, &plan).await?)
 }

@@ -3,7 +3,6 @@ use anyhow::{bail, ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     hash::{Hash, Hasher},
@@ -188,10 +187,6 @@ struct FileMention {
     name: String,
     path: String,
     image: bool,
-}
-
-fn hash(value: impl AsRef<[u8]>) -> String {
-    hex::encode(Sha256::digest(value.as_ref()))
 }
 
 // Require the whole desktop envelope at the start of a text part. A heading,
@@ -414,7 +409,7 @@ fn parse_user_message_inner(id: &str, content: &Value, project_context: bool) ->
                 .and_then(Value::as_str)
                 .unwrap_or("文件附件");
             result.attachments.push(UserAttachment {
-                id: format!("file-{}", hash(part.to_string())),
+                id: format!("file-{}", crate::sha256_hex(part.to_string())),
                 name: basename(name),
                 kind: "file".into(),
                 path: None,
@@ -533,7 +528,7 @@ impl UserMessage {
         } else {
             None
         };
-        let digest = hash(&data);
+        let digest = crate::sha256_hex(&data);
         if path.is_some()
             && self.attachments.iter().any(|attachment| {
                 attachment.path == path
@@ -572,7 +567,7 @@ impl UserMessage {
         let id = format!(
             "{}-{}",
             self.attachments.len(),
-            hash(format!(
+            crate::sha256_hex(format!(
                 "{}:{}",
                 file.path,
                 fingerprint.as_deref().unwrap_or("missing")

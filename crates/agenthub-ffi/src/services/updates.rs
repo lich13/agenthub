@@ -9,7 +9,6 @@ use std::{
     io::Read,
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::OnceLock,
     time::Duration,
 };
 
@@ -178,11 +177,7 @@ fn native_update_job_plan_for_action(
 }
 
 fn http_client() -> Result<reqwest::Client> {
-    static PROVIDER: OnceLock<()> = OnceLock::new();
-    PROVIDER.get_or_init(|| {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-    });
-    reqwest::Client::builder()
+    agenthub_core::http_client_builder()
         .timeout(Duration::from_secs(120))
         .user_agent(concat!("AgentHub/", env!("CARGO_PKG_VERSION")))
         .build()

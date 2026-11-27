@@ -7,7 +7,7 @@ use crate::{
     platform::PlatformPaths,
     services::{
         cleanup,
-        jobs::{self, ThreadRenameRequest, ThreadStateActionPlan},
+        jobs::{self, ThreadRenameRequest, ThreadStateAction, ThreadStateActionPlan},
         probe::ProbeUseCases,
         settings::SettingsUseCases,
         system::{self, HostSurface, SystemCapabilities},
@@ -207,15 +207,26 @@ impl ThreadUseCases {
     }
 
     pub fn archive(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_archive_with_capability(thread_id)
+        Ok(ThreadStateActionPlan {
+            thread_id: jobs::required_command_thread_id(thread_id)?,
+            action: ThreadStateAction::Archive,
+        })
     }
 
     pub fn restore(self, thread_id: &str) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_restore_with_capability(thread_id)
+        Ok(ThreadStateActionPlan {
+            thread_id: jobs::required_command_thread_id(thread_id)?,
+            action: ThreadStateAction::Restore,
+        })
     }
 
     pub fn rename(self, request: ThreadRenameRequest) -> Result<ThreadStateActionPlan> {
-        jobs::plan_thread_rename_with_capability(request)
+        let name = jobs::non_empty_owned(&request.name)
+            .ok_or_else(|| anyhow::anyhow!("name cannot be empty"))?;
+        Ok(ThreadStateActionPlan {
+            thread_id: jobs::required_command_thread_id(&request.thread_id)?,
+            action: ThreadStateAction::Rename { name },
+        })
     }
 
     pub fn account_scope_status(
@@ -279,25 +290,17 @@ pub struct GrokRenameRequest {
 pub struct JobUseCases;
 
 impl JobUseCases {
-    pub fn list(self, limit: Option<u32>) -> Result<u32> {
-        Ok(normalize_job_list_limit(limit))
-    }
-
-    pub fn detail(self, job_id: &str) -> Result<String> {
-        required_job_id(job_id)
-    }
-
-    pub fn response(self, job: JobRecord) -> JobResponse {
-        job_response(job)
-    }
-
     pub fn list_from_db(
         self,
         db: &crate::db::PanelDb,
         limit: Option<u32>,
     ) -> Result<Vec<JobResponse>> {
-        let plan = self.list(limit)?;
-        Ok(db.list_jobs(plan)?.into_iter().map(job_response).collect())
+        let clamped = limit.unwrap_or(50).min(200);
+        Ok(db
+            .list_jobs(clamped)?
+            .into_iter()
+            .map(job_response)
+            .collect())
     }
 
     pub fn detail_from_db(
@@ -306,9 +309,10 @@ impl JobUseCases {
         job_id: &str,
         include_output: Option<bool>,
     ) -> Result<Option<JobResponse>> {
-        let plan = self.detail(job_id)?;
+        let trimmed = job_id.trim();
+        anyhow::ensure!(!trimmed.is_empty(), "job_id is required");
         Ok(db
-            .job_with_output(&plan, include_output.unwrap_or(true))?
+            .job_with_output(trimmed, include_output.unwrap_or(true))?
             .map(job_response))
     }
 }
@@ -342,19 +346,7 @@ impl CleanupUseCases {
     }
 }
 
-pub fn normalize_job_list_limit(limit: Option<u32>) -> u32 {
-    limit.unwrap_or(50).min(200)
-}
-
-pub fn required_job_id(value: &str) -> Result<String> {
-    value
-        .trim()
-        .is_empty()
-        .then(|| anyhow::anyhow!("job_id is required"))
-        .map_or_else(|| Ok(value.trim().to_string()), Err)
-}
-
-pub fn job_response(job: JobRecord) -> JobResponse {
+fn job_response(job: JobRecord) -> JobResponse {
     let failure_analysis = if job.status == "failed" {
         analyze_job_failure(&job.kind, &job.output, job.error.as_deref(), job.exit_code)
     } else {

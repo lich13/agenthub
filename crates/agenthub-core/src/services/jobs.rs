@@ -36,30 +36,6 @@ pub struct ThreadStateActionPlan {
     pub action: ThreadStateAction,
 }
 
-pub fn plan_thread_archive_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
-    Ok(ThreadStateActionPlan {
-        thread_id: required_command_thread_id(thread_id)?,
-        action: ThreadStateAction::Archive,
-    })
-}
-
-pub fn plan_thread_restore_with_capability(thread_id: &str) -> Result<ThreadStateActionPlan> {
-    Ok(ThreadStateActionPlan {
-        thread_id: required_command_thread_id(thread_id)?,
-        action: ThreadStateAction::Restore,
-    })
-}
-
-pub fn plan_thread_rename_with_capability(
-    request: ThreadRenameRequest,
-) -> Result<ThreadStateActionPlan> {
-    let name = non_empty_owned(&request.name).ok_or_else(|| anyhow!("name cannot be empty"))?;
-    Ok(ThreadStateActionPlan {
-        thread_id: required_command_thread_id(&request.thread_id)?,
-        action: ThreadStateAction::Rename { name },
-    })
-}
-
 pub fn action_ok(
     command: &str,
     message: &str,
@@ -104,11 +80,11 @@ pub fn thread_state_action_response(plan: &ThreadStateActionPlan) -> ActionRespo
     }
 }
 
-fn non_empty_owned(value: &str) -> Option<String> {
+pub(crate) fn non_empty_owned(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn required_command_thread_id(thread_id: &str) -> Result<String> {
+pub(crate) fn required_command_thread_id(thread_id: &str) -> Result<String> {
     non_empty_owned(thread_id).ok_or_else(|| anyhow!("thread_id is required"))
 }

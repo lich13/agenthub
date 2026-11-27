@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-core"
-version = "2.1.40"
+version = "2.1.41"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-ffi"
-version = "2.1.40"
+version = "2.1.41"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -88,7 +88,6 @@ dependencies = [
  "pulldown-cmark",
  "reqwest",
  "rusqlite",
- "rustls",
  "serde",
  "serde_json",
  "tar",
@@ -99,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "agenthub-webd"
-version = "2.1.40"
+version = "2.1.41"
 dependencies = [
  "agenthub-core",
  "anyhow",
@@ -222,7 +221,6 @@ checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
  "axum-core",
- "axum-macros",
  "bytes",
  "futures-util",
  "http",
@@ -268,17 +266,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
-]
-
-[[package]]
-name = "axum-macros"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d123550fa8d071b7255cb0cc04dc302baa6c8c4a79f55701552684d8399bce"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -2245,7 +2232,6 @@ checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
- "serde_core",
  "wasm-bindgen",
 ]
 

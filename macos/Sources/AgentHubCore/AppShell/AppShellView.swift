@@ -129,7 +129,6 @@ struct SideNavigationRailView: View {
     var body: some View {
         let items = store.capabilities.visibleWorkspaces
         VStack(alignment: collapsed ? .center : .leading, spacing: 6) {
-            // Brand Row (.nav-brand: min-height 34px, padding 2px 4px 6px, logo 22x22px)
             HStack(spacing: 8) {
                 if !collapsed {
                     AgentHubLogoView(size: 22)
@@ -198,7 +197,6 @@ private struct SideNavRowButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                // .nav-icon-badge: 24x24pt rounded-8, background --as, color --a (styles.css:222-225)
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(palette.accentSoft.color)

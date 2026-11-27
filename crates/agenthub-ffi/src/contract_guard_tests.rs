@@ -56,7 +56,7 @@ fn ffi_dispatch_handler_matches_contract_registry() {
 }
 
 #[test]
-fn c_abi_isolated_init_invoke_capabilities_rejects_retired_codex_desktop_and_shutdown_roundtrip() {
+fn c_abi_isolated_init_invoke_capabilities_rejects_unknown_command_and_shutdown_roundtrip() {
     let temp = tempfile::tempdir().unwrap();
     let iso_c = CString::new(temp.path().to_str().unwrap()).unwrap();
     let mut rt_ptr: *mut AgentHubRuntime = std::ptr::null_mut();
@@ -127,22 +127,21 @@ fn c_abi_isolated_init_invoke_capabilities_rejects_retired_codex_desktop_and_shu
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["api_version"], 2);
     assert_eq!(json["host_surface"], "desktop_embedded_tauri");
-    assert!(json["capabilities"].get("codex_desktop").is_none());
+    assert!(json["capabilities"].is_object());
 
     // Zero-length GFM parse with null pointer must never UB.
     let empty_gfm = unsafe { agenthub_ffi_parse_gfm_markdown(std::ptr::null(), 0) };
     assert!(!empty_gfm.is_null());
     unsafe { agenthub_ffi_string_free(empty_gfm) };
 
-    // Retired codex.desktop.attach command must fail closed as unknown desktop command.
-    let retired_cmd = CString::new("codex.desktop.attach").unwrap();
-    let retired_args =
-        CString::new(r#"{"request":{"revision":0,"threadId":"missing-thread-id"}}"#).unwrap();
+    // Unknown desktop commands must fail closed via the positive allowlist.
+    let unknown_cmd = CString::new("unknown.command").unwrap();
+    let unknown_args = CString::new("{}").unwrap();
     unsafe {
         agenthub_ffi_invoke(
             rt_ptr,
-            retired_cmd.as_ptr(),
-            retired_args.as_ptr(),
+            unknown_cmd.as_ptr(),
+            unknown_args.as_ptr(),
             43,
             Some(on_rpc),
             &tx as *const _ as *mut std::ffi::c_void,
@@ -152,7 +151,7 @@ fn c_abi_isolated_init_invoke_capabilities_rejects_retired_codex_desktop_and_shu
     assert_eq!(ret_id, 43);
     assert!(!ret_ok);
     assert!(
-        ret_err.contains("unsupported desktop command: codex.desktop.attach"),
+        ret_err.contains("unsupported desktop command: unknown.command"),
         "Expected unknown command rejection, got: {ret_err}"
     );
 

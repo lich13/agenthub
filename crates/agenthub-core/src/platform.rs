@@ -83,13 +83,6 @@ impl PlatformPaths {
         }
     }
 
-    pub fn for_kind_with_home(kind: PlatformKind, home: impl Into<PathBuf>) -> Self {
-        match kind {
-            PlatformKind::Linux => Self::linux_server(),
-            PlatformKind::Macos => Self::macos(home),
-        }
-    }
-
     pub fn daemon_binary(&self) -> PathBuf {
         let binary = "agenthub-webd";
         if self.kind == PlatformKind::Linux && self.service_kind == "systemd" {

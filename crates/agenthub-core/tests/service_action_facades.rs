@@ -1,13 +1,10 @@
 use agenthub_core::codex::CodexPaths;
 use agenthub_core::{
     config::Config,
-    platform::{PlatformKind, PlatformPaths},
+    platform::PlatformPaths,
     services::{
         commands,
-        jobs::{
-            plan_thread_archive_with_capability, plan_thread_rename_with_capability,
-            plan_thread_restore_with_capability, thread_state_action_response, ThreadRenameRequest,
-        },
+        jobs::{thread_state_action_response, ThreadRenameRequest},
         probe::{plan_probe_action, probe_process_command, ProbeAction, ProbeUseCases},
         settings::{
             ProbeNotificationsSavePatch, ProbeSecretState, ProbeSettingsSavePatch,
@@ -132,7 +129,7 @@ fn update_action_facade_plans_linux_jobs_and_macos_native_updates_but_not_prune(
 
     let mac_home = temp_dir("agenthub-update-action-macos");
     std::fs::create_dir_all(&mac_home).unwrap();
-    let mac = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let mac = PlatformPaths::macos(&mac_home);
 
     let mac_check = plan_update_action(&mac, UpdateAction::Check).unwrap();
     assert!(mac_check.linux_job.is_none());
@@ -209,17 +206,20 @@ fn probe_settings_update_use_cases_group_adapter_ready_plans_in_core() {
         .to_string()
         .contains("config is required"));
 
-    let failed = use_cases.jobs().response(agenthub_core::db::JobRecord {
-        id: "job-a".to_string(),
-        kind: "codex".to_string(),
-        status: "failed".to_string(),
-        title: "Codex".to_string(),
-        started_at: 1,
-        finished_at: Some(2),
-        exit_code: Some(1),
-        output: "auth failed".to_string(),
-        error: Some("401 Unauthorized".to_string()),
-    });
+    let db = agenthub_core::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    db.create_job("job-a", "codex", "Codex").unwrap();
+    db.append_job_output("job-a", "auth failed").unwrap();
+    db.finish_job("job-a", "failed", Some(1), Some("401 Unauthorized"))
+        .unwrap();
+    let failed = use_cases
+        .jobs()
+        .detail_from_db(&db, "job-a", Some(true))
+        .unwrap()
+        .unwrap();
     assert!(failed.failure_analysis.is_some());
     assert!(failed.analysis.as_deref().is_some_and(|v| !v.is_empty()));
     assert!(failed.explanation.as_deref().is_some_and(|v| !v.is_empty()));
@@ -348,23 +348,27 @@ fn thread_limit_helpers_are_shared_core_contracts() {
 
 #[test]
 fn cleanup_and_thread_action_response_commands_use_unified_dot_contracts() {
-    let archive_plan = plan_thread_archive_with_capability("thread-a").unwrap();
+    let threads =
+        agenthub_core::services::use_cases::AgentHubUseCases::new(&PlatformPaths::linux_server())
+            .threads();
+    let archive_plan = threads.archive("thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&archive_plan).command,
         commands::THREADS_ARCHIVE
     );
 
-    let restore_plan = plan_thread_restore_with_capability("thread-a").unwrap();
+    let restore_plan = threads.restore("thread-a").unwrap();
     assert_eq!(
         thread_state_action_response(&restore_plan).command,
         commands::THREADS_RESTORE
     );
 
-    let rename_plan = plan_thread_rename_with_capability(ThreadRenameRequest {
-        thread_id: "thread-a".to_string(),
-        name: " new name ".to_string(),
-    })
-    .unwrap();
+    let rename_plan = threads
+        .rename(ThreadRenameRequest {
+            thread_id: "thread-a".to_string(),
+            name: " new name ".to_string(),
+        })
+        .unwrap();
     let renamed = thread_state_action_response(&rename_plan);
     assert_eq!(renamed.command, commands::THREADS_RENAME);
     assert_eq!(renamed.data, Some(serde_json::json!({"name": "new name"})));

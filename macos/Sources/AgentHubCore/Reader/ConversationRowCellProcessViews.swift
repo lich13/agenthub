@@ -344,8 +344,8 @@ extension ConversationRowCellView {
         let cleaned = VisibleMarkdownEngine.visibleMarkdown(markdown)
         for rawLine in cleaned.components(separatedBy: .newlines) {
             let trimmed = rawLine
-                .replacingOccurrences(of: "^(#{1,6}\\s+|[-*+]\\s+|>\\s+|\\d+\\.\\s+)+", with: "", options: .regularExpression)
-                .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                .replacing(MarkdownPatterns.markdownBlockMarkers, with: "")
+                .replacing(MarkdownPatterns.whitespace, with: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
                 let ns = trimmed as NSString

@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - History Cursors & Resume Commands (historyCursor.ts, claudeSession.ts, GrokWorkspace.tsx)
+// MARK: - History Cursors & Resume Commands
 
 enum HistoryAndResumeHelpers {
     static func historyCursorIndex(_ cursor: String?) -> Double {
@@ -52,7 +52,7 @@ enum HistoryAndResumeHelpers {
     }
 }
 
-// MARK: - User Timeline Rail ViewModel (timelineViewModel.ts)
+// MARK: - User Timeline Rail ViewModel
 
 struct TimelineSourceItem: Equatable, Sendable {
     var id: String
@@ -161,7 +161,7 @@ enum TimelineViewModel {
             let attachments = source.userMessage?.attachments ?? []
             if extracted.isEmpty && attachments.isEmpty { continue }
 
-            let compact = extracted.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            let compact = extracted.replacing(MarkdownPatterns.whitespace, with: " ")
             let ns = compact as NSString
             let title = ns.length > 0 ? ns.substring(to: min(80, ns.length)) : "附件"
             let preview: String? = if ns.length > 80 {
@@ -193,7 +193,7 @@ enum TimelineViewModel {
     }
 }
 
-// MARK: - Thread Message Store & 120s Optimistic Codex Rename Cache (threadMessageStore.ts)
+// MARK: - Thread Message Store & 120s Optimistic Codex Rename Cache
 
 struct ThreadMessageSlot: Equatable, Sendable {
     var timeline: [TimelineEntry]?
@@ -530,7 +530,7 @@ private func estimateUserMessageBytes(_ um: UserMessageContent?) -> Int {
     return total
 }
 
-// MARK: - Universal Paged History Store for Claude, Grok, Antigravity, DSH & GrokBot (usePagedHistory.ts parity)
+// MARK: - Universal Paged History Store for Claude, Grok, Antigravity, DSH & GrokBot
 
 struct PagedEventSlot<Event: Equatable & Sendable>: Equatable, Sendable {
     var events: [Event]
@@ -773,7 +773,7 @@ final class PagedEventHistoryStore<Event: Equatable & Sendable>: ObservableObjec
     }
 }
 
-// MARK: - Bounded Timeline Window Jump Controller (j:/w:/n: Cursors, useTimelineWindow.ts)
+// MARK: - Bounded Timeline Window Jump Controller (j:/w:/n: Cursors)
 
 struct TimelineWindowPage<Item: Sendable>: Sendable {
     var items: [Item]

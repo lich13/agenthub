@@ -433,7 +433,9 @@ public final class RuntimeConnectionStore: ObservableObject {
                             at: sourceRevision
                         )
                         if let job {
-                            self.trackedJobs[id] = job
+                            if self.trackedJobs[id] != job {
+                                self.trackedJobs[id] = job
+                            }
                             if job.isTerminal {
                                 self.trackedJobOrder.removeAll { $0 == id }
                             }

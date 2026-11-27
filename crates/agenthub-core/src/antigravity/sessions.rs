@@ -64,7 +64,7 @@ mod mutations;
 #[cfg(test)]
 pub(crate) use mutations::preview_batch_item;
 pub(crate) use mutations::{
-    descendant_ids, is_presence_locked_shared, resolve_target_store_and_endpoint,
+    descendant_ids, probe_presence_locked_shared, resolve_target_store_and_endpoint,
 };
 pub use mutations::{
     execute_batch_item, execute_unified_cleanup_targets, live_item_is_actively_executing,
@@ -486,12 +486,11 @@ fn conv_db_modified_within(
         .any(|ms| now_ms.saturating_sub(ms) <= window_ms && ms <= now_ms + 60_000)
 }
 
-use crate::file_stamp::{FileStamp, StampedCache};
+use crate::file_stamp::{FileStamp, SqliteReadStampPair, StampedCache};
 
-type SqliteStampPair = (FileStamp, Option<FileStamp>);
 type TranscriptSummaryValue = (Option<String>, Option<String>, usize, Option<String>);
 
-static CONV_DB_STEPS_CACHE: StampedCache<SqliteStampPair, Option<&'static str>> =
+static CONV_DB_STEPS_CACHE: StampedCache<SqliteReadStampPair, Option<&'static str>> =
     StampedCache::new(512, 2 * 1024 * 1024);
 static TRANSCRIPT_TAIL_CACHE: StampedCache<FileStamp, std::sync::Arc<Vec<Value>>> =
     StampedCache::new(64, 16 * 1024 * 1024);
@@ -612,20 +611,7 @@ pub(crate) fn extract_transcript_spawned_subagents(
     result
 }
 
-fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'static str> {
-    let db_path = paths.conversations_dir().join(format!("{id}.db"));
-    let stamp = FileStamp::sqlite_pair(&db_path)?;
-    if let Some(cached_status) = CONV_DB_STEPS_CACHE.get(&db_path, &stamp) {
-        return cached_status;
-    }
-    let status = inspect_conv_db_steps_status_uncached(&db_path).ok()?;
-    if FileStamp::sqlite_pair(&db_path).as_ref() == Some(&stamp) {
-        CONV_DB_STEPS_CACHE.insert(db_path, stamp, status, 64);
-    }
-    status
-}
-
-fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'static str>> {
+pub(super) fn open_conv_sqlite_readonly(db_path: &Path) -> Result<Option<Connection>> {
     use std::io::Read;
     let mut f = match fs::File::open(db_path) {
         Ok(file) => file,
@@ -643,6 +629,27 @@ fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'stat
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     let _ = conn.busy_timeout(std::time::Duration::from_millis(50));
+    let _ = conn.execute_batch("PRAGMA cache_size = -512; PRAGMA temp_store = MEMORY;");
+    Ok(Some(conn))
+}
+
+fn inspect_conv_db_steps_status(paths: &AntigravityPaths, id: &str) -> Option<&'static str> {
+    let db_path = paths.conversations_dir().join(format!("{id}.db"));
+    let stamp = FileStamp::sqlite_read_pair(&db_path)?;
+    if let Some(cached_status) = CONV_DB_STEPS_CACHE.get(&db_path, &stamp) {
+        return cached_status;
+    }
+    let status = inspect_conv_db_steps_status_uncached(&db_path).ok()?;
+    if FileStamp::sqlite_read_pair(&db_path).as_ref() == Some(&stamp) {
+        CONV_DB_STEPS_CACHE.insert(db_path, stamp, status, 64);
+    }
+    status
+}
+
+fn inspect_conv_db_steps_status_uncached(db_path: &Path) -> Result<Option<&'static str>> {
+    let Some(conn) = open_conv_sqlite_readonly(db_path)? else {
+        return Ok(None);
+    };
     let cols = crate::db::table_columns(&conn, "steps")?;
     if !cols.contains("idx") || !cols.contains("step_type") || !cols.contains("status") {
         return Ok(None);
@@ -846,7 +853,7 @@ fn inspect_transcript_tail_status(
             return Some("waiting");
         }
         for sub_id in &pending_subagents {
-            if is_presence_locked_shared(paths, sub_id) {
+            if probe_presence_locked_shared(paths, sub_id).unwrap_or(false) {
                 return Some("running");
             }
             let sub_node =
@@ -936,7 +943,9 @@ pub(crate) fn evaluate_node_status_offline_with_lock(
     let db_step = inspect_conv_db_steps_status(paths, id);
     let conv_db_active_fresh = matches!(db_step, Some("running" | "waiting"))
         && conv_db_modified_within(paths, id, 60_000, now_ms);
-    let lock_held = inherited_lock || is_presence_locked_shared(paths, id) || conv_db_active_fresh;
+    let lock_held = inherited_lock
+        || probe_presence_locked_shared(paths, id).unwrap_or(false)
+        || conv_db_active_fresh;
     let transcript = inspect_transcript_tail_status(paths, id, now_ms, lock_held);
     let node_settled =
         matches!(transcript, Some("finished" | "settled_idle")) || db_step == Some("idle");
@@ -1009,7 +1018,7 @@ pub(crate) fn evaluate_offline_tree_status_with_lock(
     inherited_lock: bool,
     now_ms: i64,
 ) -> &'static str {
-    let tree_lock = inherited_lock || is_presence_locked_shared(paths, root_id);
+    let tree_lock = inherited_lock || probe_presence_locked_shared(paths, root_id).unwrap_or(false);
     let root_status = evaluate_node_status_offline_with_lock(
         paths,
         root_id,
@@ -1024,7 +1033,7 @@ pub(crate) fn evaluate_offline_tree_status_with_lock(
     let mut any_waiting = root_status == "waiting";
     for child in descendants {
         if !tree_lock
-            && !is_presence_locked_shared(paths, child)
+            && !probe_presence_locked_shared(paths, child).unwrap_or(false)
             && !conv_db_modified_within(paths, child, 60_000, now_ms)
         {
             continue;
@@ -1285,6 +1294,55 @@ fn summary_from_live_json(
 
 fn summaries_table_columns(conn: &Connection) -> std::collections::HashSet<String> {
     crate::db::table_columns(conn, "conversation_summaries").unwrap_or_default()
+}
+
+pub(crate) fn summaries_status_sql_exprs(
+    conn: &Connection,
+) -> (std::collections::HashSet<String>, String) {
+    let cols = summaries_table_columns(conn);
+    let status_expr = if cols.contains("status") {
+        "COALESCE(status, '')"
+    } else {
+        "''"
+    };
+    let idle_expr = if cols.contains("not_fully_idle") {
+        "not_fully_idle"
+    } else {
+        "0"
+    };
+    let raw_expr = if cols.contains("raw_summary") {
+        "raw_summary"
+    } else {
+        "NULL"
+    };
+    (cols, format!("{status_expr}, {idle_expr}, {raw_expr}"))
+}
+
+pub(crate) fn read_summary_status_cols(
+    row: &rusqlite::Row<'_>,
+    base: usize,
+) -> rusqlite::Result<(String, bool, Option<Vec<u8>>)> {
+    Ok((
+        row.get::<_, String>(base)?,
+        row.get::<_, ValueOrString>(base + 1)
+            .map(|v| v.0)
+            .unwrap_or(false),
+        row.get::<_, Option<Vec<u8>>>(base + 2).ok().flatten(),
+    ))
+}
+
+pub(crate) fn parse_summary_status_and_raw(
+    status_str: &str,
+    not_fully_idle: bool,
+    raw_blob: Option<&[u8]>,
+) -> (Option<ParsedRawSummary>, Option<&'static str>) {
+    let parsed_raw = raw_blob.map(parse_raw_summary);
+    let st = offline_summary_row_status(status_str, not_fully_idle).or_else(|| {
+        parsed_raw
+            .as_ref()
+            .and_then(ParsedRawSummary::active_status)
+    });
+    (parsed_raw, st)
 }
 
 pub(crate) fn has_conversation_parents_table(conn: &Connection) -> bool {
@@ -1595,31 +1653,17 @@ fn list_offline_summaries_with_subagents_and_raw(
             }
         }
 
-        let cols = summaries_table_columns(conn);
-        let status_expr = if cols.contains("status") {
-            "COALESCE(status, '')"
-        } else {
-            "''"
-        };
-        let idle_expr = if cols.contains("not_fully_idle") {
-            "not_fully_idle"
-        } else {
-            "0"
-        };
-        let raw_expr = if cols.contains("raw_summary") {
-            "raw_summary"
-        } else {
-            "NULL"
-        };
+        let (_, status_cols_sql) = summaries_status_sql_exprs(conn);
         let sql = format!(
             "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
              COALESCE(step_count, 0), COALESCE(last_modified_time, ''), \
              COALESCE(workspace_uris, ''), COALESCE(parent_conversation_id, ''), \
-             COALESCE(nesting_depth, 0), {status_expr}, {idle_expr}, {raw_expr} \
+             COALESCE(nesting_depth, 0), {status_cols_sql} \
              FROM conversation_summaries"
         );
         if let Ok(mut stmt) = conn.prepare(&sql) {
             if let Ok(rows) = stmt.query_map([], |row| {
+                let (status_str, not_fully_idle, raw_blob) = read_summary_status_cols(row, 8)?;
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -1629,9 +1673,9 @@ fn list_offline_summaries_with_subagents_and_raw(
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
                     row.get::<_, i64>(7)?,
-                    row.get::<_, String>(8)?,
-                    row.get::<_, ValueOrString>(9).map(|v| v.0).unwrap_or(false),
-                    row.get::<_, Option<Vec<u8>>>(10).ok().flatten(),
+                    status_str,
+                    not_fully_idle,
+                    raw_blob,
                 ))
             }) {
                 for (
@@ -1652,19 +1696,17 @@ fn list_offline_summaries_with_subagents_and_raw(
                         continue;
                     }
                     indexed_ids.insert(id.clone());
-                    let parsed_raw = raw_blob.as_deref().map(parse_raw_summary);
+                    let (parsed_raw, st) = parse_summary_status_and_raw(
+                        &status_str,
+                        not_fully_idle,
+                        raw_blob.as_deref(),
+                    );
                     if let Some(ts_ms) = parse_any_timestamp_ms(&modified)
                         .or_else(|| parsed_raw.as_ref().and_then(|r| r.created_time_ms))
                         .or_else(|| aux.fts_rows.get(&id).and_then(|f| f.last_modified_ms))
                     {
                         node_timestamps_ms.insert(id.clone(), ts_ms);
                     }
-                    let st =
-                        offline_summary_row_status(&status_str, not_fully_idle).or_else(|| {
-                            parsed_raw
-                                .as_ref()
-                                .and_then(ParsedRawSummary::active_status)
-                        });
                     if let Some(st) = st {
                         sqlite_statuses.insert(id.clone(), st);
                     }
@@ -1748,7 +1790,9 @@ fn list_offline_summaries_with_subagents_and_raw(
                 let Some(id) = entry_path.file_stem().and_then(|s| s.to_str()) else {
                     continue;
                 };
-                if uuid::Uuid::parse_str(id).is_ok() && is_presence_locked_shared(paths, id) {
+                if uuid::Uuid::parse_str(id).is_ok()
+                    && probe_presence_locked_shared(paths, id).unwrap_or(false)
+                {
                     locked_ids.insert(id.to_owned());
                     if !indexed_ids.contains(id)
                         && !known_subagents.contains(id)
@@ -3833,8 +3877,14 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    pub(in crate::antigravity::sessions) static TEST_GLOBAL_CACHE_LOCK: std::sync::Mutex<()> =
+        std::sync::Mutex::new(());
+
     #[test]
     fn endpoint_cache_skips_negative_cache_on_transient_rpc_error_and_evicts_on_idle() {
+        let _cache_guard = TEST_GLOBAL_CACHE_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         evict_idle_endpoint_cache(std::time::Duration::ZERO);
         assert_eq!(get_cached_live_endpoint(), None);
 
@@ -5891,6 +5941,553 @@ mod tests {
         let final_meta = fs::read_to_string(root.join("cache/conversation_metadata.json")).unwrap();
         assert!(!final_meta.contains(&root_id) && final_meta.contains("keep-other"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn presence_lock_probe_errors_guard_offline_writes_and_preserve_cleanup_targets() {
+        let root = env::temp_dir().join(format!("agenthub-ag-lock-err-{}", uuid::Uuid::new_v4()));
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let orphan_bad = uuid::Uuid::new_v4().to_string();
+        let orphan_ok = uuid::Uuid::new_v4().to_string();
+        let missing_parent = uuid::Uuid::new_v4().to_string();
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        fs::create_dir_all(root.join("presence")).unwrap();
+        for cid in [&root_id, &orphan_bad, &orphan_ok] {
+            let db = root.join("conversations").join(format!("{cid}.db"));
+            Connection::open(&db)
+                .unwrap()
+                .execute_batch("CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER); INSERT INTO steps VALUES (0, 15, 3);")
+                .unwrap();
+        }
+        let sum_conn = Connection::open(root.join("conversation_summaries.db")).unwrap();
+        sum_conn
+            .execute_batch(&format!(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, step_count INTEGER, last_modified_time TEXT, workspace_uris TEXT, parent_conversation_id TEXT, nesting_depth INTEGER);
+                 INSERT INTO conversation_summaries VALUES ('{root_id}', 'Root', 'p', 1, '2026-11-26T00:00:00Z', '', '', 0);
+                 INSERT INTO conversation_summaries VALUES ('{orphan_bad}', 'Bad Orphan', 'p', 1, '2026-11-26T00:00:00Z', '', '{missing_parent}', 1);
+                 INSERT INTO conversation_summaries VALUES ('{orphan_ok}', 'Good Orphan', 'p', 1, '2026-11-26T00:00:00Z', '', '{missing_parent}', 1);"
+            ))
+            .unwrap();
+        drop(sum_conn);
+
+        let paths = AntigravityPaths::offline(root.clone());
+        let candidates = preview_unified_cleanup_candidates(&paths).unwrap();
+        assert_eq!(candidates.len(), 2);
+        let fp_bad = candidates
+            .iter()
+            .find(|c| c.id == orphan_bad)
+            .and_then(|c| c.fingerprint.clone())
+            .unwrap();
+        let fp_ok = candidates
+            .iter()
+            .find(|c| c.id == orphan_ok)
+            .and_then(|c| c.fingerprint.clone())
+            .unwrap();
+
+        // Replace presence/<root_id>.lock and presence/<orphan_bad>.lock with symlinks so lock probing fails.
+        let dummy = root.join("dummy");
+        fs::write(&dummy, b"").unwrap();
+        std::os::unix::fs::symlink(
+            &dummy,
+            root.join("presence").join(format!("{root_id}.lock")),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            &dummy,
+            root.join("presence").join(format!("{orphan_bad}.lock")),
+        )
+        .unwrap();
+
+        // Display path continues to treat probe failure as unlocked, while offline writes reject it.
+        let listed = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(listed.len(), 1);
+        let rename_err = rename_session(&paths, &root_id, "Renamed")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rename_err.contains("无法探测 Antigravity 会话锁"),
+            "{rename_err}"
+        );
+        let preview_err = preview_batch_item(&paths, &root_id, SessionOperation::Delete, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            preview_err.contains("无法探测 Antigravity 会话锁"),
+            "{preview_err}"
+        );
+
+        // Orphan scan treats probe failure on `orphan_bad` as locked (excluded from new candidates);
+        // unified cleanup with a prior fingerprint reports `orphan_bad` as Failed without deleting disk files while deleting `orphan_ok`.
+        let rescanned = preview_unified_cleanup_candidates(&paths).unwrap();
+        assert_eq!(rescanned.len(), 1);
+        assert_eq!(rescanned[0].id, orphan_ok);
+        let outcomes = execute_unified_cleanup_targets(
+            &paths,
+            &[
+                (orphan_bad.clone(), Some(fp_bad.clone())),
+                (orphan_ok.clone(), Some(fp_ok)),
+            ],
+        )
+        .unwrap();
+        assert!(matches!(
+            &outcomes[0].1,
+            UnifiedAntigravityStepOutcome::Failed(Some(msg), residuals)
+                if msg.contains("无法探测 Antigravity 会话锁") && residuals.is_empty()
+        ));
+        assert!(matches!(
+            outcomes[1].1,
+            UnifiedAntigravityStepOutcome::Deleted(_)
+        ));
+        assert!(root
+            .join("conversations")
+            .join(format!("{orphan_bad}.db"))
+            .exists());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{orphan_ok}.db"))
+            .exists());
+
+        // Subtree where `orphan_bad.lock` fails probing while a descendant holds a live flock must still report `Failed` (not `Skipped`).
+        let orphan_desc = uuid::Uuid::new_v4().to_string();
+        let missing_grandparent = uuid::Uuid::new_v4().to_string();
+        Connection::open(root.join("conversations").join(format!("{orphan_desc}.db")))
+            .unwrap()
+            .execute_batch("CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER); INSERT INTO steps VALUES (0, 15, 3);")
+            .unwrap();
+        Connection::open(root.join("conversation_summaries.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE conversation_parents (conversation_id TEXT, parent_id TEXT);
+                 INSERT INTO conversation_parents VALUES ('{orphan_desc}', '{orphan_bad}');
+                 INSERT INTO conversation_parents VALUES ('{missing_parent}', '{missing_grandparent}');"
+            ))
+            .unwrap();
+        let desc_lock_file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join("presence").join(format!("{orphan_desc}.lock")))
+            .unwrap();
+        {
+            use std::os::unix::io::AsRawFd;
+            assert_eq!(
+                unsafe { libc::flock(desc_lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+        }
+        let subtree_err_outcomes =
+            execute_unified_cleanup_targets(&paths, &[(orphan_bad.clone(), Some(fp_bad.clone()))])
+                .unwrap();
+        assert!(matches!(
+            &subtree_err_outcomes[0].1,
+            UnifiedAntigravityStepOutcome::Failed(Some(msg), _)
+                if msg.contains("无法探测 Antigravity 会话锁")
+        ));
+        drop(desc_lock_file);
+        fs::remove_file(root.join("presence").join(format!("{orphan_desc}.lock"))).unwrap();
+        fs::remove_file(root.join("presence").join(format!("{orphan_bad}.lock"))).unwrap();
+
+        // Multi-hop missing ancestor (`missing_grandparent` -> `missing_parent` -> `orphan_bad` without `root_id`):
+        // lock probe error on `presence/<missing_grandparent>.lock` excludes from preview and reports `Failed` in execute.
+        let cands_with_desc = preview_unified_cleanup_candidates(&paths).unwrap();
+        assert_eq!(cands_with_desc.len(), 1);
+        let fp_subtree = cands_with_desc[0].fingerprint.clone().unwrap();
+        std::os::unix::fs::symlink(
+            &dummy,
+            root.join("presence")
+                .join(format!("{missing_grandparent}.lock")),
+        )
+        .unwrap();
+        assert!(preview_unified_cleanup_candidates(&paths)
+            .unwrap()
+            .is_empty());
+        let anc_err_outcomes =
+            execute_unified_cleanup_targets(&paths, &[(orphan_bad.clone(), Some(fp_subtree))])
+                .unwrap();
+        assert!(matches!(
+            &anc_err_outcomes[0].1,
+            UnifiedAntigravityStepOutcome::Failed(Some(msg), _)
+                if msg.contains("无法探测 Antigravity 会话锁")
+        ));
+        assert!(root
+            .join("conversations")
+            .join(format!("{orphan_bad}.db"))
+            .exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unhydrated_live_delete_guards_presence_lock_before_and_after_ok_rpc() {
+        use std::os::unix::io::AsRawFd;
+
+        let root = env::temp_dir().join(format!(
+            "agenthub-ag-unhydrated-lock-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let root_id = uuid::Uuid::new_v4().to_string();
+        let sub_id = uuid::Uuid::new_v4().to_string();
+        for d in ["conversations", "brain", "presence"] {
+            fs::create_dir_all(root.join(d)).unwrap();
+        }
+        for cid in [&root_id, &sub_id] {
+            Connection::open(root.join("conversations").join(format!("{cid}.db")))
+                .unwrap()
+                .execute_batch("CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER); INSERT INTO steps VALUES (0, 15, 3);")
+                .unwrap();
+            fs::create_dir_all(root.join("brain").join(cid)).unwrap();
+        }
+        Connection::open(root.join("conversation_summaries.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, step_count INTEGER, last_modified_time TEXT, workspace_uris TEXT, parent_conversation_id TEXT, nesting_depth INTEGER);
+                 INSERT INTO conversation_summaries VALUES ('{root_id}', 'Root', 'p', 1, '2026-11-26T00:00:00Z', '', '', 0);
+                 INSERT INTO conversation_summaries VALUES ('{sub_id}', 'Unhydrated Sub', 'p', 1, '2026-11-26T00:00:00Z', '', '{root_id}', 1);"
+            ))
+            .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let delete_calls = Arc::new(Mutex::new(Vec::<String>::new()));
+        // 0 = normal, 1 = acquire flock on sub_id during DeleteCascadeTrajectory 200 OK, 2 = create symlink lock on sub_id during 200 OK
+        let mid_rpc_hook = Arc::new(Mutex::new((0u8, Option::<fs::File>::None)));
+
+        let s_shutdown = shutdown.clone();
+        let s_calls = delete_calls.clone();
+        let s_hook = mid_rpc_hook.clone();
+        let s_root_dir = root.clone();
+        let s_root_id = root_id.clone();
+        let s_sub_id = sub_id.clone();
+        let handle = std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                if s_shutdown.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let mut stream = stream;
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut len = 0usize;
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = h.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-length") {
+                            len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut body = vec![0u8; len];
+                let _ = reader.read_exact(&mut body);
+                let json_body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let resp = if req_line.contains("GetAllCascadeTrajectories") {
+                    // Only root_id is hydrated in live runtime; sub_id is `!in_live`.
+                    json!({
+                        "trajectorySummaries": {
+                            (s_root_id.clone()): {
+                                "summary": "Root",
+                                "stepCount": 1,
+                                "status": "CASCADE_RUN_STATUS_IDLE"
+                            }
+                        }
+                    })
+                } else if req_line.contains("DeleteCascadeTrajectory") {
+                    if let Some(cid) = json_body["cascadeId"].as_str() {
+                        s_calls.lock().unwrap().push(cid.to_owned());
+                        if cid == s_sub_id {
+                            let mut hook = s_hook.lock().unwrap();
+                            let lock_path =
+                                s_root_dir.join("presence").join(format!("{s_sub_id}.lock"));
+                            if hook.0 == 1 {
+                                let f = fs::OpenOptions::new()
+                                    .read(true)
+                                    .write(true)
+                                    .create(true)
+                                    .truncate(false)
+                                    .open(&lock_path)
+                                    .unwrap();
+                                assert_eq!(
+                                    unsafe {
+                                        libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+                                    },
+                                    0
+                                );
+                                hook.1 = Some(f);
+                            } else if hook.0 == 2 {
+                                let dummy = s_root_dir.join("dummy-target");
+                                fs::write(&dummy, b"").unwrap();
+                                let _ = fs::remove_file(&lock_path);
+                                std::os::unix::fs::symlink(&dummy, &lock_path).unwrap();
+                            }
+                        }
+                    }
+                    json!({})
+                } else {
+                    json!({})
+                };
+                let bytes = serde_json::to_vec(&resp).unwrap();
+                let header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = stream.write_all(header.as_bytes());
+                let _ = stream.write_all(&bytes);
+            }
+        });
+
+        let paths = AntigravityPaths::with_fixed_rpc(root.clone(), port, "tok_unhydrated");
+        let sub_lock_path = root.join("presence").join(format!("{sub_id}.lock"));
+
+        // 1. Pre-RPC held flock on `!in_live` sub_id stops BEFORE calling DeleteCascadeTrajectory and preserves disk files.
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&sub_lock_path)
+            .unwrap();
+        assert_eq!(
+            unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+            0
+        );
+        let pre_locked = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(pre_locked.status, "failed");
+        assert!(delete_calls.lock().unwrap().is_empty());
+        assert!(!pre_locked.residuals.is_empty());
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
+        drop(held);
+        fs::remove_file(&sub_lock_path).unwrap();
+
+        // 2. Pre-RPC lock probe error (symlink) stops BEFORE calling DeleteCascadeTrajectory and preserves disk files.
+        let dummy = root.join("dummy-pre");
+        fs::write(&dummy, b"").unwrap();
+        std::os::unix::fs::symlink(&dummy, &sub_lock_path).unwrap();
+        let pre_err = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(pre_err.status, "failed");
+        assert!(delete_calls.lock().unwrap().is_empty());
+        assert!(pre_err
+            .residuals
+            .iter()
+            .any(|r| r.contains("无法探测 Antigravity 会话锁")));
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        fs::remove_file(&sub_lock_path).unwrap();
+
+        // 3. Mid-RPC lock acquisition when DeleteCascadeTrajectory returns 200 OK stops before disk deletion!
+        mid_rpc_hook.lock().unwrap().0 = 1;
+        let post_locked = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(post_locked.status, "failed");
+        assert_eq!(*delete_calls.lock().unwrap(), vec![sub_id.clone()]);
+        assert!(!post_locked.residuals.is_empty());
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        assert!(root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
+        *mid_rpc_hook.lock().unwrap() = (0, None);
+        fs::remove_file(&sub_lock_path).unwrap();
+        delete_calls.lock().unwrap().clear();
+
+        // 4. Mid-RPC lock probe error when DeleteCascadeTrajectory returns 200 OK also stops before disk deletion!
+        mid_rpc_hook.lock().unwrap().0 = 2;
+        let post_err = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(post_err.status, "failed");
+        assert_eq!(*delete_calls.lock().unwrap(), vec![sub_id.clone()]);
+        assert!(post_err
+            .residuals
+            .iter()
+            .any(|r| r.contains("无法探测 Antigravity 会话锁")));
+        assert!(root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        *mid_rpc_hook.lock().unwrap() = (0, None);
+        fs::remove_file(&sub_lock_path).unwrap();
+        delete_calls.lock().unwrap().clear();
+
+        // 5. Once unlocked cleanly, both sub_id and root_id delete cleanly.
+        let clean = execute_batch_item(
+            &paths,
+            &root_id,
+            SessionOperation::Delete,
+            std::slice::from_ref(&sub_id),
+            true,
+        )
+        .unwrap();
+        assert_eq!(clean.status, "succeeded");
+        assert!(clean.residuals.is_empty());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{sub_id}.db"))
+            .exists());
+        assert!(!root
+            .join("conversations")
+            .join(format!("{root_id}.db"))
+            .exists());
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = TcpStream::connect(("127.0.0.1", port));
+        let _ = handle.join();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_db_only_detail_hits_history_cache_across_wal_ctime_changes_and_invalidates_on_wal_write(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = env::temp_dir().join(format!(
+            "agenthub-ag-wal-detail-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let cid = uuid::Uuid::new_v4().to_string();
+        fs::create_dir_all(root.join("conversations")).unwrap();
+        let db_path = root.join("conversations").join(format!("{cid}.db"));
+        let wal_path = crate::file_stamp::wal_sidecar_path(&db_path);
+
+        let user1 = pb_len_field(
+            19,
+            &pb_len_field(2, "<USER_REQUEST>\n首轮问题\n</USER_REQUEST>".as_bytes()),
+        );
+        let reply1 = pb_len_field(20, &pb_len_field(8, "首轮回复".as_bytes()));
+
+        // Keep `writer` open with `SQLITE_CONFIG_PCACHE` / WAL mode uncheckpointed so `{cid}.db-wal` stays live on disk.
+        let writer = Connection::open(&db_path).unwrap();
+        writer
+            .execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 PRAGMA wal_autocheckpoint = 0;
+                 CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, status INTEGER, step_payload BLOB);",
+            )
+            .unwrap();
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (0, 14, 3, ?1), (1, 15, 3, ?2)",
+                params![user1, reply1],
+            )
+            .unwrap();
+        assert!(wal_path.is_file(), "uncheckpointed WAL sidecar must exist");
+        fs::set_permissions(&wal_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        Connection::open(root.join("conversation_summaries.db"))
+            .unwrap()
+            .execute_batch(&format!(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, step_count INTEGER, last_modified_time TEXT, workspace_uris TEXT);
+                 INSERT INTO conversation_summaries VALUES ('{cid}', 'WAL Offline DB', '首轮回复', 2, '2026-11-27T00:00:00Z', '');"
+            ))
+            .unwrap();
+
+        let offline = AntigravityPaths::offline(root.clone());
+        let cache_key = offline.brain_dir().join(&cid).join("offline-history");
+        let req = ProviderDetailRequest {
+            session_key: cid.clone(),
+            limit: Some(20),
+            ..Default::default()
+        };
+
+        let d1 = session_detail(&offline, &req).unwrap();
+        assert!(d1
+            .events
+            .iter()
+            .any(|e| e.kind == "assistant_message" && e.text.as_deref() == Some("首轮回复")));
+        let cached_1 = crate::provider_sessions::HISTORY_CACHE
+            .peek_arc(&cache_key)
+            .expect("offline .db-only detail must populate HISTORY_CACHE");
+
+        // Touch `-wal` metadata (`chmod`) so `ctime` advances without changing `len`, `mtime`, or WAL bytes.
+        let full_before = crate::file_stamp::FileStamp::sqlite_pair(&db_path).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        fs::set_permissions(&wal_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let full_after = crate::file_stamp::FileStamp::sqlite_pair(&db_path).unwrap();
+        assert_ne!(
+            full_before, full_after,
+            "`chmod` on `-wal` must advance full FileStamp ctime"
+        );
+
+        let d2 = session_detail(&offline, &req).unwrap();
+        assert_eq!(d2.events.len(), d1.events.len());
+        let cached_2 = crate::provider_sessions::HISTORY_CACHE
+            .peek_arc(&cache_key)
+            .expect("HISTORY_CACHE entry must remain populated");
+        assert!(
+            Arc::ptr_eq(&cached_1, &cached_2),
+            "consecutive offline .db-only detail reads must hit HISTORY_CACHE across `-wal` ctime-only changes"
+        );
+
+        // Appending a real WAL transaction invalidates `HISTORY_CACHE` and surfaces the new turn.
+        let user2 = pb_len_field(
+            19,
+            &pb_len_field(2, "<USER_REQUEST>\n次轮追问\n</USER_REQUEST>".as_bytes()),
+        );
+        let reply2 = pb_len_field(20, &pb_len_field(8, "次轮新回复".as_bytes()));
+        writer
+            .execute(
+                "INSERT INTO steps VALUES (2, 14, 3, ?1), (3, 15, 3, ?2)",
+                params![user2, reply2],
+            )
+            .unwrap();
+
+        let d3 = session_detail(&offline, &req).unwrap();
+        assert!(d3
+            .events
+            .iter()
+            .any(|e| e.kind == "assistant_message" && e.text.as_deref() == Some("次轮新回复")));
+        let cached_3 = crate::provider_sessions::HISTORY_CACHE
+            .peek_arc(&cache_key)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&cached_1, &cached_3));
+
+        drop(writer);
         fs::remove_dir_all(root).unwrap();
     }
 }

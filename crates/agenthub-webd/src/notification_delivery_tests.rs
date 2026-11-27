@@ -1050,7 +1050,6 @@ async fn a_successful_bark_retry_updates_the_existing_business_event() {
     assert_eq!(count, 1);
     let payload: Value = serde_json::from_str(&payload).unwrap();
     assert_eq!(payload["bark"]["sent"], true);
-    assert!(payload.get("gotify").is_none());
     assert!(!payload.to_string().contains(TOKEN));
 }
 
@@ -1887,35 +1886,6 @@ async fn a_real_pending_retry_contains_no_token_or_plaintext_message_in_the_data
                 .any(|window| window == secret.as_bytes()));
         }
     }
-}
-
-#[tokio::test]
-async fn retired_gotify_rpc_is_unavailable_and_cannot_enqueue() {
-    let fixture = Fixture::new().await;
-    let state = crate::state::AppState::new(fixture.config.clone(), fixture.db.clone());
-    let error = crate::api::rpc_dispatch::rpc_dispatch(state, "probe.gotifyTest".into(), json!({}))
-        .await
-        .unwrap_err();
-    assert_eq!(error.message, "不支持的远程操作");
-    assert_eq!(fixture.bark.count(), 0);
-    assert_eq!(
-        fixture
-            .connection()
-            .query_row("SELECT count(*) FROM jobs", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        fixture
-            .connection()
-            .query_row(
-                "SELECT count(*) FROM probe_notification_deliveries",
-                [],
-                |row| row.get::<_, i64>(0)
-            )
-            .unwrap(),
-        0
-    );
 }
 
 fn ci_event(fixture: &Fixture) -> agenthub_core::github_ci::Event {

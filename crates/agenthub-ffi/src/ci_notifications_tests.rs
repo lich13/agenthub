@@ -300,3 +300,82 @@ fn bot_toggle_same_second_keeps_only_the_observed_attempt_with_a_current_reposit
         assert!(observer.observe(0, &state).is_empty());
     }
 }
+
+#[test]
+fn stale_idle_snapshot_on_app_open_notifies_only_subsequent_completed_run() {
+    let mut observer = Observer::default();
+    let idle_time = 1_800_000_000_000_i64;
+    let mut state = Snapshot {
+        account: Some(Account {
+            id: 1,
+            login: "fixture".into(),
+        }),
+        enabled: true,
+        scanned_repository_ids: BTreeSet::from([2]),
+        baseline_ms: idle_time - 60_000,
+        last_scan_ms: idle_time,
+        repository_baselines_ms: BTreeMap::from([(2, idle_time - 60_000)]),
+        repository_observed_ms: BTreeMap::from([(2, idle_time)]),
+        runs: vec![run(1, "completed", Some("success"), 1)],
+        ..Default::default()
+    };
+    // App opens 5 minutes after the last state write because idle polls skipped rewriting unchanged state.
+    assert!(observer.observe(0, &state).is_empty());
+    assert!(observer.observe(0, &state).is_empty());
+
+    // A new workflow run completes later and advances last_scan_ms / repository_observed_ms.
+    let finish_ms = idle_time + 330_000;
+    let mut newly_completed = run(3, "completed", Some("failure"), 1);
+    newly_completed.updated_at = jiff::Timestamp::from_millisecond(finish_ms)
+        .unwrap()
+        .to_string();
+    state.runs.insert(0, newly_completed);
+    state.repository_observed_ms.insert(2, finish_ms);
+    state.last_scan_ms = finish_ms;
+
+    let events = observer.observe(0, &state);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].run.id, 3);
+    assert!(observer.observe(0, &state).is_empty());
+}
+
+#[test]
+fn observed_in_progress_run_finishing_after_unchanged_polls_still_notifies() {
+    let mut observer = Observer::default();
+    let start_ms = 1_800_000_000_000_i64;
+    let mut in_flight = run(2, "in_progress", None, 1);
+    in_flight.updated_at = jiff::Timestamp::from_millisecond(start_ms)
+        .unwrap()
+        .to_string();
+    let mut state = Snapshot {
+        account: Some(Account {
+            id: 1,
+            login: "fixture".into(),
+        }),
+        enabled: true,
+        scanned_repository_ids: BTreeSet::from([2]),
+        baseline_ms: start_ms - 10_000,
+        last_scan_ms: start_ms,
+        repository_baselines_ms: BTreeMap::from([(2, start_ms - 10_000)]),
+        repository_observed_ms: BTreeMap::from([(2, start_ms)]),
+        runs: vec![in_flight],
+        ..Default::default()
+    };
+    assert!(observer.observe(0, &state).is_empty());
+    // Unchanged in-progress polls keep last_scan_ms untouched.
+    assert!(observer.observe(0, &state).is_empty());
+
+    let done_ms = start_ms + 45_000;
+    state.runs[0].status = "completed".into();
+    state.runs[0].conclusion = Some("success".into());
+    state.runs[0].updated_at = jiff::Timestamp::from_millisecond(done_ms)
+        .unwrap()
+        .to_string();
+    state.repository_observed_ms.insert(2, done_ms);
+    state.last_scan_ms = done_ms;
+
+    let events = observer.observe(0, &state);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].run.id, 2);
+    assert!(observer.observe(0, &state).is_empty());
+}

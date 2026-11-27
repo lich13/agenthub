@@ -95,7 +95,7 @@ fn platform_paths_cover_linux_and_macos() {
         linux.daemon_binary(),
         PathBuf::from("/usr/local/bin/agenthub-webd")
     );
-    let macos = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &mac_home);
+    let macos = PlatformPaths::macos(&mac_home);
     assert_eq!(
         macos.data_dir,
         mac_home.join("Library/Application Support/AgentHub")
@@ -120,8 +120,13 @@ async fn probe_status_is_builtin_and_does_not_require_legacy_cli() {
     let root = temp_dir("agenthub-probe-status");
     let config = sandboxed_config(&root);
     seed_codex_logs_db(&config.codex.home.join("logs_2.sqlite"), &[]);
+    let db = agenthub_core::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-        .status()
+        .status_with_db(&db, false)
         .await
         .unwrap();
 
@@ -152,8 +157,13 @@ async fn probe_status_exposes_hook_and_bark_config_without_device_key() {
     config.probe.notifications.notify_reply_needed = false;
     config.probe.notifications.notify_recoverable = true;
     config.probe.notifications.server_url = "https://api.day.app/custom".to_string();
+    let db = agenthub_core::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
     let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-        .status()
+        .status_with_db(&db, false)
         .await
         .unwrap();
     let status_json = serde_json::to_value(&status).unwrap();
@@ -207,7 +217,12 @@ async fn probe_status_and_hooks_expose_builtin_runtime_state() {
     config.probe.notifications.enabled = true;
     let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
 
-    let status = runtime.status().await.unwrap();
+    let db = agenthub_core::db::PanelDb::open_with_secret_box(
+        ":memory:",
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let status = runtime.status_with_db(&db, false).await.unwrap();
     assert_eq!(status.lifecycle_status, "managed");
     assert_eq!(status.doctor_status, "ready");
     assert_eq!(status.service_name, "agenthub-webd");
@@ -224,7 +239,7 @@ fn macos_probe_hook_command_uses_launchd_paths_and_quotes_application_support() 
     let home = temp_dir("agenthub-macos-hook-home");
     fs::create_dir_all(&home).unwrap();
     let config = Config::for_platform_kind_with_home(PlatformKind::Macos, &home);
-    let paths = PlatformPaths::for_kind_with_home(PlatformKind::Macos, &home);
+    let paths = PlatformPaths::macos(&home);
     let runtime = ProbeRuntime::new(config, paths);
 
     let hook = runtime.hook_status();
@@ -266,7 +281,14 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     let hook = ProbeRuntime::build_event_for(
         &config,
         kind,
-        ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+        ProbeEventInput::hook_stop_with_context(
+            Some("thread-a"),
+            Some("turn-1"),
+            None,
+            None,
+            None,
+            "hook-stop",
+        ),
     );
     assert_eq!(hook.kind, "hook-stop");
     assert_eq!(hook.thread_id.as_deref(), Some("thread-a"));
@@ -287,7 +309,14 @@ fn probe_event_model_dedupes_hook_stop_and_completion_without_desktop_control() 
     let duplicate_hook = ProbeRuntime::build_event_for(
         &config,
         kind,
-        ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-1"), "hook-stop"),
+        ProbeEventInput::hook_stop_with_context(
+            Some("thread-a"),
+            Some("turn-1"),
+            None,
+            None,
+            None,
+            "hook-stop",
+        ),
     );
     assert_eq!(hook.dedupe_key, duplicate_hook.dedupe_key);
 

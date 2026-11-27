@@ -1276,34 +1276,7 @@ impl Parser {
             self.execution_activity(record, position, true);
         }
         if matches!(subtype, "interrupted" | "cancelled" | "canceled") {
-            self.clear_final_answer();
-            for prompt in self.parsed.prompts.values_mut() {
-                if Some(&prompt.turn_id) == self.turn.as_ref() {
-                    prompt.cancelled = true;
-                }
-            }
-            self.parsed.turn_open = false;
-            if let Some(ts) = millis(field(record, "timestamp")) {
-                self.parsed.last_terminal_at =
-                    Some(self.parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
-            }
-            self.parsed
-                .native_events
-                .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
-            self.turn = None;
-            self.last_stop_reason.clear();
-            self.last_assistant_events.clear();
-            self.last_assistant_text = None;
-            self.questions.clear();
-            if !self.summary_only {
-                let events = Arc::make_mut(&mut self.parsed.events);
-                for call in &self.pending {
-                    if let Some(&index) = self.calls.get(call) {
-                        Arc::make_mut(&mut events[index]).status = Some("cancelled".into());
-                    }
-                }
-            }
-            self.pending.clear();
+            self.cancel_current_turn(record);
         }
         if subtype == "init" {
             // Identity/cwd/version were extracted above. Startup
@@ -1436,6 +1409,36 @@ impl Parser {
                 Arc::make_mut(event).assistant_phase = None;
             }
         }
+    }
+    fn cancel_current_turn(&mut self, record: &Value) {
+        self.clear_final_answer();
+        for prompt in self.parsed.prompts.values_mut() {
+            if Some(&prompt.turn_id) == self.turn.as_ref() {
+                prompt.cancelled = true;
+            }
+        }
+        self.parsed.turn_open = false;
+        if let Some(ts) = millis(field(record, "timestamp")) {
+            self.parsed.last_terminal_at =
+                Some(self.parsed.last_terminal_at.map_or(ts, |prev| prev.max(ts)));
+        }
+        self.parsed
+            .native_events
+            .retain(|event| Some(&event.turn_id) != self.turn.as_ref());
+        self.turn = None;
+        self.last_stop_reason.clear();
+        self.last_assistant_events.clear();
+        self.last_assistant_text = None;
+        self.questions.clear();
+        if !self.summary_only {
+            let events = Arc::make_mut(&mut self.parsed.events);
+            for call in &self.pending {
+                if let Some(&index) = self.calls.get(call) {
+                    Arc::make_mut(&mut events[index]).status = Some("cancelled".into());
+                }
+            }
+        }
+        self.pending.clear();
     }
     fn settle_permission(&mut self, call: &str) {
         if self.summary_only {

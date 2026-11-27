@@ -7,7 +7,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "2.1.40"
+version = "2.1.41"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/lich13/agenthub"
@@ -17,7 +17,7 @@ rust-version = "1.99"
 libc = "0.2"
 anyhow = "1.0"
 aes-gcm = "0.10"
-axum = { version = "0.7", features = ["macros"] }
+axum = "0.7"
 base64 = "0.22"
 jiff = "0.2"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -37,7 +37,7 @@ toml_edit = "0.22.27"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2.5.9"
-uuid = { version = "1.8", features = ["v4", "serde"] }
+uuid = { version = "1.8", features = ["v4"] }
 walkdir = "2.5"
 zeroize = "1"
 

@@ -170,7 +170,7 @@ mod tests {
             )
             .unwrap();
         std::fs::create_dir_all(&config.codex.workspace).unwrap();
-        let mut platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, temp.path());
+        let mut platform = PlatformPaths::macos(temp.path());
         platform.kind = kind;
         std::fs::create_dir_all(platform.config_file.parent().unwrap()).unwrap();
         std::fs::write(&platform.config_file, config.to_toml_string().unwrap()).unwrap();

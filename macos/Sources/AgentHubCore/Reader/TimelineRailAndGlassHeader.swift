@@ -568,7 +568,7 @@ struct TimelineHistoryStatusView: View {
     }
 }
 
-// MARK: - Exact --g 88% + CIGaussianBlur(radius: 10) Stage Header & .inline-rename Bar
+// MARK: - Stage Header & Inline Rename Bar
 
 struct BackdropGaussianBlurView: NSViewRepresentable {
     var radius: Double

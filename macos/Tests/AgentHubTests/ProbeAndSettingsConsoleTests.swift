@@ -362,6 +362,202 @@ final class ProbeAndSettingsConsoleTests: XCTestCase {
         XCTAssertEqual(manager.loadedCount, 0, "Stale session attachment completion must not populate loadedImages")
     }
 
+    @MainActor
+    func testAttachmentViewportManagerMarksFailuresSkipsDuplicateLoadsAndRetriesAfterEviction() async throws {
+        let oneByOnePngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        let suite = "com.lich13.agenthub.attfail.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        struct TestRPCError: Error {}
+        let mock = MockRuntimeTransport { command, args in
+            if command == "sessions.attachmentRead" {
+                if args.contains("att-bad-b64") {
+                    return Data(#"{"mimeType":"image/png","base64":"%%%not-base64%%%"}"#.utf8)
+                }
+                throw TestRPCError()
+            }
+            return Data("{}".utf8)
+        }
+        let store = RuntimeConnectionStore(transport: mock, defaults: defaults)
+        let coord = ConversationTableCoordinator(store: store, disclosureStore: ActivityDisclosureStore())
+        coord.sessionScopeKey = "local::codex::s1"
+        let manager = coord.attachmentViewport
+        manager.resetScope("local::codex::s1")
+
+        let msg = UserMessageContent(
+            id: "u-1",
+            text: "check images",
+            attachments: [
+                UserAttachment(id: "att-rpc-err", name: "err.png", kind: "image", path: nil, reason: nil),
+                UserAttachment(id: "att-bad-b64", name: "corrupt.png", kind: "image", path: nil, reason: nil),
+            ],
+            contextBlocks: nil
+        )
+        let row = ConversationRowItem(
+            id: "r-u-1",
+            timelineId: "u-1",
+            kind: .user(message: msg, rawText: msg.text, attachmentsAsNamesOnly: false)
+        )
+        let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("TestAttachmentFailCell"))
+        cell.frame = NSRect(x: 0, y: 0, width: 860, height: 220)
+        cell.configure(item: row, leadingInset: 46, trailingInset: 46, contentWidth: 768, highlighted: false, coordinator: coord)
+
+        func buttonTitles(_ v: NSView) -> [String] {
+            var out: [String] = []
+            if let btn = v as? NSButton, !btn.title.isEmpty { out.append(btn.title) }
+            for sub in v.subviews { out.append(contentsOf: buttonTitles(sub)) }
+            return out
+        }
+        XCTAssertEqual(buttonTitles(cell), ["图片", "图片"])
+
+        let keyErr = "local::codex::s1:u-1:att-rpc-err"
+        let keyBad = "local::codex::s1:u-1:att-bad-b64"
+        var updatedKeys: [String] = []
+        var callbackInFlightCounts: [Int] = []
+        let failedDone = expectation(description: "Both failing attachments notify row update")
+        failedDone.expectedFulfillmentCount = 2
+        manager.onImageUpdated = { key in
+            updatedKeys.append(key)
+            callbackInFlightCounts.append(manager.inFlightCount)
+            failedDone.fulfill()
+        }
+
+        manager.ensureLoaded(
+            key: keyErr,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s1", messageId: "u-1", attachmentId: "att-rpc-err"),
+            store: store
+        )
+        manager.ensureLoaded(
+            key: keyBad,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s1", messageId: "u-1", attachmentId: "att-bad-b64"),
+            store: store
+        )
+        await fulfillment(of: [failedDone], timeout: 5)
+        XCTAssertTrue(manager.hasFailed(for: keyErr))
+        XCTAssertTrue(manager.hasFailed(for: keyBad))
+        XCTAssertEqual(Set(updatedKeys), [keyErr, keyBad])
+        XCTAssertEqual(callbackInFlightCounts.last, 0)
+
+        // Re-configuring the cached cell with unchanged row item must rebuild via LoadedAttachmentState.failedLowMask.
+        cell.configure(item: row, leadingInset: 46, trailingInset: 46, contentWidth: 768, highlighted: false, coordinator: coord)
+        XCTAssertEqual(buttonTitles(cell), ["图片不可用", "图片不可用"])
+
+        // Repeated ensureLoaded while in viewport must NOT re-issue RPC requests.
+        XCTAssertEqual(manager.inFlightCount, 0)
+        let callsAfterFirstFail = mock.recordedCalls.count
+        manager.ensureLoaded(
+            key: keyErr,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s1", messageId: "u-1", attachmentId: "att-rpc-err"),
+            store: store
+        )
+        XCTAssertEqual(manager.inFlightCount, 0)
+        await Task.yield()
+        XCTAssertEqual(mock.recordedCalls.count, callsAfterFirstFail)
+
+        // Evicting outside viewport clears failure record so scrolling back retries and succeeds.
+        manager.evictOutside(visibleKeys: [keyBad])
+        XCTAssertFalse(manager.hasFailed(for: keyErr))
+        XCTAssertTrue(manager.hasFailed(for: keyBad))
+
+        mock.setHandler { command, _ in
+            if command == "sessions.attachmentRead" {
+                return Data(#"{"mimeType":"image/png","base64":"\#(oneByOnePngBase64)"}"#.utf8)
+            }
+            return Data("{}".utf8)
+        }
+        let retryDone = expectation(description: "Evicted attachment retries and loads")
+        manager.onImageUpdated = { key in
+            if key == keyErr { retryDone.fulfill() }
+        }
+        manager.ensureLoaded(
+            key: keyErr,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s1", messageId: "u-1", attachmentId: "att-rpc-err"),
+            store: store
+        )
+        await fulfillment(of: [retryDone], timeout: 5)
+        XCTAssertFalse(manager.hasFailed(for: keyErr))
+        XCTAssertNotNil(manager.image(for: keyErr))
+        cell.configure(item: row, leadingInset: 46, trailingInset: 46, contentWidth: 768, highlighted: false, coordinator: coord)
+        XCTAssertEqual(buttonTitles(cell), ["图片不可用"])
+
+        // Cancelled / stale-scope failing request must NOT mark failed.
+        mock.setHandler { command, _ in
+            if command == "sessions.attachmentRead" {
+                try await Task.sleep(nanoseconds: 80_000_000)
+                throw TestRPCError()
+            }
+            return Data("{}".utf8)
+        }
+        let keyStale = "local::codex::s1:u-1:att-stale"
+        manager.ensureLoaded(
+            key: keyStale,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s1", messageId: "u-1", attachmentId: "att-stale"),
+            store: store
+        )
+        manager.resetScope("local::codex::s2")
+        try await Task.sleep(nanoseconds: 130_000_000)
+        XCTAssertEqual(manager.failedCount, 0)
+        XCTAssertFalse(manager.hasFailed(for: keyStale))
+
+        // Overflow (>= 64) failed attachment state & same-scope jump to image-free window when loadedCount == 0.
+        mock.setHandler { command, _ in
+            if command == "sessions.attachmentRead" {
+                throw TestRPCError()
+            }
+            return Data("{}".utf8)
+        }
+        let table = NSTableView(frame: NSRect(x: 0, y: 0, width: 860, height: 480))
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("MainConversationColumn"))
+        table.addTableColumn(col)
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 860, height: 480))
+        scroll.documentView = table
+        table.dataSource = coord
+        table.delegate = coord
+        coord.scrollView = scroll
+        coord.tableView = table
+        coord.column = col
+        coord.sessionScopeKey = "local::codex::s2"
+
+        let overflowAtts = (0..<66).map { idx in
+            UserAttachment(id: "att-\(idx)", name: "img-\(idx).png", kind: "image", path: nil, reason: nil)
+        }
+        let overflowMsg = UserMessageContent(id: "u-66", text: "many", attachments: overflowAtts, contextBlocks: nil)
+        let overflowRow = ConversationRowItem(
+            id: "r-u-66",
+            timelineId: "u-66",
+            kind: .user(message: overflowMsg, rawText: "many", attachmentsAsNamesOnly: false)
+        )
+        coord.updateRowsPreservingAnchor([overflowRow], forceScrollToBottom: true)
+
+        let overflowFailKey = "local::codex::s2:u-66:att-65"
+        let overflowDone = expectation(description: "Overflow index 65 attachment failure recorded")
+        manager.onImageUpdated = { key in
+            if key == overflowFailKey { overflowDone.fulfill() }
+        }
+        manager.ensureLoaded(
+            key: overflowFailKey,
+            request: SessionAttachmentRequest(provider: .codex, sessionKey: "s2", messageId: "u-66", attachmentId: "att-65"),
+            store: store
+        )
+        await fulfillment(of: [overflowDone], timeout: 5)
+        XCTAssertEqual(coord.loadedAttachmentState(for: overflowRow).failedOverflowIndices, [65])
+        XCTAssertEqual(manager.loadedCount, 0)
+        XCTAssertGreaterThan(manager.failedCount, 0)
+
+        // Replacing rows within the SAME sessionScopeKey with an image-free window must evict failedKeys even when loadedCount == 0.
+        let textOnlyMsg = UserMessageContent(id: "u-plain", text: "no images", attachments: [], contextBlocks: nil)
+        let textOnlyRow = ConversationRowItem(
+            id: "r-u-plain",
+            timelineId: "u-plain",
+            kind: .user(message: textOnlyMsg, rawText: "no images", attachmentsAsNamesOnly: false)
+        )
+        coord.updateRowsPreservingAnchor([textOnlyRow], preferAutoFollowBottom: false, forceScrollToBottom: false)
+        coord.refreshViewportAttachmentsAndTimeline()
+        XCTAssertEqual(manager.failedCount, 0)
+        XCTAssertFalse(manager.hasFailed(for: overflowFailKey))
+    }
+
     func testScopedSavePreservesOtherPanelsUncommittedEdits() throws {
         let base = ProbeSettingsDraft.from(try ProbeSettingsFixture.settings())
         var loaded = base

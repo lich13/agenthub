@@ -371,7 +371,7 @@ struct UnifiedProviderWorkspaceView: View {
                 } == true
                 let isFastProvider = (model.provider == .claudeCode || model.provider == .grok)
                 let running = latestItem.running
-                    || latestItem.statusChipBadge == "等待处理"
+                    || latestItem.statusChipBadge == SessionStatusLabels.waiting
                     || hasActiveSubagents
                 let intervalNs: UInt64 = if isFastProvider {
                     running ? 1_000_000_000 : 2_000_000_000
@@ -752,7 +752,7 @@ struct UnifiedProviderWorkspaceView: View {
                             }
                         }
 
-                        // .subagent-summary bar directly below glass header (DESIGN.md:113, styles.css:790-794)
+                        // Subagent summary bar directly below glass header (DESIGN.md:113)
                         if showSubagentSummaryBar {
                             SubagentSummaryBarView(
                                 provider: model.provider,
@@ -1110,7 +1110,7 @@ struct UnifiedProviderWorkspaceView: View {
             },
             onToggleArchive: model.supportsArchive ? {
                 if model.provider == .codex && !isHeaderMenu {
-                    // Codex sidebar row menu uses prepareSingle preview confirmation (ChatWorkspace.tsx:318)
+                    // Codex sidebar row menu uses prepareSingle preview confirmation
                     let targetPartition: SessionSelectionPartition = item.archived ? .archived : .active
                     Task {
                         await model.prepareBatch(

@@ -355,10 +355,6 @@ final class AppKitRunningRingView: NSView {
     nonisolated(unsafe) private var accessibilityToken: NSObjectProtocol?
     nonisolated(unsafe) private var occlusionToken: NSObjectProtocol?
 
-    var isAnimatingForTesting: Bool {
-        arcLayer.animation(forKey: "spin") != nil
-    }
-
     init(size: CGFloat = 13, trackColor: NSColor, accentColor: NSColor) {
         self.size = size
         super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))

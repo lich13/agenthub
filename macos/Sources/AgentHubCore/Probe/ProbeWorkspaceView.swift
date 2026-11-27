@@ -190,7 +190,7 @@ struct ProbeWorkspaceView: View {
                     isReady: statusError == nil,
                     hasError: false,
                     needsRepair: false,
-                    kind: .dshDirect(path: status?.dshSessionsPath ?? "原生日志直连")
+                    kind: .dshDirect(path: status?.dshSessionsPath ?? "")
                 )
             )
         }
@@ -699,16 +699,17 @@ struct ProbeWorkspaceView: View {
                     }
 
                     if activeJobAction == "probe.barkTest", let id = activeJobId {
+                        let sendingNotice = "正在发送，遇到临时故障将自动重试…"
                         let statusText: String = if let job = store.trackedJobs[id] {
                             if job.status == "succeeded" {
                                 "Bark 已受理"
                             } else if job.status == "failed" {
                                 "发送失败，请查看执行记录"
                             } else {
-                                "正在发送，遇到临时故障将自动重试…"
+                                sendingNotice
                             }
                         } else {
-                            "正在发送，遇到临时故障将自动重试…"
+                            sendingNotice
                         }
                         Text(statusText)
                             .font(DesignFonts.body(12))
@@ -955,9 +956,6 @@ struct ProbeWorkspaceView: View {
                 StatusChip("仅限本机", tone: .neutral)
                 StatusChip("远端只读轮询", tone: .info)
                 Spacer(minLength: 8)
-                Text("远端只读")
-                    .font(DesignFonts.mono(11))
-                    .foregroundStyle(palette.textMuted.color)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -971,11 +969,13 @@ struct ProbeWorkspaceView: View {
                 StatusChip("原生直连", tone: .success)
                 StatusChip("无需写入", tone: .neutral)
                 Spacer(minLength: 8)
-                Text(path)
-                    .font(DesignFonts.mono(11))
-                    .foregroundStyle(palette.textMuted.color)
-                    .lineLimit(1)
-                    .help(path)
+                if !path.isEmpty {
+                    Text(path)
+                        .font(DesignFonts.mono(11))
+                        .foregroundStyle(palette.textMuted.color)
+                        .lineLimit(1)
+                        .help(path)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -991,7 +991,7 @@ struct ProbeWorkspaceView: View {
         let combined: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] = {
             var list: [(session: ProbeLiveSession, badge: String, tone: StatusChipTone)] = []
             list.reserveCapacity(replyNeeded.count + recoverable.count + running.count)
-            for item in replyNeeded { list.append((session: item, badge: "待回复", tone: .warning)) }
+            for item in replyNeeded { list.append((session: item, badge: SessionStatusLabels.replyNeeded, tone: .warning)) }
             for item in recoverable { list.append((session: item, badge: "异常", tone: .danger)) }
             for item in running { list.append((session: item, badge: "运行中", tone: .info)) }
             return list
@@ -1005,7 +1005,7 @@ struct ProbeWorkspaceView: View {
             isExpanded: sectionBinding(.live),
             summaryBadges: {
                 StatusChip("运行中 \(running.count)", tone: running.isEmpty ? .neutral : .info)
-                StatusChip("待回复 \(replyNeeded.count)", tone: replyNeeded.isEmpty ? .neutral : .warning)
+                StatusChip("\(SessionStatusLabels.replyNeeded) \(replyNeeded.count)", tone: replyNeeded.isEmpty ? .neutral : .warning)
                 StatusChip("异常 \(recoverable.count)", tone: recoverable.isEmpty ? .neutral : .danger)
             }
         ) {
@@ -1014,11 +1014,7 @@ struct ProbeWorkspaceView: View {
                     .font(DesignFonts.body(12))
                     .foregroundStyle(palette.textMuted.color)
 
-                if top12.isEmpty {
-                    Text("当前所有已启用平台均无运行中、待回复或异常会话")
-                        .font(DesignFonts.body(12))
-                        .foregroundStyle(palette.textMuted.color)
-                } else {
+                if !top12.isEmpty {
                     VStack(spacing: 0) {
                         ForEach(Array(top12.enumerated()), id: \.element.session.uniqueKey) { index, entry in
                             if index > 0 {
@@ -1050,10 +1046,12 @@ struct ProbeWorkspaceView: View {
 
     @ViewBuilder
     private var recentEventsPanel: some View {
+        let hasEventsBody = (eventsError?.isEmpty == false) || !eventsLoaded || !events.isEmpty
         CollapsiblePanelCard(
             title: "最近事件",
             icon: .terminalSquare,
             isExpanded: sectionBinding(.events),
+            hasBody: hasEventsBody,
             summaryBadges: {
                 if eventsError != nil {
                     StatusChip("读取失败", tone: .danger)
@@ -1074,11 +1072,7 @@ struct ProbeWorkspaceView: View {
                 Text(loadingStatus ? "正在读取事件" : "暂无事件数据")
                     .font(DesignFonts.body(12))
                     .foregroundStyle(palette.textMuted.color)
-            } else if events.isEmpty {
-                Text("暂无最近通知与 Hook 事件")
-                    .font(DesignFonts.body(12))
-                    .foregroundStyle(palette.textMuted.color)
-            } else {
+            } else if !events.isEmpty {
                 VStack(spacing: 8) {
                     ForEach(events) { ev in
                         let bark = ProbeFormatting.barkBadge(ev)

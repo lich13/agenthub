@@ -52,13 +52,18 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     private var listFetchSeq: UInt64 = 0
     private var sidebarCacheRevision: UInt64 = 0
 
+    struct FeedbackNotice: Equatable, Sendable {
+        let text: String
+        let isError: Bool
+    }
+
     private struct HubSidebarCache {
         var revision: UInt64 = .max
         var filteredActiveItems: [CrossProviderSessionItem] = []
         var filteredArchivedItems: [CrossProviderSessionItem] = []
         var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
         var archivedWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
-        var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
+        var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>]?
         var visualOrderedActiveKeys: [String] = []
         var visualOrderedArchivedKeys: [String] = []
     }
@@ -101,7 +106,7 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     @Published var selectedCompositeKey: String?
     @Published var renameRequestSeqByKey: [String: Int] = [:]
     @Published var providerErrors: [String] = []
-    @Published var feedbackMessage: String?
+    @Published var feedback: FeedbackNotice?
 
     @Published var partitionedSelection = PartitionedSessionSelectionState(activeScope: "hub-init")
     @Published var batchTargetPartition: SessionSelectionPartition = .active
@@ -124,8 +129,6 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
         let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
         let archGrps = ProjectWorkspaceEngine.buildGroups(items: filtArch)
-        let allScopeItems: [CrossProviderSessionItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
-        let availGrps = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
         let orderedActive = ProjectWorkspaceEngine.visualOrderedKeys(
             groups: activeGrps,
             collapsedKeys: collapsedWorkspaceKeys
@@ -140,7 +143,7 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
             filteredArchivedItems: filtArch,
             activeWorkspaceGroups: activeGrps,
             archivedWorkspaceGroups: archGrps,
-            availableWorkspaceGroups: availGrps,
+            availableWorkspaceGroups: nil,
             visualOrderedActiveKeys: orderedActive,
             visualOrderedArchivedKeys: orderedArch
         )
@@ -165,7 +168,15 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     var availableWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] {
-        refreshedSidebarCache().availableWorkspaceGroups
+        var cached = refreshedSidebarCache()
+        if let groups = cached.availableWorkspaceGroups {
+            return groups
+        }
+        let allScopeItems: [CrossProviderSessionItem] = archivedOpen ? (activeItems + archivedItems) : activeItems
+        let built = ProjectWorkspaceEngine.buildGroups(items: allScopeItems)
+        cached.availableWorkspaceGroups = built
+        sidebarCache = cached
+        return built
     }
 
     var visualOrderedActiveKeys: [String] {
@@ -460,7 +471,10 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
                 sessionKey: entry.item.sessionKey,
                 currentlyArchived: entry.item.archived
             )
-            feedbackMessage = entry.item.archived ? "已恢复线程" : "已归档线程"
+            feedback = FeedbackNotice(
+                text: entry.item.archived ? "已恢复线程" : "已归档线程",
+                isError: false
+            )
             if !entry.item.archived && selectedCompositeKey == entry.compositeKey && !archivedOpen {
                 selectedCompositeKey = nil
             }
@@ -831,10 +845,10 @@ struct UnifiedWorkspaceHubView: View {
                     .lineLimit(2)
             }
 
-            if let fb = hubModel.feedbackMessage, !fb.isEmpty {
-                Text(fb)
+            if let fb = hubModel.feedback, !fb.text.isEmpty {
+                Text(fb.text)
                     .font(DesignFonts.body(11))
-                    .foregroundStyle((fb.contains("无法") || fb.contains("失败") ? palette.errFg : palette.okFg).color)
+                    .foregroundStyle((fb.isError ? palette.errFg : palette.okFg).color)
                     .lineLimit(2)
             }
 
@@ -929,7 +943,7 @@ struct UnifiedWorkspaceHubView: View {
     private func copyWorkspacePath(_ path: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(path, forType: .string)
-        hubModel.feedbackMessage = "已复制工作区路径"
+        hubModel.feedback = UnifiedWorkspaceHubStore.FeedbackNotice(text: "已复制工作区路径", isError: false)
     }
 
     private func hubRowView(
@@ -1048,14 +1062,17 @@ struct UnifiedWorkspaceHubView: View {
             onCopy: { text, msg in
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)
-                hubModel.feedbackMessage = msg
+                hubModel.feedback = UnifiedWorkspaceHubStore.FeedbackNotice(text: msg, isError: false)
             },
             onRevealInFinder: { path in
                 Task {
                     do {
                         try await FileOpenerService.revealPaths([path])
                     } catch {
-                        hubModel.feedbackMessage = "无法在 Finder 中显示，请检查文件是否仍存在"
+                        hubModel.feedback = UnifiedWorkspaceHubStore.FeedbackNotice(
+                            text: "无法在 Finder 中显示，请检查文件是否仍存在",
+                            isError: true
+                        )
                     }
                 }
             },

@@ -1,6 +1,6 @@
 import Foundation
 
-// MARK: - Conversation Block Classification & 60/3 Compaction (conversationViewModel.ts)
+// MARK: - Conversation Block Classification & 60/3 Compaction
 
 enum ConversationViewModel {
     private static let internalPrefixes: [String] = [
@@ -229,7 +229,7 @@ enum ConversationViewModel {
     }
 }
 
-// MARK: - Execution & Process Grouping (executionGroups.ts, processGroups.ts, claudeProcessGroups.ts)
+// MARK: - Execution & Process Grouping
 
 enum ExecutionStatus: String, Equatable, Sendable {
     case running
@@ -815,7 +815,7 @@ enum ExecutionGroupingEngine {
     }
 }
 
-// MARK: - Unified Process Folding (processGroups.ts)
+// MARK: - Unified Process Folding
 
 enum ProcessStep: Equatable, Sendable {
     case thinking(id: String, sourceIds: [String], text: String, running: Bool, turnId: String?)
@@ -1046,7 +1046,7 @@ enum ProcessGroupingEngine {
     }
 }
 
-// MARK: - Claude Turn & Metadata Process Grouping (claudeProcessGroups.ts)
+// MARK: - Claude Turn & Metadata Process Grouping
 
 struct ClaudeMetadataGroup: Equatable, Sendable, Identifiable {
     var id: String

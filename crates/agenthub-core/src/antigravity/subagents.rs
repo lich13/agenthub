@@ -23,10 +23,11 @@ use crate::{
 use super::sessions::{
     attach_storage_size, decode_file_uri, descendant_ids, evaluate_offline_tree_status_with_lock,
     extract_transcript_spawned_subagents, has_conversation_parents_table,
-    has_primary_session_storage, inspect_conv_db_metadata, is_presence_locked_shared,
-    is_subtrajectory, list_summaries_from_source, live_item_status, load_store_auxiliary_index,
-    make_summary_with_status, resolve_target_store_and_endpoint, subagent_states_by_root,
-    valid_cascade_id, AntigravityPaths, LiveRpc,
+    has_primary_session_storage, inspect_conv_db_metadata, is_subtrajectory,
+    list_summaries_from_source, live_item_status, load_store_auxiliary_index,
+    make_summary_with_status, parse_summary_status_and_raw, probe_presence_locked_shared,
+    read_summary_status_cols, resolve_target_store_and_endpoint, subagent_states_by_root,
+    summaries_status_sql_exprs, valid_cascade_id, AntigravityPaths, LiveRpc,
 };
 
 const MAX_SUBAGENT_DEPTH: usize = 32;
@@ -104,7 +105,6 @@ struct SubagentNodeMeta {
     title: Option<String>,
     cwd: String,
     updated_at: Option<String>,
-    sqlite_status: Option<&'static str>,
     sidecar_killed: bool,
     live_item: Option<Value>,
 }
@@ -206,30 +206,7 @@ fn build_store_graph(
                 }
             }
         }
-        let cols: BTreeSet<String> = conn
-            .prepare("PRAGMA table_info(conversation_summaries)")
-            .ok()
-            .and_then(|mut s| {
-                s.query_map([], |r| r.get::<_, String>(1))
-                    .ok()
-                    .map(|it| it.flatten().collect())
-            })
-            .unwrap_or_default();
-        let status_expr = if cols.contains("status") {
-            "COALESCE(status, '')"
-        } else {
-            "''"
-        };
-        let idle_expr = if cols.contains("not_fully_idle") {
-            "not_fully_idle"
-        } else {
-            "0"
-        };
-        let raw_expr = if cols.contains("raw_summary") {
-            "raw_summary"
-        } else {
-            "NULL"
-        };
+        let (cols, status_cols_sql) = summaries_status_sql_exprs(conn);
         let agent_name_expr = if cols.contains("agent_name") {
             "COALESCE(agent_name, '')"
         } else {
@@ -238,11 +215,12 @@ fn build_store_graph(
         let sql = format!(
             "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
              COALESCE(last_modified_time, ''), COALESCE(workspace_uris, ''), \
-             COALESCE(parent_conversation_id, ''), {status_expr}, {idle_expr}, {raw_expr}, {agent_name_expr} \
+             COALESCE(parent_conversation_id, ''), {status_cols_sql}, {agent_name_expr} \
              FROM conversation_summaries"
         );
         if let Ok(mut stmt) = conn.prepare(&sql) {
             if let Ok(rows) = stmt.query_map([], |r| {
+                let (status_str, not_idle, raw_blob) = read_summary_status_cols(r, 6)?;
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -250,11 +228,9 @@ fn build_store_graph(
                     r.get::<_, String>(3)?,
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, super::sessions::ValueOrString>(7)
-                        .map(|v| v.0)
-                        .unwrap_or(false),
-                    r.get::<_, Option<Vec<u8>>>(8).ok().flatten(),
+                    status_str,
+                    not_idle,
+                    raw_blob,
                     r.get::<_, String>(9)?,
                 ))
             }) {
@@ -274,9 +250,8 @@ fn build_store_graph(
                     if uuid::Uuid::parse_str(&cid).is_err() {
                         continue;
                     }
-                    let parsed_raw = raw_blob
-                        .as_deref()
-                        .map(super::sessions::annotations::parse_raw_summary);
+                    let (parsed_raw, st) =
+                        parse_summary_status_and_raw(&status_str, not_idle, raw_blob.as_deref());
                     if !parent.is_empty() {
                         graph.add_edge(parent, cid.clone());
                     } else if let Some(pid) = parsed_raw
@@ -292,17 +267,10 @@ fn build_store_graph(
                     {
                         fallback_root_edges.push((rid.to_owned(), cid.clone()));
                     }
-                    let st = super::sessions::offline_summary_row_status(&status_str, not_idle)
-                        .or_else(|| {
-                            parsed_raw.as_ref().and_then(
-                                super::sessions::annotations::ParsedRawSummary::active_status,
-                            )
-                        });
                     if let Some(s) = st {
                         graph.sqlite_statuses.insert(cid.clone(), s);
                     }
                     let node = graph.nodes.entry(cid.clone()).or_default();
-                    node.sqlite_status = st;
                     if let Some(raw_title) = parsed_raw
                         .as_ref()
                         .and_then(|r| r.annotations.title.as_deref())
@@ -764,7 +732,7 @@ fn ancestor_tree_locked(
     graph: &StoreSubagentGraph,
     start_id: &str,
 ) -> bool {
-    if is_presence_locked_shared(store, start_id) {
+    if probe_presence_locked_shared(store, start_id).unwrap_or(false) {
         return true;
     }
     let mut curr = start_id;
@@ -780,7 +748,7 @@ fn ancestor_tree_locked(
         if !seen.insert(parent) {
             break;
         }
-        if is_presence_locked_shared(store, parent) {
+        if probe_presence_locked_shared(store, parent).unwrap_or(false) {
             return true;
         }
         curr = parent;
@@ -1132,7 +1100,7 @@ fn load_verified_subagent(
         .and_then(|(_, payload)| payload["trajectorySummaries"].as_object())
         .map(subagent_states_by_root)
         .unwrap_or_default();
-    let inherited_lock = is_presence_locked_shared(&store, root_session_key)
+    let inherited_lock = probe_presence_locked_shared(&store, root_session_key).unwrap_or(false)
         || ancestor_tree_locked(&store, &graph, agent_id);
     let agent_activity = child_activity_in_store(
         &store,

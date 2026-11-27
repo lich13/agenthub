@@ -5,7 +5,9 @@ use crate::{
     db::ProbeEvent,
     platform::{PlatformKind, PlatformPaths},
     security::{is_sensitive_output_line, redact_output},
-    services::probe::{aggregate_probe_status_with_db, enrich_probe_status_from_db},
+    services::probe::{
+        aggregate_probe_status_with_db, dedupe_component, enrich_probe_status_from_db,
+    },
 };
 use anyhow::Result;
 use jiff::Timestamp;
@@ -120,16 +122,6 @@ impl ProbeRuntime {
         Self { config, paths }
     }
 
-    pub async fn status(&self) -> Result<ProbeStatus> {
-        self.status_with_options(false).await
-    }
-
-    pub async fn status_with_options(&self, force_refresh: bool) -> Result<ProbeStatus> {
-        let runtime = Self::new(self.config.clone(), self.paths.clone());
-        crate::read_tasks::spawn_blocking(move || runtime.status_blocking(None, force_refresh))
-            .await?
-    }
-
     pub async fn status_with_db(
         &self,
         db: &crate::db::PanelDb,
@@ -138,18 +130,14 @@ impl ProbeRuntime {
         let runtime = Self::new(self.config.clone(), self.paths.clone());
         let db = db.clone();
         crate::read_tasks::spawn_blocking(move || {
-            let mut status = runtime.status_blocking(Some(&db), force_refresh)?;
+            let mut status = runtime.status_blocking(&db, force_refresh)?;
             let _ = enrich_probe_status_from_db(&mut status, &db);
             Ok(status)
         })
         .await?
     }
 
-    fn status_blocking(
-        &self,
-        db: Option<&crate::db::PanelDb>,
-        force_refresh: bool,
-    ) -> Result<ProbeStatus> {
+    fn status_blocking(&self, db: &crate::db::PanelDb, force_refresh: bool) -> Result<ProbeStatus> {
         let resolved = self.resolved_codex_paths();
         let aggregation = aggregate_probe_status_with_db(&self.config, db, force_refresh)?;
         let hook_status = self.hook_status();
@@ -842,10 +830,6 @@ pub struct ProbeEventInput {
 }
 
 impl ProbeEventInput {
-    pub fn hook_stop(thread_id: Option<&str>, turn_id: Option<&str>, kind: &str) -> Self {
-        Self::hook_stop_with_context(thread_id, turn_id, None, None, None, kind)
-    }
-
     pub fn hook_stop_with_context(
         thread_id: Option<&str>,
         turn_id: Option<&str>,
@@ -1456,24 +1440,6 @@ fn truncate_utf8_with_marker(value: &str, max_bytes: usize) -> String {
     truncated
 }
 
-fn dedupe_component(value: &str) -> String {
-    let normalized = value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if normalized.is_empty() {
-        "unknown".to_string()
-    } else {
-        normalized
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1633,8 +1599,13 @@ mod tests {
         config.codex.home = codex_home;
         config.probe.hooks.manage_stop_hook = true;
 
+        let db = crate::db::PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-            .status()
+            .status_with_db(&db, false)
             .await
             .unwrap();
 
@@ -1736,8 +1707,13 @@ mod tests {
         let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.recent_limit = 20;
+        let db = crate::db::PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-            .status()
+            .status_with_db(&db, false)
             .await
             .unwrap();
 
@@ -1774,13 +1750,12 @@ mod tests {
         })
         .unwrap();
         db.create_job("job-live", "codex.run", "继续运行").unwrap();
-        drop(db);
         let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.paths.db_path = panel_db_path;
         config.probe.recent_limit = 20;
         let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-            .status()
+            .status_with_db(&db, false)
             .await
             .unwrap();
 
@@ -1842,8 +1817,13 @@ mod tests {
         let mut config = Config::current_defaults().unwrap();
         config.codex.home = codex_home;
         config.probe.recent_limit = 20;
+        let db = crate::db::PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
         let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-            .status()
+            .status_with_db(&db, false)
             .await
             .unwrap();
 
@@ -1962,7 +1942,14 @@ mod tests {
         let recoverable = ProbeRuntime::build_event_for(
             &runtime.config,
             runtime.paths.kind,
-            ProbeEventInput::hook_stop(Some("thread-a"), Some("turn-b"), "recoverable"),
+            ProbeEventInput::hook_stop_with_context(
+                Some("thread-a"),
+                Some("turn-b"),
+                None,
+                None,
+                None,
+                "recoverable",
+            ),
         );
         assert_eq!(recoverable.event_type, "recoverable");
         assert_eq!(recoverable.title, "线程异常停止");

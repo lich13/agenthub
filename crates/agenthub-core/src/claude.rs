@@ -2,6 +2,7 @@
 use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[allow(unused_imports)]
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -215,9 +216,6 @@ struct Parsed {
 }
 fn field<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
-}
-fn digest(value: impl AsRef<[u8]>) -> String {
-    hex::encode(Sha256::digest(value.as_ref()))
 }
 const MAX_LOCATED_SESSIONS: usize = 20_000;
 type LocatedSessionKey = (PathBuf, String);
@@ -462,7 +460,7 @@ fn key_for(root: &Path, path: &Path, _id: &str) -> String {
     let id = path.file_stem().unwrap_or_default().to_string_lossy();
     let key = format!(
         "claude:{}",
-        digest(format!(
+        crate::sha256_hex(format!(
             "{}\0{id}",
             path.strip_prefix(root).unwrap_or(path).to_string_lossy()
         ))

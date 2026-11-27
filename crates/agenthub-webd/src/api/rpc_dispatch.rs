@@ -1,12 +1,8 @@
 use super::{
-    antigravity_archive, antigravity_detail, antigravity_list, antigravity_rename,
-    antigravity_restore, claude_delete_execute, claude_delete_preview, claude_detail, claude_list,
-    claude_rename, dsh_archive, dsh_detail, dsh_list, dsh_rename, dsh_restore,
-};
-use super::{
-    api_error, archive_thread, get_probe_events, get_probe_settings, get_probe_status,
+    api_error, archive_thread, claude_delete_execute, claude_delete_preview, claude_detail,
+    claude_list, claude_rename, get_probe_events, get_probe_settings, get_probe_status,
     grok_delete_execute, grok_delete_preview, grok_detail, grok_list, grok_rename,
-    hidden_threads_delete_dry_run, patch_probe_settings, rename_thread, restore_thread,
+    hidden_threads_delete_dry_run, ok, patch_probe_settings, rename_thread, restore_thread,
     start_probe_action, start_update_action, system_capabilities, system_update_status,
     thread_blocks, thread_detail, unified_cleanup_dry_run, unified_cleanup_execute, ApiResponse,
 };
@@ -119,8 +115,9 @@ mod tests {
     }
     #[tokio::test]
     async fn unconfirmed_delete_and_unknown_commands_are_rejected() {
+        let st = state();
         let error = rpc_dispatch(
-            state(),
+            st.clone(),
             "grok.deleteExecute".into(),
             json!({"request":{"id":"fixture-grok-session","confirmed":false}}),
         )
@@ -128,12 +125,14 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.message, "Grok deletion requires confirmation");
         assert_eq!(
-            rpc_dispatch(state(), "unknown.command".into(), json!({}))
+            rpc_dispatch(st.clone(), "unknown.command".into(), json!({}))
                 .await
                 .unwrap_err()
                 .message,
             "不支持的远程操作"
         );
+        assert!(st.db.list_jobs(10).unwrap().is_empty());
+        assert!(st.db.due_notification_deliveries(10).unwrap().is_empty());
     }
     #[tokio::test]
     async fn job_detail_defaults_to_full_output_and_supports_summary_reads() {

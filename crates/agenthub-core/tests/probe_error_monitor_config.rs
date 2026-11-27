@@ -32,8 +32,7 @@ fn probe_error_monitor_launch_agent_repair_is_idempotent_and_unloads_when_disabl
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let mut platform =
-        agenthub_core::platform::PlatformPaths::for_kind_with_home(PlatformKind::Macos, &root);
+    let mut platform = agenthub_core::platform::PlatformPaths::macos(&root);
     platform.data_dir = root.join("Application Support/AgentHub");
     platform.config_file = platform.data_dir.join("config.toml");
     platform.log_dir = root.join("Logs/AgentHub");
@@ -222,8 +221,7 @@ fn probe_error_monitor_launch_agent_preserves_plist_when_unload_fails() {
     ));
     let launch_agents = root.join("LaunchAgents");
     std::fs::create_dir_all(&launch_agents).unwrap();
-    let platform =
-        agenthub_core::platform::PlatformPaths::for_kind_with_home(PlatformKind::Macos, &root);
+    let platform = agenthub_core::platform::PlatformPaths::macos(&root);
     let plist = launch_agents.join("com.lich13.agenthub.probe-error-monitor.plist");
     std::fs::write(&plist, "managed").unwrap();
     let launchctl = root.join("launchctl");
@@ -262,8 +260,7 @@ fn probe_error_monitor_launch_agent_requires_loaded_state_after_bootstrap() {
         uuid::Uuid::new_v4()
     ));
     std::fs::create_dir_all(&root).unwrap();
-    let mut platform =
-        agenthub_core::platform::PlatformPaths::for_kind_with_home(PlatformKind::Macos, &root);
+    let mut platform = agenthub_core::platform::PlatformPaths::macos(&root);
     platform.data_dir = root.join("Application Support/AgentHub");
     platform.config_file = platform.data_dir.join("config.toml");
     platform.log_dir = root.join("Logs/AgentHub");

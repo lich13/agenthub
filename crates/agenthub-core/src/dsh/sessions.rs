@@ -117,35 +117,8 @@ fn try_acquire_session_lease(session_dir: &Path) -> Result<Option<ExclusiveSessi
     Ok(Some(ExclusiveSessionLease { file }))
 }
 
-fn is_session_locked_readonly(session_dir: &Path) -> bool {
-    let lock_path = session_dir.join("session.lock");
-    if !lock_path.is_file() {
-        return false;
-    }
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    let Ok(file) = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&lock_path)
-    else {
-        return false;
-    };
-    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
-        unsafe {
-            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-        }
-        false
-    } else {
-        let err = std::io::Error::last_os_error();
-        matches!(
-            err.raw_os_error(),
-            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-        )
-    }
+fn probe_session_locked_readonly(session_dir: &Path) -> std::io::Result<bool> {
+    crate::file_stamp::probe_advisory_lock(&session_dir.join("session.lock"), libc::LOCK_EX)
 }
 
 fn pick_generation(session_dir: &Path) -> Result<Option<(u32, bool, PathBuf)>> {
@@ -707,7 +680,7 @@ fn build_summary(
     session: &DiscoveredSession,
     archived_set: &BTreeSet<String>,
 ) -> ProviderSessionSummary {
-    let locked = is_session_locked_readonly(&session.dir);
+    let locked = probe_session_locked_readonly(&session.dir).unwrap_or(false);
     let folded: std::sync::Arc<FoldedMetadata> = if locked {
         fold_log_metadata(session).unwrap_or_default()
     } else {
@@ -1815,6 +1788,22 @@ fn preview_from_sessions(
     operation: SessionOperation,
     include_descendants: bool,
 ) -> Result<SessionBatchItem> {
+    if operation == SessionOperation::Delete {
+        let root_locked =
+            probe_session_locked_readonly(&root.dir).context("无法校验 DSH 会话锁状态")?;
+        ensure!(
+            !root_locked,
+            "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
+        );
+        for dup in all.iter().filter(|s| s.id == root.id && s.dir != root.dir) {
+            let locked =
+                probe_session_locked_readonly(&dup.dir).context("无法校验 DSH 会话锁状态")?;
+            ensure!(
+                !locked,
+                "该会话正在 DeepSeek Harness 中运行，请先退出后再删除"
+            );
+        }
+    }
     let summary = build_summary(paths, root, archived);
     if operation == SessionOperation::Delete && !summary.can_delete {
         bail!(
@@ -1833,8 +1822,10 @@ fn preview_from_sessions(
     if operation == SessionOperation::Delete {
         for child_id in &all_descendants {
             for child in all.iter().filter(|s| &s.id == child_id) {
+                let locked = probe_session_locked_readonly(&child.dir)
+                    .context("无法校验 DSH 子会话锁状态")?;
                 ensure!(
-                    !is_session_locked_readonly(&child.dir),
+                    !locked,
                     "子会话正在 DeepSeek Harness 中运行，请先退出后再删除"
                 );
             }
@@ -2071,7 +2062,7 @@ mod tests {
         assert_eq!(results[0].as_ref().unwrap().descendants, vec!["child"]);
         assert!(results[2].is_err());
         let root = find_root_session(&paths, "root").unwrap();
-        assert!(!is_session_locked_readonly(&root.dir));
+        assert!(!probe_session_locked_readonly(&root.dir).unwrap());
         let lock = try_acquire_session_lease(&home.join("sessions/project/child"))
             .unwrap()
             .unwrap();
@@ -3228,6 +3219,64 @@ mod tests {
         .unwrap();
         assert_eq!(count, 4_002);
         assert!(needs_nl);
+
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn descendant_lock_probe_error_blocks_delete_preview_without_breaking_summary_list() {
+        let home =
+            std::env::temp_dir().join(format!("agenthub-dsh-lock-err-{}", uuid::Uuid::new_v4()));
+        let paths = DshPaths { home: home.clone() };
+        let root_id = "019a0000-0000-7000-8000-000000000001";
+        let child_id = "019a0000-0000-7000-8000-000000000002";
+        let root_dir = home.join("sessions/fixture").join(root_id);
+        let child_dir = home.join("sessions/fixture").join(child_id);
+        fs::create_dir_all(&root_dir).unwrap();
+        fs::create_dir_all(&child_dir).unwrap();
+        fs::write(
+            root_dir.join("session.v4.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session","version":4,"id":root_id,"createdAt":1,"cwd":"/workspace/demo"}),
+                json!({"type":"message","id":"m1","parentId":null,"timestamp":"2026-10-20T01:00:01Z","message":{"role":"user","content":"root"}})
+            ),
+        )
+        .unwrap();
+        fs::write(
+            child_dir.join("session.v4.jsonl"),
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session","version":4,"id":child_id,"createdAt":2,"cwd":"/workspace/demo","origin":"subagent","parentSession":root_id}),
+                json!({"type":"message","id":"c1","parentId":null,"timestamp":"2026-10-20T01:00:03Z","message":{"role":"user","content":"child"}})
+            ),
+        )
+        .unwrap();
+        let target = home.join("dummy");
+        fs::write(&target, b"").unwrap();
+        std::os::unix::fs::symlink(&target, child_dir.join("session.lock")).unwrap();
+
+        let listed = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].status, "idle");
+
+        let err =
+            preview_batch_item_checked(&paths, root_id, SessionOperation::Delete, true, || Ok(()))
+                .unwrap_err()
+                .to_string();
+        assert!(err.contains("无法校验 DSH 子会话锁状态"), "{err}");
+
+        // Root `session.lock` probe errors must also fail delete preview while summary listing remains readable.
+        fs::remove_file(child_dir.join("session.lock")).unwrap();
+        std::os::unix::fs::symlink(&target, root_dir.join("session.lock")).unwrap();
+        let listed_with_root_err = list_sessions(&paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(listed_with_root_err.len(), 1);
+        let root_err =
+            preview_batch_item_checked(&paths, root_id, SessionOperation::Delete, false, || Ok(()))
+                .unwrap_err()
+                .to_string();
+        assert!(root_err.contains("无法校验 DSH 会话锁状态"), "{root_err}");
 
         fs::remove_dir_all(home).unwrap();
     }

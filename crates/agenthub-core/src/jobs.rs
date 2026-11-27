@@ -91,20 +91,36 @@ impl JobRunner {
         let running = self.running.clone();
         let id_for_task = id.clone();
         let exclusive_group = exclusive_group.map(str::to_string);
-        spawn_job_task(async move {
-            let result = run_process_command(&db, &id_for_task, &command).await;
-            if let Err(err) = result {
-                let message = redact_output(&err.to_string());
-                let _ = db.append_job_output(&id_for_task, &format!("\nerror: {message}\n"));
-                if let Err(error) = db.finish_job(&id_for_task, "failed", None, Some(&message)) {
-                    eprintln!("Could not persist terminal status for job {id_for_task}: {error}");
+        let fail_db = db.clone();
+        let fail_running = running.clone();
+        let fail_id = id.clone();
+        let fail_group = exclusive_group.clone();
+        spawn_job_task(
+            async move {
+                let result = run_process_command(&db, &id_for_task, &command).await;
+                if let Err(err) = result {
+                    finalize_failed_job(&db, &id_for_task, &err.to_string());
                 }
-            }
-            if let Some(group) = exclusive_group.as_deref() {
-                running.lock().expect("running jobs").remove(group);
-            }
-        });
+                if let Some(group) = exclusive_group.as_deref() {
+                    running.lock().expect("running jobs").remove(group);
+                }
+            },
+            move |err_msg| {
+                finalize_failed_job(&fail_db, &fail_id, &err_msg);
+                if let Some(group) = fail_group.as_deref() {
+                    fail_running.lock().expect("running jobs").remove(group);
+                }
+            },
+        );
         Ok(id)
+    }
+}
+
+fn finalize_failed_job(db: &PanelDb, job_id: &str, raw_error: &str) {
+    let message = redact_output(raw_error);
+    let _ = db.append_job_output(job_id, &format!("\nerror: {message}\n"));
+    if let Err(error) = db.finish_job(job_id, "failed", None, Some(&message)) {
+        eprintln!("Could not persist terminal status for job {job_id}: {error}");
     }
 }
 
@@ -152,27 +168,63 @@ async fn run_process_command(
     Ok(status_text)
 }
 
-fn spawn_job_task<F>(future: F)
+fn spawn_job_task<F, E>(future: F, on_fallback_error: E)
 where
     F: Future<Output = ()> + Send + 'static,
+    E: FnOnce(String) + Send + 'static,
 {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
         handle.spawn(future);
         return;
     }
 
-    std::thread::Builder::new()
-        .name("agenthub-job-runtime".to_string())
-        .spawn(move || {
-            match tokio::runtime::Builder::new_current_thread()
+    spawn_fallback_job_with_builders(
+        |f| {
+            std::thread::Builder::new()
+                .name("agenthub-job-runtime".to_string())
+                .spawn(f)
+                .map(|_| ())
+        },
+        || {
+            tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-            {
-                Ok(runtime) => runtime.block_on(future),
-                Err(err) => eprintln!("failed to start AgentHub job runtime: {err}"),
+        },
+        future,
+        on_fallback_error,
+    );
+}
+
+fn spawn_fallback_job_with_builders<F, S, R, E>(
+    spawn_thread: S,
+    build_runtime: R,
+    future: F,
+    on_fallback_error: E,
+) where
+    F: Future<Output = ()> + Send + 'static,
+    S: FnOnce(Box<dyn FnOnce() + Send + 'static>) -> std::io::Result<()>,
+    R: FnOnce() -> std::io::Result<tokio::runtime::Runtime> + Send + 'static,
+    E: FnOnce(String) + Send + 'static,
+{
+    let error_slot = Arc::new(Mutex::new(Some(on_fallback_error)));
+    let thread_error_slot = Arc::clone(&error_slot);
+    let task: Box<dyn FnOnce() + Send + 'static> = Box::new(move || match build_runtime() {
+        Ok(runtime) => runtime.block_on(future),
+        Err(err) => {
+            let msg = format!("failed to start AgentHub job runtime: {err}");
+            eprintln!("{msg}");
+            if let Some(cb) = thread_error_slot.lock().expect("job error slot").take() {
+                cb(msg);
             }
-        })
-        .expect("spawn AgentHub job runtime thread");
+        }
+    });
+    if let Err(err) = spawn_thread(task) {
+        let msg = format!("failed to spawn AgentHub job runtime thread: {err}");
+        eprintln!("{msg}");
+        if let Some(cb) = error_slot.lock().expect("job error slot").take() {
+            cb(msg);
+        }
+    }
 }
 
 fn flush_job_output(db: &PanelDb, job_id: &str, output: &mut String) -> Result<()> {
@@ -427,5 +479,71 @@ mod tests {
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_file(db_path.with_extension("sqlite-wal"));
         let _ = fs::remove_file(db_path.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn fallback_spawn_and_runtime_failures_mark_job_failed_and_release_exclusive_group() {
+        let db = PanelDb::open_with_secret_box(
+            ":memory:",
+            crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+        )
+        .unwrap();
+        let runner = JobRunner::new(db.clone());
+
+        // 1. Thread spawn failure marks job failed and clears running group without panicking.
+        let group = "probe_bark";
+        runner.running.lock().unwrap().insert(group.to_string());
+        db.create_job("job-spawn-fail", "probe_bark_test", "Bark test")
+            .unwrap();
+        {
+            let fail_db = db.clone();
+            let fail_running = runner.running.clone();
+            super::spawn_fallback_job_with_builders(
+                |_task| Err(std::io::Error::other("os thread limit reached")),
+                || unreachable!(),
+                async {},
+                move |msg| {
+                    super::finalize_failed_job(&fail_db, "job-spawn-fail", &msg);
+                    fail_running.lock().unwrap().remove(group);
+                },
+            );
+        }
+        let failed_spawn = db.job("job-spawn-fail").unwrap().unwrap();
+        assert_eq!(failed_spawn.status, "failed");
+        assert!(failed_spawn
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("os thread limit reached"));
+        assert!(runner.running.lock().unwrap().is_empty());
+
+        // 2. Runtime builder failure inside fallback thread also marks job failed and releases group.
+        runner.running.lock().unwrap().insert(group.to_string());
+        db.create_job("job-rt-fail", "probe_bark_test", "Bark test")
+            .unwrap();
+        {
+            let fail_db = db.clone();
+            let fail_running = runner.running.clone();
+            super::spawn_fallback_job_with_builders(
+                |task| {
+                    std::thread::spawn(task).join().unwrap();
+                    Ok(())
+                },
+                || Err(std::io::Error::other("kqueue fd exhausted")),
+                async {},
+                move |msg| {
+                    super::finalize_failed_job(&fail_db, "job-rt-fail", &msg);
+                    fail_running.lock().unwrap().remove(group);
+                },
+            );
+        }
+        let failed_rt = db.job("job-rt-fail").unwrap().unwrap();
+        assert_eq!(failed_rt.status, "failed");
+        assert!(failed_rt
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("kqueue fd exhausted"));
+        assert!(runner.running.lock().unwrap().is_empty());
     }
 }

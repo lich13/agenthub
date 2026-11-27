@@ -57,6 +57,10 @@ impl SecretBox {
         Ok((ciphertext, encoded))
     }
 
+    pub(crate) fn has_valid_nonce_format(encoded: &[u8]) -> bool {
+        matches!(encoded, [BOUND_NONCE, rest @ ..] if rest.len() == 12) || encoded.len() == 12
+    }
+
     pub(crate) fn decrypt(
         &self,
         identity: &[&str],

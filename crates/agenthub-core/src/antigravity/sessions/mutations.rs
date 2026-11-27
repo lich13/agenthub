@@ -152,12 +152,12 @@ pub(crate) fn resolve_target_store_and_endpoint(
 
 fn ensure_offline_unlocked(store: &AntigravityPaths, root_id: &str, verb: &str) -> Result<()> {
     ensure!(
-        !is_presence_locked_shared(store, root_id),
+        !probe_presence_locked_shared(store, root_id).context("无法探测 Antigravity 会话锁")?,
         "会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
     );
     for child in find_descendant_ids_with_live(store, None, root_id)? {
         ensure!(
-            !is_presence_locked_shared(store, &child),
+            !probe_presence_locked_shared(store, &child).context("无法探测 Antigravity 会话锁")?,
             "子会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
         );
     }
@@ -288,35 +288,14 @@ pub fn set_archived(
     session_summary(paths, key)
 }
 
-pub(crate) fn is_presence_locked_shared(paths: &AntigravityPaths, id: &str) -> bool {
-    let lock_path = paths.presence_dir().join(format!("{id}.lock"));
-    if !lock_path.is_file() {
-        return false;
-    }
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::io::AsRawFd;
-    let Ok(file) = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&lock_path)
-    else {
-        return false;
-    };
-    // SAFETY: The File owns this live descriptor throughout the advisory lock operation.
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH | libc::LOCK_NB) };
-    if rc == 0 {
-        // SAFETY: The File still owns the descriptor whose advisory lock is being released.
-        unsafe {
-            let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
-        }
-        false
-    } else {
-        let err = std::io::Error::last_os_error();
-        matches!(
-            err.raw_os_error(),
-            Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-        )
-    }
+pub(crate) fn probe_presence_locked_shared(
+    paths: &AntigravityPaths,
+    id: &str,
+) -> std::io::Result<bool> {
+    crate::file_stamp::probe_advisory_lock(
+        &paths.presence_dir().join(format!("{id}.lock")),
+        libc::LOCK_SH,
+    )
 }
 
 fn live_item_has_waiting_step(item: &Value) -> bool {
@@ -679,7 +658,8 @@ fn clean_other_store_mirror_rows(other: &AntigravityPaths, deleted_ids: &[String
     let eligible: Vec<String> = deleted_ids
         .iter()
         .filter(|id| {
-            !has_primary_session_storage(other, id) && !is_presence_locked_shared(other, id)
+            !has_primary_session_storage(other, id)
+                && !probe_presence_locked_shared(other, id).unwrap_or(true)
         })
         .cloned()
         .collect();
@@ -824,19 +804,22 @@ fn preview_from_summary(
             );
         }
         ensure!(
-            !is_presence_locked_shared(paths, &summary.id),
+            !probe_presence_locked_shared(paths, &summary.id)
+                .context("无法探测 Antigravity 会话锁")?,
             "会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
         );
         for child in descendant_ids(children, &summary.id) {
             ensure!(
-                !is_presence_locked_shared(paths, &child),
+                !probe_presence_locked_shared(paths, &child)
+                    .context("无法探测 Antigravity 会话锁")?,
                 "子会话当前已在 Antigravity 中打开，离线模式下无法安全{verb}"
             );
         }
     }
     if operation == SessionOperation::Delete
         && all_live.is_none()
-        && is_presence_locked_shared(paths, &summary.id)
+        && probe_presence_locked_shared(paths, &summary.id)
+            .context("无法探测 Antigravity 会话锁")?
     {
         bail!("会话当前已在 Antigravity 中打开，离线模式下无法安全删除");
     }
@@ -853,7 +836,8 @@ fn preview_from_summary(
             );
             if all_live.is_none() {
                 ensure!(
-                    !is_presence_locked_shared(paths, child),
+                    !probe_presence_locked_shared(paths, child)
+                        .context("无法探测 Antigravity 会话锁")?,
                     "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                 );
             }
@@ -1199,6 +1183,33 @@ fn delete_ordered_ids_in_store(
             let in_live = all_live
                 .and_then(|v| v["trajectorySummaries"].get(id))
                 .is_some();
+            if !in_live {
+                match probe_presence_locked_shared(store, id) {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        outcome
+                            .residuals
+                            .push(format!("{id}: 会话当前已被锁定，已停止删除"));
+                        record_remaining_antigravity_residuals(
+                            store,
+                            &ordered_ids[idx..],
+                            &mut outcome,
+                        );
+                        break;
+                    }
+                    Err(lock_err) => {
+                        outcome
+                            .residuals
+                            .push(format!("{id}: 无法探测 Antigravity 会话锁：{lock_err}"));
+                        record_remaining_antigravity_residuals(
+                            store,
+                            &ordered_ids[idx..],
+                            &mut outcome,
+                        );
+                        break;
+                    }
+                }
+            }
             match connect_rpc_post(
                 rpc.port,
                 &rpc.token,
@@ -1206,18 +1217,62 @@ fn delete_ordered_ids_in_store(
                 &json!({ "cascadeId": id }),
             ) {
                 Ok(_) => {
-                    if !in_live && !is_presence_locked_shared(store, id) {
-                        unhydrated_db_cleanup_ids.push(id.clone());
+                    if !in_live {
+                        match probe_presence_locked_shared(store, id) {
+                            Ok(false) => unhydrated_db_cleanup_ids.push(id.clone()),
+                            Ok(true) => {
+                                outcome
+                                    .residuals
+                                    .push(format!("{id}: 会话当前已被锁定，已停止删除"));
+                                record_remaining_antigravity_residuals(
+                                    store,
+                                    &ordered_ids[idx..],
+                                    &mut outcome,
+                                );
+                                break;
+                            }
+                            Err(lock_err) => {
+                                outcome
+                                    .residuals
+                                    .push(format!("{id}: 无法探测 Antigravity 会话锁：{lock_err}"));
+                                record_remaining_antigravity_residuals(
+                                    store,
+                                    &ordered_ids[idx..],
+                                    &mut outcome,
+                                );
+                                break;
+                            }
+                        }
                     }
                 }
                 Err(err) => {
-                    let allow_not_found = !in_live
-                        && !is_presence_locked_shared(store, id)
-                        && err
-                            .downcast_ref::<ConnectRpcHttpError>()
-                            .is_some_and(ConnectRpcHttpError::is_not_found);
-                    if allow_not_found {
-                        unhydrated_db_cleanup_ids.push(id.clone());
+                    let is_not_found = err
+                        .downcast_ref::<ConnectRpcHttpError>()
+                        .is_some_and(ConnectRpcHttpError::is_not_found);
+                    if !in_live && is_not_found {
+                        match probe_presence_locked_shared(store, id) {
+                            Ok(false) => unhydrated_db_cleanup_ids.push(id.clone()),
+                            Ok(true) => {
+                                outcome.residuals.push(format!("{id}: {err}"));
+                                record_remaining_antigravity_residuals(
+                                    store,
+                                    &ordered_ids[idx..],
+                                    &mut outcome,
+                                );
+                                break;
+                            }
+                            Err(lock_err) => {
+                                outcome.residuals.push(format!(
+                                    "{id}: 无法探测 Antigravity 会话锁：{lock_err} ({err})"
+                                ));
+                                record_remaining_antigravity_residuals(
+                                    store,
+                                    &ordered_ids[idx..],
+                                    &mut outcome,
+                                );
+                                break;
+                            }
+                        }
                     } else {
                         outcome.residuals.push(format!("{id}: {err}"));
                         record_remaining_antigravity_residuals(
@@ -1390,7 +1445,8 @@ pub fn execute_batch_item(
             }
             if live_rpc.is_none() {
                 ensure!(
-                    !is_presence_locked_shared(&store, key),
+                    !probe_presence_locked_shared(&store, key)
+                        .context("无法探测 Antigravity 会话锁")?,
                     "会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                 );
             }
@@ -1405,7 +1461,8 @@ pub fn execute_batch_item(
                 );
                 if live_rpc.is_none() {
                     ensure!(
-                        !is_presence_locked_shared(&store, child),
+                        !probe_presence_locked_shared(&store, child)
+                            .context("无法探测 Antigravity 会话锁")?,
                         "子会话当前已在 Antigravity 中打开，离线模式下无法安全删除"
                     );
                 }
@@ -1464,8 +1521,7 @@ pub enum UnifiedAntigravityStepOutcome {
 
 struct VerifiedOrphanSubagent {
     id: String,
-    direct_parent: String,
-    root_id: Option<String>,
+    missing_ancestors: Vec<String>,
     title: String,
     bytes: u64,
     fingerprint: String,
@@ -1473,20 +1529,35 @@ struct VerifiedOrphanSubagent {
     is_cli_store: bool,
 }
 
-fn ancestor_exists_anywhere(
+fn check_ancestor_exists(
     paths: &AntigravityPaths,
     store: &AntigravityPaths,
     all_live: Option<&Value>,
     anc_id: &str,
-) -> bool {
-    all_live
+) -> std::io::Result<bool> {
+    if all_live
         .and_then(|v| v["trajectorySummaries"].get(anc_id))
         .is_some()
         || has_primary_session_storage(store, anc_id)
-        || is_presence_locked_shared(store, anc_id)
-        || paths.other_store_for(&store.home).is_some_and(|other| {
-            has_primary_session_storage(&other, anc_id) || is_presence_locked_shared(&other, anc_id)
-        })
+    {
+        return Ok(true);
+    }
+    let other = paths.other_store_for(&store.home);
+    if other
+        .as_ref()
+        .is_some_and(|other| has_primary_session_storage(other, anc_id))
+    {
+        return Ok(true);
+    }
+    if probe_presence_locked_shared(store, anc_id)? {
+        return Ok(true);
+    }
+    if let Some(other) = other {
+        if probe_presence_locked_shared(&other, anc_id)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn scan_store_orphan_subagents(
@@ -1496,6 +1567,7 @@ fn scan_store_orphan_subagents(
     all_live: Option<&Value>,
     children_map: &BTreeMap<String, Vec<String>>,
     now_ms: i64,
+    mut lock_errors: Option<&mut BTreeMap<String, String>>,
 ) -> Result<BTreeMap<String, VerifiedOrphanSubagent>> {
     if !store.home.is_dir() {
         return Ok(BTreeMap::new());
@@ -1527,41 +1599,26 @@ fn scan_store_orphan_subagents(
                 }
             }
         }
-        let cols = super::summaries_table_columns(&conn);
-        let status_expr = if cols.contains("status") {
-            "COALESCE(status, '')"
-        } else {
-            "''"
-        };
-        let idle_expr = if cols.contains("not_fully_idle") {
-            "not_fully_idle"
-        } else {
-            "0"
-        };
-        let raw_expr = if cols.contains("raw_summary") {
-            "raw_summary"
-        } else {
-            "NULL"
-        };
+        let (_, status_cols_sql) = super::summaries_status_sql_exprs(&conn);
         let sql = format!(
             "SELECT conversation_id, COALESCE(title, ''), COALESCE(preview, ''), \
              COALESCE(parent_conversation_id, ''), COALESCE(nesting_depth, 0), \
-             {status_expr}, {idle_expr}, {raw_expr} FROM conversation_summaries"
+             {status_cols_sql} FROM conversation_summaries"
         );
         {
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map([], |row| {
+                let (status_str, not_fully_idle, raw_blob) =
+                    super::read_summary_status_cols(row, 5)?;
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, super::ValueOrString>(6)
-                        .map(|v| v.0)
-                        .unwrap_or(false),
-                    row.get::<_, Option<Vec<u8>>>(7).ok().flatten(),
+                    status_str,
+                    not_fully_idle,
+                    raw_blob,
                 ))
             })?;
             for row in rows {
@@ -1570,16 +1627,12 @@ fn scan_store_orphan_subagents(
                 if uuid::Uuid::parse_str(&cid).is_err() {
                     continue;
                 }
-                let parsed_raw = raw_blob
-                    .as_deref()
-                    .map(super::annotations::parse_raw_summary);
-                if let Some(st) = super::offline_summary_row_status(&status_str, not_fully_idle)
-                    .or_else(|| {
-                        parsed_raw
-                            .as_ref()
-                            .and_then(super::annotations::ParsedRawSummary::active_status)
-                    })
-                {
+                let (parsed_raw, st) = super::parse_summary_status_and_raw(
+                    &status_str,
+                    not_fully_idle,
+                    raw_blob.as_deref(),
+                );
+                if let Some(st) = st {
                     sqlite_statuses.insert(cid.clone(), st);
                 }
                 let display = parsed_raw
@@ -1744,17 +1797,28 @@ fn scan_store_orphan_subagents(
             continue;
         }
         let mut visited = BTreeSet::from([cid.clone()]);
+        let mut missing_ancestors = Vec::new();
         let mut curr = direct_parent.clone();
         let mut valid_orphan_chain = true;
+        let mut ancestor_lock_err = None;
         let mut hops = 0usize;
         loop {
             hops += 1;
-            if hops > 32
-                || !visited.insert(curr.clone())
-                || ancestor_exists_anywhere(paths, store, all_live, &curr)
-            {
+            if hops > 32 || !visited.insert(curr.clone()) {
                 valid_orphan_chain = false;
                 break;
+            }
+            match check_ancestor_exists(paths, store, all_live, &curr) {
+                Ok(true) => {
+                    valid_orphan_chain = false;
+                    break;
+                }
+                Ok(false) => missing_ancestors.push(curr.clone()),
+                Err(err) => {
+                    ancestor_lock_err = Some(format!("无法探测 Antigravity 会话锁：{err}"));
+                    valid_orphan_chain = false;
+                    break;
+                }
             }
             match parent_sets.get(&curr) {
                 Some(anc_parents) if anc_parents.len() == 1 => {
@@ -1768,29 +1832,64 @@ fn scan_store_orphan_subagents(
                 None => break,
             }
         }
+        if let Some(reason) = ancestor_lock_err {
+            if let Some(errs) = lock_errors.as_deref_mut() {
+                errs.entry(cid.clone()).or_insert(reason);
+            }
+            continue;
+        }
         if !valid_orphan_chain {
             continue;
         }
-        let recorded_root = root_ids.get(cid).cloned();
-        if let Some(ref rid) = recorded_root {
-            if ancestor_exists_anywhere(paths, store, all_live, rid) {
-                continue;
+        if let Some(rid) = root_ids.get(cid) {
+            if !missing_ancestors.iter().any(|anc| anc == rid) {
+                match check_ancestor_exists(paths, store, all_live, rid) {
+                    Ok(true) => continue,
+                    Ok(false) => missing_ancestors.push(rid.clone()),
+                    Err(err) => {
+                        if let Some(errs) = lock_errors.as_deref_mut() {
+                            errs.entry(cid.clone())
+                                .or_insert_with(|| format!("无法探测 Antigravity 会话锁：{err}"));
+                        }
+                        continue;
+                    }
+                }
             }
         }
 
         let descendants = descendant_ids(children_map, cid);
-        let node_or_desc_busy = std::iter::once(cid)
-            .chain(descendants.iter())
-            .any(|node_id| {
-                is_presence_locked_shared(store, node_id)
-                    || is_cascade_running(all_live, node_id)
-                    || is_session_busy_status(super::evaluate_node_status_offline(
-                        store,
-                        node_id,
-                        sqlite_statuses.get(node_id).copied(),
-                        now_ms,
-                    ))
-            });
+        let mut node_or_desc_busy = false;
+        let mut subtree_lock_err = None;
+        for node_id in std::iter::once(cid).chain(descendants.iter()) {
+            match probe_presence_locked_shared(store, node_id) {
+                Ok(true) => {
+                    node_or_desc_busy = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    subtree_lock_err = Some(format!("无法探测 Antigravity 会话锁：{err}"));
+                    break;
+                }
+            }
+            if is_cascade_running(all_live, node_id)
+                || is_session_busy_status(super::evaluate_node_status_offline(
+                    store,
+                    node_id,
+                    sqlite_statuses.get(node_id).copied(),
+                    now_ms,
+                ))
+            {
+                node_or_desc_busy = true;
+                break;
+            }
+        }
+        if let Some(reason) = subtree_lock_err {
+            if let Some(errs) = lock_errors.as_deref_mut() {
+                errs.entry(cid.clone()).or_insert(reason);
+            }
+            continue;
+        }
         if node_or_desc_busy {
             continue;
         }
@@ -1816,8 +1915,7 @@ fn scan_store_orphan_subagents(
             cid.clone(),
             VerifiedOrphanSubagent {
                 id: cid.clone(),
-                direct_parent,
-                root_id: recorded_root,
+                missing_ancestors,
                 title,
                 bytes,
                 fingerprint,
@@ -1905,6 +2003,7 @@ pub fn preview_unified_cleanup_candidates(
         live.as_ref(),
         &primary_children,
         now_ms,
+        None,
     )?;
     for (_, orphan) in primary_orphans {
         if seen_ids.insert(orphan.id.clone()) {
@@ -1920,7 +2019,7 @@ pub fn preview_unified_cleanup_candidates(
     if let Some(c) = &cli {
         if c.home.is_dir() {
             let cli_orphans =
-                scan_store_orphan_subagents(paths, c, true, None, &cli_children, now_ms)?;
+                scan_store_orphan_subagents(paths, c, true, None, &cli_children, now_ms, None)?;
             for (_, orphan) in cli_orphans {
                 if seen_ids.insert(orphan.id.clone()) {
                     out.push(UnifiedAntigravityCleanupCandidate {
@@ -1970,6 +2069,7 @@ pub fn execute_unified_cleanup_targets(
         }
         _ => BTreeMap::new(),
     };
+    let mut orphan_lock_errors = BTreeMap::new();
     let mut orphan_map = scan_store_orphan_subagents(
         paths,
         &primary,
@@ -1977,11 +2077,19 @@ pub fn execute_unified_cleanup_targets(
         live_payload.as_ref(),
         &primary_children,
         now_ms,
+        Some(&mut orphan_lock_errors),
     )?;
     if let Some(c) = &cli {
         if c.home.is_dir() {
-            for (k, v) in scan_store_orphan_subagents(paths, c, true, None, &cli_children, now_ms)?
-            {
+            for (k, v) in scan_store_orphan_subagents(
+                paths,
+                c,
+                true,
+                None,
+                &cli_children,
+                now_ms,
+                Some(&mut orphan_lock_errors),
+            )? {
                 orphan_map.entry(k).or_insert(v);
             }
         }
@@ -2108,12 +2216,32 @@ pub fn execute_unified_cleanup_targets(
             let store_rpc = (!orphan.is_cli_store)
                 .then_some(live_rpc.as_ref())
                 .flatten();
-            if ancestor_exists_anywhere(paths, &store, store_live, &orphan.direct_parent)
-                || orphan
-                    .root_id
-                    .as_deref()
-                    .is_some_and(|rid| ancestor_exists_anywhere(paths, &store, store_live, rid))
-            {
+            let mut anc_exists = false;
+            let mut anc_err = None;
+            for anc_id in &orphan.missing_ancestors {
+                match check_ancestor_exists(paths, &store, store_live, anc_id) {
+                    Ok(true) => {
+                        anc_exists = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        anc_err = Some(err);
+                        break;
+                    }
+                }
+            }
+            if let Some(err) = anc_err {
+                results.push((
+                    raw_id.clone(),
+                    UnifiedAntigravityStepOutcome::Failed(
+                        Some(format!("无法探测 Antigravity 会话锁：{err}")),
+                        Vec::new(),
+                    ),
+                ));
+                continue;
+            }
+            if anc_exists {
                 results.push((
                     raw_id.clone(),
                     UnifiedAntigravityStepOutcome::Skipped("父会话已恢复或存在，已跳过".into()),
@@ -2122,9 +2250,33 @@ pub fn execute_unified_cleanup_targets(
             }
             let mut ordered_ids: Vec<String> = orphan.descendants.iter().rev().cloned().collect();
             ordered_ids.push(orphan.id.clone());
-            if ordered_ids.iter().any(|nid| {
-                is_presence_locked_shared(&store, nid) || is_cascade_running(store_live, nid)
-            }) {
+            let mut lock_check_failed = None;
+            let mut active_or_open = false;
+            for nid in &ordered_ids {
+                if is_cascade_running(store_live, nid) {
+                    active_or_open = true;
+                    break;
+                }
+                match probe_presence_locked_shared(&store, nid) {
+                    Ok(true) => {
+                        active_or_open = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        lock_check_failed = Some(format!("无法探测 Antigravity 会话锁：{err}"));
+                        break;
+                    }
+                }
+            }
+            if let Some(reason) = lock_check_failed {
+                results.push((
+                    raw_id.clone(),
+                    UnifiedAntigravityStepOutcome::Failed(Some(reason), Vec::new()),
+                ));
+                continue;
+            }
+            if active_or_open {
                 results.push((
                     raw_id.clone(),
                     UnifiedAntigravityStepOutcome::Skipped(
@@ -2152,6 +2304,14 @@ pub fn execute_unified_cleanup_targets(
                 }
             };
             results.push((raw_id.clone(), step));
+            continue;
+        }
+
+        if let Some(reason) = orphan_lock_errors.get(id) {
+            results.push((
+                raw_id.clone(),
+                UnifiedAntigravityStepOutcome::Failed(Some(reason.clone()), Vec::new()),
+            ));
             continue;
         }
 

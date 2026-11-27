@@ -103,7 +103,7 @@ enum UpdateVersionFormatter {
     static func isValidSemver(_ raw: String?) -> Bool {
         let bare = bareVersion(raw)
         guard !bare.isEmpty else { return false }
-        return bare.range(of: #"^\d+\.\d+\.\d+(?:[-+].*)?$"#, options: .regularExpression) != nil
+        return bare.matches(MarkdownPatterns.semver)
     }
 
     static func canStartUpdateInstall(_ status: UpdateStatus?) -> Bool {

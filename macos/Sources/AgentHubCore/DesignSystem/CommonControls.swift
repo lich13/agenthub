@@ -398,6 +398,7 @@ struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: 
     let title: String
     var icon: LucideIconName?
     @Binding var isExpanded: Bool
+    var hasBody: Bool
     @ViewBuilder let summaryBadges: () -> SummaryBadges
     @ViewBuilder let headerTrailing: () -> HeaderTrailing
     @ViewBuilder let content: () -> Content
@@ -406,6 +407,7 @@ struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: 
         title: String,
         icon: LucideIconName? = nil,
         isExpanded: Binding<Bool>,
+        hasBody: Bool = true,
         @ViewBuilder summaryBadges: @escaping () -> SummaryBadges = { EmptyView() },
         @ViewBuilder headerTrailing: @escaping () -> HeaderTrailing = { EmptyView() },
         @ViewBuilder content: @escaping () -> Content
@@ -413,6 +415,7 @@ struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: 
         self.title = title
         self.icon = icon
         self._isExpanded = isExpanded
+        self.hasBody = hasBody
         self.summaryBadges = summaryBadges
         self.headerTrailing = headerTrailing
         self.content = content
@@ -449,7 +452,7 @@ struct CollapsiblePanelCard<SummaryBadges: View, HeaderTrailing: View, Content: 
             .padding(.horizontal, 16)
             .frame(minHeight: 48)
 
-            if isExpanded {
+            if isExpanded && hasBody {
                 Rectangle()
                     .fill(palette.borderSubtle.color)
                     .frame(height: 1)
@@ -496,7 +499,7 @@ struct RunningIndicator: View {
 
     var body: some View {
         ZStack {
-            // 2pt --bs (borderStrong) full ring track underneath (styles.css:329-332)
+            // 2pt borderStrong full ring track underneath
             Circle()
                 .stroke(palette.borderStrong.color, lineWidth: 2)
             Circle()

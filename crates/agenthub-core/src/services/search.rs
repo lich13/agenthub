@@ -77,6 +77,28 @@ impl SearchUseCases {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_grokbot_for_test(
+        root: &std::path::Path,
+        grokbot: crate::grokbot::GrokBotPaths,
+    ) -> Self {
+        Self {
+            codex: codex::CodexPaths::new(root.join("codex")),
+            grok: grok::GrokPaths {
+                home: root.join("grok"),
+            },
+            claude: claude::ClaudePaths {
+                config: root.join("claude"),
+                projects: root.join("claude/projects"),
+            },
+            antigravity: crate::antigravity::sessions::AntigravityPaths::offline(root.join("ag")),
+            dsh: crate::dsh::DshPaths {
+                home: root.join("dsh"),
+            },
+            grokbot: Some(grokbot),
+        }
+    }
+
     pub fn search(&self, request: SessionSearchRequest) -> Result<SessionSearchResponse> {
         validate_request(&request)?;
         let needle = request.query.trim().to_lowercase();
@@ -84,33 +106,7 @@ impl SearchUseCases {
         let mut warnings = Vec::new();
         match request.provider {
             SessionProvider::Grokbot => {
-                let paths = self
-                    .grokbot
-                    .as_ref()
-                    .ok_or_else(|| anyhow::anyhow!("Grok Bot 仅限本机"))?;
-                let summaries = if request.scope == SearchScope::Thread {
-                    vec![crate::grokbot::session_summary(
-                        paths,
-                        request.session_key.as_deref().unwrap(),
-                    )?]
-                } else {
-                    crate::grokbot::list(
-                        paths,
-                        &crate::provider_sessions::ProviderListRequest {
-                            limit: Some(MAX_SESSIONS),
-                            ..Default::default()
-                        },
-                    )?
-                };
-                self.search_provider_events(
-                    &request,
-                    &needle,
-                    summaries,
-                    |key| crate::grokbot::load_all_events(paths, key),
-                    false,
-                    &mut matches,
-                    &mut warnings,
-                )?;
+                self.search_grokbot(&request, &needle, &mut matches, &mut warnings)?
             }
             SessionProvider::Codex => {
                 self.search_codex(&request, &needle, &mut matches, &mut warnings)?
@@ -423,16 +419,57 @@ impl SearchUseCases {
         )
     }
 
+    fn search_grokbot(
+        &self,
+        request: &SessionSearchRequest,
+        needle: &str,
+        output: &mut Vec<SessionSearchResult>,
+        warnings: &mut Vec<String>,
+    ) -> Result<()> {
+        let paths = self
+            .grokbot
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Grok Bot 仅限本机"))?;
+        let thread_key =
+            (request.scope == SearchScope::Thread).then(|| request.session_key.as_deref().unwrap());
+        for _ in 0..crate::grokbot::GROKBOT_VERIFY_ATTEMPTS {
+            let (summaries, mut search_roster) =
+                crate::grokbot::prepare_search(paths, thread_key, MAX_SESSIONS)?;
+            let mut attempt_matches = Vec::new();
+            let mut attempt_warnings = Vec::new();
+            match self.search_provider_events(
+                request,
+                needle,
+                summaries,
+                |key| crate::grokbot::load_all_events_for_search(paths, &mut search_roster, key),
+                false,
+                &mut attempt_matches,
+                &mut attempt_warnings,
+            ) {
+                Ok(()) => {}
+                Err(err) if err.is::<crate::grokbot::GrokBotAccountChanged>() => continue,
+                Err(err) => return Err(err),
+            }
+            if crate::grokbot::verify_search_scope_unchanged(paths, &search_roster)? {
+                *output = attempt_matches;
+                *warnings = attempt_warnings;
+                return Ok(());
+            }
+        }
+        anyhow::bail!("Grok Bot 当前账户已切换，请重新搜索")
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn search_provider_events(
         &self,
         _request: &SessionSearchRequest,
         needle: &str,
         summaries: Vec<crate::provider_sessions::ProviderSessionSummary>,
-        load: impl Fn(
+        mut load: impl FnMut(
             &str,
-        )
-            -> Result<std::sync::Arc<Vec<crate::provider_sessions::ProviderHistoryEvent>>>,
+        ) -> Result<
+            std::sync::Arc<Vec<crate::provider_sessions::ProviderHistoryEvent>>,
+        >,
         literal_user: bool,
         output: &mut Vec<SessionSearchResult>,
         warnings: &mut Vec<String>,
@@ -460,6 +497,9 @@ impl SearchUseCases {
             }
             let events = match load(&summary.session_key) {
                 Ok(events) => events,
+                Err(err) if err.is::<crate::grokbot::GrokBotAccountChanged>() => {
+                    return Err(err);
+                }
                 Err(_) => {
                     push_warning(warnings);
                     continue;

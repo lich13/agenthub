@@ -64,29 +64,22 @@ pub struct Run {
 fn one() -> u64 {
     1
 }
-pub fn matches_repository_filter(repo: &Repository, repositories: &[String]) -> bool {
+fn matches_repo_entry(id: u64, full_name: &str, repositories: &[String]) -> bool {
     if !repositories.iter().any(|item| !item.trim().is_empty()) {
         return true;
     }
-    let repo_id = repo.id.to_string();
+    let repo_id = id.to_string();
     repositories.iter().any(|item| {
         let trimmed = item.trim();
-        !trimmed.is_empty() && (trimmed.eq_ignore_ascii_case(&repo.full_name) || trimmed == repo_id)
+        !trimmed.is_empty() && (trimmed.eq_ignore_ascii_case(full_name) || trimmed == repo_id)
     })
 }
+pub fn matches_repository_filter(repo: &Repository, repositories: &[String]) -> bool {
+    matches_repo_entry(repo.id, &repo.full_name, repositories)
+}
 pub fn matches_run_filter(run: &Run, repositories: &[String], filter_bots: bool) -> bool {
-    if filter_bots && run.is_bot {
-        return false;
-    }
-    if !repositories.iter().any(|item| !item.trim().is_empty()) {
-        return true;
-    }
-    let repo_id = run.repository_id.to_string();
-    repositories.iter().any(|item| {
-        let trimmed = item.trim();
-        !trimmed.is_empty()
-            && (trimmed.eq_ignore_ascii_case(&run.repository_name) || trimmed == repo_id)
-    })
+    (!filter_bots || !run.is_bot)
+        && matches_repo_entry(run.repository_id, &run.repository_name, repositories)
 }
 fn is_bot_identity(name: &str) -> bool {
     let lower = name.trim().to_ascii_lowercase();
@@ -963,6 +956,7 @@ impl Monitor {
             );
             match result {
                 Ok(mut incoming) => {
+                    retain_summaries(&mut incoming);
                     scanned_repo_ids.insert(repo.id);
                     let baseline = state
                         .baseline_ms

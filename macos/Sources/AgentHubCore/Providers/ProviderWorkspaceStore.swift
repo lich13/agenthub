@@ -598,7 +598,11 @@ final class ProviderWorkspaceStore: ObservableObject {
             latestNativeTailId = nil
             lastRenderedPollSig = nil
         }
-        defer { if isCurrentDetail(item, generation: generation) { detailLoading = false } }
+        defer {
+            if isCurrentDetail(item, generation: generation), detailLoading {
+                detailLoading = false
+            }
+        }
         do {
             var incomingHistory: HistoryMetadata?
             switch provider {
@@ -804,8 +808,12 @@ final class ProviderWorkspaceStore: ObservableObject {
                 )
             }
 
-            currentDetailHistory = incomingHistory
-            detailLoadedForKey = item.sessionKey
+            if currentDetailHistory != incomingHistory {
+                currentDetailHistory = incomingHistory
+            }
+            if detailLoadedForKey != item.sessionKey {
+                detailLoadedForKey = item.sessionKey
+            }
 
             // Bounded initial backfill when an entire tail page collapses into <= 2 rows (e.g. massive active tool turn)
             if isFirstLoadForKey,
@@ -1473,8 +1481,8 @@ final class ProviderWorkspaceStore: ObservableObject {
 
     static func providerSessionStatusText(status: String, updatedAt: String?, archived: Bool) -> String {
         if status == "running" { return "运行中" }
-        if status == "waiting" { return "等待处理" }
-        if status == "reply_needed" { return "待回复" }
+        if status == "waiting" { return SessionStatusLabels.waiting }
+        if status == "reply_needed" { return SessionStatusLabels.replyNeeded }
         if status == "failed" { return "异常" }
         if archived { return "已归档" }
         if status == "unknown" { return "状态未知" }
@@ -1493,7 +1501,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         let chip: (String?, StatusChipTone) = if item.status == "running" {
             ("运行中", .info)
         } else if item.status == "waiting" {
-            ("等待处理", .warning)
+            (SessionStatusLabels.waiting, .warning)
         } else if item.readError != nil {
             ("异常", .danger)
         } else {
@@ -1593,7 +1601,7 @@ final class ProviderWorkspaceStore: ObservableObject {
         let running = !isArchived && (s.status == "Running")
         let stText: String = switch s.status {
         case "Running": "运行中"
-        case "ReplyNeeded": "待回复"
+        case "ReplyNeeded": SessionStatusLabels.replyNeeded
         case "Recoverable": "可恢复"
         case "Archived": "已归档"
         default: isArchived ? "已归档" : "最近"
@@ -1610,7 +1618,7 @@ final class ProviderWorkspaceStore: ObservableObject {
             }
         }
         let rawPreview = VisibleMarkdownEngine.visibleMarkdown(s.latestMessage ?? "")
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+            .replacing(MarkdownPatterns.whitespace, with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let preview = (rawPreview == displayTitle) ? "" : rawPreview
         return UnifiedSessionSummaryItem(
@@ -1645,9 +1653,9 @@ final class ProviderWorkspaceStore: ObservableObject {
         } else if s.status == "running" {
             ("运行中", .info)
         } else if s.status == "waiting" {
-            ("等待处理", .warning)
+            (SessionStatusLabels.waiting, .warning)
         } else if s.status == "reply_needed" {
-            ("待回复", .warning)
+            (SessionStatusLabels.replyNeeded, .warning)
         } else if s.status == "failed" || s.readError != nil {
             ("异常", .danger)
         } else {

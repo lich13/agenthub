@@ -364,12 +364,12 @@ struct GithubCiCardView: View {
                         .foregroundStyle((saveMessage.tone == .success ? palette.okFg : palette.errFg).color)
                 }
 
-                if runs.isEmpty {
-                    Text(busy ? "正在读取 CI" : "暂无工作流运行")
+                if runs.isEmpty, busy {
+                    Text("正在读取 CI")
                         .font(DesignFonts.body(13))
                         .foregroundStyle(palette.textMuted.color)
                         .padding(.vertical, 6)
-                } else {
+                } else if !runs.isEmpty {
                     BoundedPassthroughScrollView(maxHeight: 260) {
                         VStack(spacing: 0) {
                             ForEach(Array(runs.enumerated()), id: \.element.id) { index, run in

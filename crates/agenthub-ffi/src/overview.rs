@@ -80,11 +80,10 @@ pub(crate) fn open_panel_db(config: &Config) -> Result<PanelDb> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agenthub_core::platform::PlatformKind;
 
     #[test]
     fn fixed_probe_command_uses_platform_daemon_path() {
-        let platform = PlatformPaths::for_kind_with_home(PlatformKind::Macos, "/Users/example");
+        let platform = PlatformPaths::macos("/Users/example");
         let plan = agenthub_core::services::probe::plan_probe_action(
             agenthub_core::services::probe::ProbeAction::BarkTest,
         )
