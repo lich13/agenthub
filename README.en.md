@@ -4,7 +4,7 @@
 
 AgentHub (bundle identifier `com.lich13.agenthub`, daemon binary `agenthub-webd`) is a native macOS Swift 6 (`SwiftUI` + `AppKit`) workspace for multi-platform AI Agent session reading, real-time notification probing (**Probe**), and defense-in-depth session cleanup. Built on a ChatGPT macOS Desktop three-tier neutral surface (`--bg-rail` / `--bg-list` / `--bg-stage`), it unifies local sessions across six providers — **Codex**, **Claude Code**, **Grok Build**, **Grok Bot**, **Antigravity**, and **DeepSeek Harness (DSH)** — while managing multiple named remote Linux hosts over zero-port SSH `rpc-stdio` tunnels.
 
-v2.1.41 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first. Databases older than schema 3 must pass through v2.0.10. The API protocol remains 2 and the database schema remains 3. After writing record-bound ciphertext, use v2.1.30 for binary rollback and keep the original keys.
+v2.1.42 supports fresh installations and configurations already migrated by v2.1.0. Earlier installations must upgrade to v2.1.0 first. Databases older than schema 3 must pass through v2.0.10. The API protocol remains 2 and the database schema remains 3. After writing record-bound ciphertext, use v2.1.30 for binary rollback and keep the original keys.
 
 v2.1.28 replaces the macOS desktop host with a 100% native Swift 6 (`SwiftUI` + `AppKit`) UI backed by the Rust `agenthub-ffi` static archive, retiring Tauri, `WKWebView`, the Node/pnpm frontend toolchain, and `objc2` Rust glue. The conversation reader uses a native `AppKit` table and explicit TextKit 1 text stack with carried-over row height caching, vertical scroll pass-through across code blocks and wide tables, `200pt` top reverse-pagination pixel anchor locking, and custom-drawn context menus while preserving existing data directories, Keychain items, and Minisign-verified updates.
 
@@ -86,7 +86,7 @@ Always upgrade the remote Linux service before upgrading the macOS app. Full ins
 
 ## Release Assets
 
-Current source version is **2.1.41**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
+Current source version is **2.1.42**; see [GitHub Releases](https://github.com/lich13/agenthub/releases). Every official release publishes eight assets:
 
 - `AgentHub-<version>-darwin-arm64.dmg` and `.dmg.sha256`;
 - `agenthub-darwin-arm64.tar.gz` and `.tar.gz.sig` (macOS in-app updater archive and Minisign signature);

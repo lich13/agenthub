@@ -297,7 +297,7 @@ public enum LayoutMetrics {
     public static let timelineRailWidth: CGFloat = 22
     public static let timelinePreviewMaxWidth: CGFloat = 288
 
-    public static let fallbackAppVersion: String = "2.1.41"
+    public static let fallbackAppVersion: String = "2.1.42"
 
     public static func readingHorizontalInsets(
         availableWidth: CGFloat,

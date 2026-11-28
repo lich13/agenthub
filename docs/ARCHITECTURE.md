@@ -16,7 +16,7 @@ Linux 服务与独立 Mac monitor 共用配置文件缓存，扫描快照及最�
 
 CI 比对以本轮临时索引查找新旧运行及待发事件，排序、attempt 与基线语义保持；只对符合通知条件的新增完成结果解析时间。Mac 只在观察到待发事件时申请系统通知授权，由原生授权回调发送该批事件，观察循环不等待；消费前核对来源，已接受事件按原机器名称投递。系统通知标识使用运行事件身份，不包含连接修订。本机 CI 关闭时重置观察状态且不读取数据库。HTTP 客户端与 updater 共用 reqwest 0.13.4 和 ring。
 
-关闭的 Provider／错误监控仅状态或统计变化时写库，启用状态仍更新扫描时间。Claude Hooks 设置操作不再读取无用配置；通知扫描仍只在处理启用的 Claude 时读取 Hook 配置。Probe 同步聚合进入既有 `read_tasks::spawn_blocking`，复用本轮 Grok／DSH 定位结果，仅读取候选会话的通知状态，不请求目录大小。后台通知扫描范围保持；首发和重试先定位目标，再复核对应来源，Grok 目标事件仅复核一次，DSH／Grok Bot 不读无关正文。活动态势只消费 `active_sessions`，通知汇总包含 Grok Bot。
+关闭的 Provider／错误监控仅状态或统计变化时写库；启用状态下状态、游标、扫描行数或新增异常变化时立即写库，完全空闲未变的 `"ok"` 心跳按 300 秒节流写库。Claude Hooks 设置操作不再读取无用配置；通知扫描仍只在处理启用的 Claude 时读取 Hook 配置。Probe 同步聚合进入既有 `read_tasks::spawn_blocking`，复用本轮定位结果，仅读取候选会话的通知状态，不请求目录大小。后台通知扫描范围保持；首发和重试先定位目标，再复核对应来源，Grok 目标事件仅复核一次，DSH／Grok Bot 不读无关正文。实时活动态势（`ProbeLiveOverview`）覆盖 Codex、Claude Code、Grok Build（`active_sessions`＋内核进程校验）、Antigravity（在线多实例与离线 CLI 锁）、DSH（`session.lock`＋未结回合／提问／审批）及本机 Grok Bot（待回复／待授权），通知汇总包含六大 Provider。
 
 隐藏扫描统一 start/poll/cancel，取消旧无模式入口；线程行及其中两种父 ID／JSON 关系只读一次，再在同一连接中补充 spawn edges。来源租约保持至终态写完；统一预览使用 NoRequest 无参数契约，兼容旧空请求，内部固定范围以枚举遍历；执行仍校验外部范围、确认、目标和指纹，不同步扫描隐藏线程；分页器负责开始／停止与终态回调，缺失分页进度直接报错。Probe 两端共用保存入口，使用已有 toml_edit 依赖按语义编辑目标表和键，保留未知内容、注释及多行字符串；待写文本直接解析并加载 env、规范化，仅在文本变化时原子替换配置路径并保留原权限，不维护符号链接；空补丁不写 TOML，Key 仍加密写入，env 仍为 0600。DSH 归档／恢复只定位目标，删除继续使用排他租约并核验 inode 和后代；统一归档清理直接由 execute 扫描与校验一次；改名与归档后复用定位结果及最新归档集合生成摘要。
 
@@ -181,7 +181,7 @@ TCP/HTTP 管理监听、API Key 鉴权和限流已删除；旧 HTTP/Nginx、目�
 
 桌面专属 remote.sshDelete 接收 revision 与 alias，返回更新后的 RemoteConnectionView，不接收前端文件路径。用户配置与 Include 按显式别名编辑，保留注释、权限、其他别名与密钥；系统配置不能删除。原子替换失败报告并恢复已替换文件；删除对应 AgentHub 记录，当前连接被删除时回到本机。
 
-Linux 派发直接返回 Result<Value, ApiError>，没有 HTTP 请求／响应转换或测试 Router；Axum 只作为模拟服务的开发依赖。仅常驻 `serve` 与 `probe monitor-errors` 使用双工作线程 Tokio，`rpc-stdio`、`health` 及各短时 CLI／Hook 子命令统一使用单线程 Tokio。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，所有后台轮询（包括终态）传 false，展开时读取全文，终态仍刷新相关状态。作业注册表仅持有互斥组；启动、等待或读取失败统一收尾，日志排空与终态处理后释放，无现成运行时时使用单线程 runtime。前端不改写文件名或地址，后端保留凭据脱敏。
+Linux 派发经 `rpc_dispatch` 直接返回 `Box<RawValue>`／`Result<Value, ApiError>`，出站通过 `ssh_rpc::write_raw_response` 三段流式写出帧头与 JSON 字节并附带单连接 `Semaphore::new(16)` 背压，客户端 `agenthub-ffi` 通过 `read_raw_response` 原文透传给 Swift `RpcSink`（保留握手、单次读重试与机器修订号隔离），无任何 HTTP 路由器或 `axum` 依赖。宿主进程存活性、工作目录、命令行与打开文件统一由跨平台内核探针（macOS `libproc` `proc_pidinfo`／`PROC_PIDVNODEPATHINFO`／`KERN_PROCARGS2` 与 Linux `/proc/<pid>/{cwd,cmdline,fd,stat}`，零外部 `lsof` 热路径阻塞）核验。仅常驻 `serve` 与 `probe monitor-errors` 使用双工作线程 Tokio，`rpc-stdio`、`health` 及各短时 CLI／Hook 子命令统一使用单线程 Tokio。作业日志按 CR、LF、CRLF 分记录，整条脱敏后在现有读取任务中累计 16KiB 或 200ms 写入，结束前排空。jobs.detail 的可选 includeOutput 默认为 true，所有后台轮询（包括终态）传 false，展开时读取全文，终态仍刷新相关状态。作业注册表仅持有互斥组；启动、等待或读取失败统一收尾，日志排空与终态处理后释放，无现成运行时时使用单线程 runtime。前端不改写文件名或地址，后端保留凭据脱敏。
 
 ## 通知与监测
 

@@ -47,7 +47,7 @@ Use the commands in README, plus `python3 scripts/privacy-check.py --git-objects
 - 单条、批量、归档清理和隐藏清理共用直接删除实现。Codex 覆盖普通／归档明文与压缩 rollout、writer 锁、shell snapshots、visualizations、原生状态和分页历史数据库、名称索引。父子关系去重遍历，循环不阻断；不反向扩大到引用方。执行仅处理确认时提交的 ID 集合，不加入后来出现的后代。
 - Claude 定位键取项目相对路径及文件名身份；覆盖主 JSONL、同名目录、file-history、tasks、session-env、debug、todos，以及项目索引、共享历史和会话登记中的对应记录。Grok 按各工作区的 ID 目录定位，摘要缺失或损坏不影响删除。
 - 删除不设批量数量、文件大小、目录深度和文件数量上限，目录流式遍历；文件、权限和数据库失败逐项报告，继续其他目标。fingerprint 是可省略的旧字段，不参与删除；归档及隐藏清理的 candidates 是固定执行范围。删除是一次性操作，原生程序重新生成的数据在刷新后呈现。
-- Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理；左侧顶栏「工作区」跨平台总览页及 5 个代码 Agent 页内分组按 `.git` worktree 主仓库与规范化工作目录混排或筛选会话。Antigravity 同时纳管桌面端（`ANTIGRAVITY_HOME`／`~/.gemini/antigravity`，兼容 `--csrf_token` 与 `daemon/hub_*.json` 在线探测）与 `agy` CLI（`ANTIGRAVITY_CLI_HOME`／`~/.gemini/antigravity-cli`，离线根锁树级继承、5 源父链防漏及本机／远端 Linux 双端 Bark 通知），按主存储文件校验归属、排除跨端幽灵摘要与 `implicit/*.pb`，并支持同源无环父链核验的多级子智能体阅读与附件读取（`antigravity_subagents`）；离线改名／归档校验 `presence` 锁并同步 `raw_summary`、15 列整型纳秒 FTS5 `archived`、proto 缓存及对象安全的 `conversation_metadata.json`，永久删除按叶节点优先拓扑逆序覆盖 `conversation_parents`、未水合后代 `404` 磁盘残余与 CLI 共享文件，本机与远端 Linux 同步开放 `antigravity_archived` 已归档与无锁孤立子会话统一清理及 `settings.json` 只读保护。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
+- Antigravity 与 DSH 提供独立会话阅读、搜索、附件、改名、归档／恢复和删除入口，并保留独立归档清理；左侧顶栏「工作区」跨平台总览页及 5 个代码 Agent 页内分组按 `.git` worktree 主仓库与规范化工作目录混排或筛选会话。Antigravity 同时纳管桌面端（`ANTIGRAVITY_HOME`／`~/.gemini/antigravity`，兼容 `--csrf_token` 与 `daemon/hub_*.json` 多实例并发端点枚举及按会话归属端点路由）与 `agy` CLI（`ANTIGRAVITY_CLI_HOME`／`~/.gemini/antigravity-cli`，离线根锁树级继承、5 源父链防漏及本机／远端 Linux 双端 Bark 通知），按主存储文件校验归属、排除跨端幽灵摘要与 `implicit/*.pb`，并支持同源无环父链核验的多级子智能体阅读与附件读取（`antigravity_subagents`）；离线改名／归档校验 `presence` 锁并同步 `raw_summary`、15 列整型纳秒 FTS5 `archived`、proto 缓存及对象安全的 `conversation_metadata.json`，永久删除按叶节点优先拓扑逆序覆盖 `conversation_parents`、未水合后代 `404` 磁盘残余与 CLI 共享文件，本机与远端 Linux 同步开放 `antigravity_archived` 已归档与无锁孤立子会话统一清理及 `settings.json` 只读保护。DSH 以标准 DSH_HOME 的 workspace v2 归档名单和 session 头的 origin=subagent/parentSession 核验归属，独立 fork 不扩入；只删除确认请求中的后代。归档、恢复和删除前要求对应机器的 DSH 退出，保留会话锁校验；改名遇到不完整 JSON 记录或 Zstandard 帧直接报错且不写原文件。请求不接受路径，共享索引只移除成功目标；旧服务缺少对应能力时禁用入口。
 - 隐藏扫描只定位元数据候选及其原生后代，不读取正文或计算指纹。分批接口继续复用 cleanup.hiddenDryRun，每页最多 100 项；保留同源扫描协调、取消及空闲释放，候选总数不设业务上限。停止后的不完整结果不执行清理，机器切换隔离迟到响应。
 - Pi 活动契约、读取、管理、界面和监测全部退役，未知命令统一拒绝，不维护退役命令墓碑表。旧数据库的 Pi 退役迁移由 v2.0.10 完成；保留其原生程序与用户数据。
 - API 协议为 2；先升级服务再安装 App。主窗口隐藏创建，仅初始化时适配一次工作区，Ready 和 Reopen 只显示、恢复及聚焦。
@@ -145,11 +145,11 @@ Claude native command envelopes render as the slash command and exact arguments.
 - CI 系统通知在 macOS App 运行期间每 5 秒串行读取当前机器缓存，不依赖页面可见性；`cached_only` 不触发扫描，`baseline_ms` 沿用既有监控基线。使用来源机器的仓库／Bot 筛选和已成功扫描仓库集合；新增或重新加入的仓库独立建立基线，空仓库后续新运行照常通知。首次观察、换机、切号、重新启用不补发旧结果；仅成功、失败、超时，点击打开对应运行。复用原生 UserNotifications 和已有 SSH 通道，观察去重只在内存；Bark 的持久化、确认与重试独立保留。
 - 隐藏清理扫描只接受 start/poll/cancel，复用同一连接中的线程行与父子关系；保留两种父 ID 字段及 spawn edges、固定候选、分页和取消。通知保留期维护不提供 dry-run 统计，标记批量删除保留保护集合；Probe 配置通过共同原子写入入口替换实际文件并保留权限。
 
-- 关闭的 Provider／错误监控只在状态或统计变化时写库，启用时保留扫描时间；Claude Hook 配置只为启用的 Claude 读取。Probe 聚合沿用受限阻塞读取任务。Mac CI 有待发事件才请求授权，由原生回调发送该批事件，观察循环不等待；消费前校验来源，已接受通知按原机器名发送，稳定事件身份不包含连接修订；不增加授权重试状态。
+- 关闭的 Provider／错误监控只在状态或统计变化时写库，启用状态下状态／游标／扫描行数／新增异常变化时立即写库，完全空闲未变的 `"ok"` 心跳按 300 秒节流写库；Claude Hook 配置只为启用的 Claude 读取。Probe 聚合沿用受限阻塞读取任务。Mac CI 有待发事件才请求授权，由原生回调发送该批事件，观察循环不等待；消费前校验来源，已接受通知按原机器名发送，稳定事件身份不包含连接修订；不增加授权重试状态。
 
 ## 读取与保存边界
 
-- Probe 复用当轮会话定位，仅为候选读取通知状态，不统计目录大小；后台通知扫描范围不缩减。活动态势只消费 `active_sessions`。
+- Probe 复用当轮会话定位，仅为候选读取通知状态，不统计目录大小；后台通知扫描范围不缩减。实时活动态势覆盖六大 Provider（Codex、Claude Code、Grok Build `active_sessions`＋内核进程存活性、Antigravity 在线多实例与离线 CLI 锁、DSH `session.lock`＋未结回合／提问／审批，以及本机 Grok Bot 待回复／待授权）。
 - Antigravity／DSH 列表完成筛选、排序和截取后才请求大小；详情继续按需统计。DSH 通知缓存只受现有 32MiB 字节预算及空闲释放约束；不要与 64 项历史缓存混淆。Grok 通知 JSONL 共享不可变数组，DSH／Grok 派生条目只在变更时计重。
 - 通知先定位目标再复核对应来源，保留首发与重试前的身份、重名和状态检查。DSH 常规删除保留排他租约、inode 和后代归属校验；统一归档清理只由 execute 扫描和校验一次，保留逐项结果。
 - 配置补丁为空时不写 TOML；生成并校验后的文本与原文相同也不替换。实际变更原子替换配置路径并保留权限，不维护符号链接；Key 写入仍加密，业务审计保持。
