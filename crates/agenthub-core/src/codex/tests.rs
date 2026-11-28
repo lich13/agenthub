@@ -4250,11 +4250,50 @@ fn managed_codex_home_distinguishes_system_homes_from_temp_dot_codex_under_zero_
     use std::os::unix::io::AsRawFd;
 
     assert!(super::is_managed_codex_home(Path::new("/root/.codex")));
+    assert!(super::is_managed_codex_home(Path::new("/root/.codex/")));
     assert!(super::is_managed_codex_home(Path::new(
         "/home/ubuntu/.codex"
     )));
     assert!(super::is_managed_codex_home(Path::new(
         "/Users/example/.codex"
+    )));
+    assert!(super::is_managed_codex_home(Path::new(
+        "/System/Volumes/Data/Users/example/.codex"
+    )));
+    assert!(!super::matches_system_codex_home_layout(Path::new("")));
+    assert!(!super::matches_system_codex_home_layout(Path::new("/")));
+    assert!(!super::matches_system_codex_home_layout(Path::new(
+        ".codex"
+    )));
+    assert!(!super::matches_system_codex_home_layout(Path::new(
+        "home/ubuntu/.codex"
+    )));
+    assert!(!super::matches_system_codex_home_layout(Path::new(
+        "/root/.codex/sessions"
+    )));
+    assert!(!super::matches_system_codex_home_layout(
+        &Path::new("/").join("home").join(".codex")
+    ));
+    assert!(!super::matches_system_codex_home_layout(
+        &Path::new("/").join("Users").join(".codex")
+    ));
+    assert!(!super::matches_system_codex_home_layout(
+        &Path::new("/System/Volumes/Data")
+            .join("Users")
+            .join(".codex")
+    ));
+    assert!(!super::matches_system_codex_home_layout(
+        &Path::new("/")
+            .join("home")
+            .join("..")
+            .join("tmp")
+            .join(".codex")
+    ));
+    assert!(!super::matches_system_codex_home_layout(Path::new(
+        "/Users/example/.codex/sessions"
+    )));
+    assert!(!super::matches_system_codex_home_layout(Path::new(
+        "/System/Volumes/Data/Users/example/.codex/sessions"
     )));
     #[cfg(target_os = "macos")]
     assert!(!super::is_managed_codex_home(Path::new(

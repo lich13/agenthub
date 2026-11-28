@@ -519,23 +519,51 @@ static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(u32, CodexHostSnapshot
     std::sync::Mutex::new(None);
 
 fn matches_system_codex_home_layout(path: &Path) -> bool {
-    if path == Path::new("/root/.codex") {
-        return true;
+    use std::path::Component::{Normal, RootDir};
+
+    let mut comps = path.components();
+    if comps.next() != Some(RootDir) {
+        return false;
     }
-    path.file_name().and_then(|s| s.to_str()) == Some(".codex")
-        && path
-            .parent()
-            .and_then(|user_dir| {
-                user_dir
-                    .file_name()
-                    .filter(|name| !name.is_empty())
-                    .zip(user_dir.parent())
-            })
-            .is_some_and(|(_, home_base)| {
-                home_base == Path::new("/home")
-                    || home_base == Path::new("/Users")
-                    || home_base == Path::new("/System/Volumes/Data/Users")
-            })
+    let Some(Normal(first)) = comps.next() else {
+        return false;
+    };
+    if first == "root" {
+        return matches!(
+            (comps.next(), comps.next()),
+            (Some(Normal(dot_codex)), None) if dot_codex == ".codex"
+        );
+    }
+    if first == "home" || first == "Users" {
+        return matches!(
+            (comps.next(), comps.next(), comps.next()),
+            (Some(Normal(_user)), Some(Normal(dot_codex)), None) if dot_codex == ".codex"
+        );
+    }
+    if first == "System" {
+        return matches!(
+            (
+                comps.next(),
+                comps.next(),
+                comps.next(),
+                comps.next(),
+                comps.next(),
+                comps.next(),
+            ),
+            (
+                Some(Normal(volumes)),
+                Some(Normal(data)),
+                Some(Normal(users)),
+                Some(Normal(_user)),
+                Some(Normal(dot_codex)),
+                None,
+            ) if volumes == "Volumes"
+                && data == "Data"
+                && users == "Users"
+                && dot_codex == ".codex"
+        );
+    }
+    false
 }
 
 fn is_managed_codex_home(root: &Path) -> bool {

@@ -245,7 +245,7 @@ fn default_linux_codex_discovery_paths(
         (
             PathBuf::from("/root/.codex"),
             PathBuf::from("/home/ubuntu/.codex"),
-            PathBuf::from("/home"),
+            Path::new("/").join("home"),
         )
     }
 }
