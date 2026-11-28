@@ -4152,5 +4152,61 @@ fn full_detail_legacy_messages_and_tail_forward_cursor_stay_snapshot_consistent_
         "Replaced file prompt"
     );
 
+    // (d) Compressed `.jsonl.zst` atomic replacement mid-read retries cleanly without mixing snapshots.
+    let zst_id = "55555555-5555-4555-8555-555555555555";
+    let zst_rollout = sessions_dir.join(format!("rollout-2026-11-28T00-02-00-{zst_id}.jsonl.zst"));
+    let write_zst = |dest: &Path, lines: &[String]| {
+        let payload = lines.join("\n") + "\n";
+        let encoded = zstd::stream::encode_all(payload.as_bytes(), 1).unwrap();
+        fs::write(dest, encoded).unwrap();
+    };
+    write_zst(
+        &zst_rollout,
+        &[
+            format!(
+                r#"{{"timestamp":"2026-11-28T00:02:00Z","type":"session_meta","payload":{{"id":"{zst_id}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#
+            ),
+            r#"{"timestamp":"2026-11-28T00:02:01Z","type":"response_item","payload":{"type":"message","role":"user","id":"z-u1","content":[{"type":"input_text","text":"Initial zst prompt"}]}}"#.to_owned(),
+            r#"{"timestamp":"2026-11-28T00:02:02Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"z-a1","content":[{"type":"output_text","text":"Initial zst reply"}]}}"#.to_owned(),
+        ],
+    );
+    let zst_summary = super::ThreadSummary {
+        activity_updated_at: None,
+        storage_size: None,
+        id: zst_id.to_owned(),
+        title: "Compressed Snapshot Consistency".to_owned(),
+        status: ThreadStatus::Recent,
+        updated_at: Some("2026-11-28T00:02:02Z".to_owned()),
+        archived_at: None,
+        message_count: 2,
+        latest_message: Some("Initial zst reply".to_owned()),
+        cwd: Some("/workspace/example.invalid".to_owned()),
+        workspace_root: None,
+        model: None,
+        rollout_path: Some(zst_rollout.clone()),
+        active_turn_id: None,
+        active_job_id: None,
+        pending_elicitation: None,
+        last_event_kind: None,
+    };
+    super::rollout_events::set_test_before_legacy_messages_hook(move |path| {
+        let tmp = path.with_extension("zst.tmp");
+        let replaced = [
+            format!(
+                r#"{{"timestamp":"2026-11-28T00:03:00Z","type":"session_meta","payload":{{"id":"{zst_id}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#
+            ),
+            r#"{"timestamp":"2026-11-28T00:03:01Z","type":"response_item","payload":{"type":"message","role":"user","id":"z-u2","content":[{"type":"input_text","text":"Replaced zst prompt"}]}}"#.to_owned(),
+        ];
+        let payload = replaced.join("\n") + "\n";
+        let encoded = zstd::stream::encode_all(payload.as_bytes(), 1).unwrap();
+        fs::write(&tmp, encoded).unwrap();
+        fs::rename(&tmp, path).unwrap();
+    });
+    let zst_detail =
+        super::thread_detail_page_from_summary(zst_summary, false, None, None, None).unwrap();
+    assert_eq!(zst_detail.blocks.len(), 1);
+    assert_eq!(zst_detail.messages.len(), 1);
+    assert_eq!(zst_detail.messages[0].text, "Replaced zst prompt");
+
     let _ = fs::remove_dir_all(home);
 }

@@ -350,8 +350,9 @@ pub(crate) fn evict_idle_detail_cache(max_idle: std::time::Duration) {
 
 pub(super) fn read_probe_snapshot(path: &Path) -> Result<Arc<ClaudeProbeSnapshot>> {
     if DETAIL_CACHE.has_entry(path, "") {
-        let parsed = read(path)?;
-        return Ok(Arc::new(ClaudeProbeSnapshot::from_parsed(&parsed)));
+        if let Ok(parsed) = read(path) {
+            return Ok(Arc::new(ClaudeProbeSnapshot::from_parsed(&parsed)));
+        }
     }
     PROBE_DETAIL_CACHE.read(
         path,
@@ -654,32 +655,34 @@ pub(super) fn summary(path: &Path) -> Result<Arc<Parsed>> {
     // Keep only summary fields here, and never insert cold list items into DETAIL_CACHE.
     if !SUMMARY_CACHE.has_entry(path, "") {
         if DETAIL_CACHE.has_entry(path, "") {
-            let parsed = read(path)?;
-            return Ok(Arc::new(Parsed {
-                id: parsed.id.clone(),
-                title: parsed.title.clone(),
-                cwd: parsed.cwd.clone(),
-                cwds: parsed.cwds.clone(),
-                version: parsed.version.clone(),
-                updated_at: parsed.updated_at.clone(),
-                message_count: parsed.message_count,
-                last_message: parsed.last_message.clone(),
-                issues: parsed.issues.clone(),
-                has_fatal_issues: parsed.has_fatal_issues,
-                has_partial_tail: parsed.has_partial_tail,
-                warnings: parsed.warnings.clone(),
-                last_turn_at: parsed.last_turn_at,
-                last_terminal_at: parsed.last_terminal_at,
-                turn_open: parsed.turn_open,
-                has_open_questions: parsed.has_open_questions,
-                saw_sidechain: parsed.saw_sidechain,
-                saw_primary: parsed.saw_primary,
-                ..Default::default()
-            }));
+            if let Ok(parsed) = read(path) {
+                return Ok(Arc::new(Parsed {
+                    id: parsed.id.clone(),
+                    title: parsed.title.clone(),
+                    cwd: parsed.cwd.clone(),
+                    cwds: parsed.cwds.clone(),
+                    version: parsed.version.clone(),
+                    updated_at: parsed.updated_at.clone(),
+                    message_count: parsed.message_count,
+                    last_message: parsed.last_message.clone(),
+                    issues: parsed.issues.clone(),
+                    has_fatal_issues: parsed.has_fatal_issues,
+                    has_partial_tail: parsed.has_partial_tail,
+                    warnings: parsed.warnings.clone(),
+                    last_turn_at: parsed.last_turn_at,
+                    last_terminal_at: parsed.last_terminal_at,
+                    turn_open: parsed.turn_open,
+                    has_open_questions: parsed.has_open_questions,
+                    saw_sidechain: parsed.saw_sidechain,
+                    saw_primary: parsed.saw_primary,
+                    ..Default::default()
+                }));
+            }
         }
         if PROBE_DETAIL_CACHE.has_entry(path, "") {
-            let snap = read_probe_snapshot(path)?;
-            return Ok(Arc::new(snap.to_summary_parsed()));
+            if let Ok(snap) = read_probe_snapshot(path) {
+                return Ok(Arc::new(snap.to_summary_parsed()));
+            }
         }
     }
     SUMMARY_CACHE.read(

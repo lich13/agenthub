@@ -205,58 +205,51 @@ const LIVE_PROVIDER_CACHE_TTL: std::time::Duration = std::time::Duration::from_s
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LiveProviderSessionsCacheKey {
     codex_home: std::path::PathBuf,
-    claude_projects: std::path::PathBuf,
-    grok_home: std::path::PathBuf,
-    ag_home: std::path::PathBuf,
+    claude_projects: Option<std::path::PathBuf>,
+    grok_home: Option<std::path::PathBuf>,
+    ag_home: Option<std::path::PathBuf>,
     ag_cli_home: Option<std::path::PathBuf>,
-    dsh_home: std::path::PathBuf,
+    dsh_home: Option<std::path::PathBuf>,
     grokbot_persistence: Option<std::path::PathBuf>,
     per_bucket_limit: usize,
 }
 
 struct ResolvedLiveProviderPaths {
-    claude: crate::claude::ClaudePaths,
-    grok: crate::grok::GrokPaths,
-    ag: crate::antigravity::sessions::AntigravityPaths,
-    dsh: crate::dsh::DshPaths,
+    claude: Option<crate::claude::ClaudePaths>,
+    grok: Option<crate::grok::GrokPaths>,
+    ag: Option<crate::antigravity::sessions::AntigravityPaths>,
+    dsh: Option<crate::dsh::DshPaths>,
     grokbot: Option<crate::grokbot::GrokBotPaths>,
 }
 
 impl ResolvedLiveProviderPaths {
-    fn default_for_user() -> Result<Self> {
-        let claude = crate::claude::ClaudePaths::default_for_user()?;
-        let grok = crate::grok::GrokPaths::default_for_user()?;
-        let ag = crate::antigravity::sessions::AntigravityPaths::default_for_user()?;
-        let dsh = crate::dsh::DshPaths::default_for_user()?;
-        let grokbot =
-            if crate::platform::PlatformKind::current() == crate::platform::PlatformKind::Macos {
-                crate::grokbot::GrokBotPaths::default_for_user().ok()
-            } else {
-                None
-            };
-        Ok(Self {
-            claude,
-            grok,
-            ag,
-            dsh,
-            grokbot,
-        })
+    fn default_for_user() -> Self {
+        Self {
+            claude: crate::claude::ClaudePaths::default_for_user().ok(),
+            grok: crate::grok::GrokPaths::default_for_user().ok(),
+            ag: crate::antigravity::sessions::AntigravityPaths::default_for_user().ok(),
+            dsh: crate::dsh::DshPaths::default_for_user().ok(),
+            grokbot: (crate::platform::PlatformKind::current()
+                == crate::platform::PlatformKind::Macos)
+                .then(|| crate::grokbot::GrokBotPaths::default_for_user().ok())
+                .flatten(),
+        }
     }
 
     #[cfg(test)]
     fn from_sandbox_root(root: &Path) -> Self {
         Self {
-            claude: crate::claude::ClaudePaths {
+            claude: Some(crate::claude::ClaudePaths {
                 projects: root.join(".claude/projects"),
                 config: root.join(".claude"),
-            },
-            grok: crate::grok::GrokPaths {
+            }),
+            grok: Some(crate::grok::GrokPaths {
                 home: root.join(".grok"),
-            },
-            ag: crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
-            dsh: crate::dsh::DshPaths {
+            }),
+            ag: Some(crate::antigravity::sessions::AntigravityPaths::offline_user_home(root)),
+            dsh: Some(crate::dsh::DshPaths {
                 home: root.join(".dsh"),
-            },
+            }),
             grokbot: (crate::platform::PlatformKind::current()
                 == crate::platform::PlatformKind::Macos)
                 .then(|| crate::grokbot::GrokBotPaths {
@@ -273,11 +266,11 @@ impl ResolvedLiveProviderPaths {
     ) -> LiveProviderSessionsCacheKey {
         LiveProviderSessionsCacheKey {
             codex_home: codex_home.to_path_buf(),
-            claude_projects: self.claude.projects.clone(),
-            grok_home: self.grok.home.clone(),
-            ag_home: self.ag.home.clone(),
-            ag_cli_home: self.ag.cli_home.clone(),
-            dsh_home: self.dsh.home.clone(),
+            claude_projects: self.claude.as_ref().map(|p| p.projects.clone()),
+            grok_home: self.grok.as_ref().map(|p| p.home.clone()),
+            ag_home: self.ag.as_ref().map(|p| p.home.clone()),
+            ag_cli_home: self.ag.as_ref().and_then(|p| p.cli_home.clone()),
+            dsh_home: self.dsh.as_ref().map(|p| p.home.clone()),
             grokbot_persistence: self.grokbot.as_ref().map(|p| p.persistence.clone()),
             per_bucket_limit,
         }
@@ -392,73 +385,75 @@ fn aggregate_active_sessions_with_paths(
     let codex_len = sessions.len();
     let now_ms = Timestamp::now().as_millisecond();
 
-    let claude_paths = &resolved.claude;
-    if claude_paths.available() {
-        if let Ok(items) = crate::claude::list_claude_sessions_without_storage(
-            claude_paths,
-            per_bucket_limit,
-            None,
-        ) {
-            for item in items {
-                let bucket = if item.status == "running" {
-                    Some("running")
-                } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
-                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
-                {
-                    Some("reply_needed")
-                } else if item.read_error.is_some() {
-                    Some("recoverable")
-                } else if is_updated_within_fresh_window(&item.updated_at, now_ms) {
-                    crate::claude::probe_snapshot_for_path(claude_paths, &item.path)
-                        .ok()
-                        .and_then(|s| native_stream_live_bucket(&s, now_ms))
-                } else {
-                    None
-                };
-                if let Some(bucket) = bucket {
-                    sessions.push(live_session(
-                        "claude_code",
-                        item.id,
-                        item.session_key,
-                        item.title,
-                        bucket,
-                        item.updated_at,
-                        Some(item.cwd),
-                    ));
+    if let Some(claude_paths) = &resolved.claude {
+        if claude_paths.available() {
+            if let Ok(items) = crate::claude::list_claude_sessions_without_storage(
+                claude_paths,
+                per_bucket_limit,
+                None,
+            ) {
+                for item in items {
+                    let bucket = if item.status == "running" {
+                        Some("running")
+                    } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                    {
+                        Some("reply_needed")
+                    } else if item.read_error.is_some() {
+                        Some("recoverable")
+                    } else if is_updated_within_fresh_window(&item.updated_at, now_ms) {
+                        crate::claude::probe_snapshot_for_path(claude_paths, &item.path)
+                            .ok()
+                            .and_then(|s| native_stream_live_bucket(&s, now_ms))
+                    } else {
+                        None
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(live_session(
+                            "claude_code",
+                            item.id,
+                            item.session_key,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        ));
+                    }
                 }
             }
         }
     }
 
-    let grok_paths = &resolved.grok;
-    if grok_paths.sessions().is_dir() {
-        if let Ok((items, scan)) =
-            crate::grok::probe_sessions(grok_paths, per_bucket_limit, |item| {
-                !matches!(item.status.as_str(), "running" | "waiting")
-                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
-            })
-        {
-            let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
-            for item in items {
-                let bucket = if item.status == "running" {
-                    Some("running")
-                } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
-                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
-                {
-                    Some("reply_needed")
-                } else {
-                    stream_buckets.get(&item.id).copied()
-                };
-                if let Some(bucket) = bucket {
-                    sessions.push(live_session(
-                        "grok",
-                        item.id.clone(),
-                        item.id,
-                        item.title,
-                        bucket,
-                        item.updated_at,
-                        Some(item.cwd),
-                    ));
+    if let Some(grok_paths) = &resolved.grok {
+        if grok_paths.sessions().is_dir() {
+            if let Ok((items, scan)) =
+                crate::grok::probe_sessions(grok_paths, per_bucket_limit, |item| {
+                    !matches!(item.status.as_str(), "running" | "waiting")
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                })
+            {
+                let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
+                for item in items {
+                    let bucket = if item.status == "running" {
+                        Some("running")
+                    } else if matches!(item.status.as_str(), "waiting" | "reply_needed")
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                    {
+                        Some("reply_needed")
+                    } else {
+                        stream_buckets.get(&item.id).copied()
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(live_session(
+                            "grok",
+                            item.id.clone(),
+                            item.id,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        ));
+                    }
                 }
             }
         }
@@ -469,97 +464,100 @@ fn aggregate_active_sessions_with_paths(
         q: None,
         limit: Some(per_bucket_limit),
     };
-    let ag_paths = &resolved.ag;
-    if ag_paths.available() {
-        if let Ok(items) =
-            crate::antigravity::sessions::list_sessions_without_storage(ag_paths, &list_req)
-        {
-            let snapshot_candidates: Vec<_> = items
-                .iter()
-                .filter(|item| {
+    if let Some(ag_paths) = &resolved.ag {
+        if ag_paths.available() {
+            if let Ok(items) =
+                crate::antigravity::sessions::list_sessions_without_storage(ag_paths, &list_req)
+            {
+                let snapshot_candidates: Vec<_> = items
+                    .iter()
+                    .filter(|item| {
+                        let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
+                        fresh
+                            && !matches!(
+                                item.status.as_str(),
+                                "running" | "waiting" | "reply_needed" | "failed"
+                            )
+                            && item.read_error.is_none()
+                    })
+                    .collect();
+                let batch_snapshots =
+                    crate::antigravity::sessions::probe_live_stream_snapshots_batch(
+                        ag_paths,
+                        &snapshot_candidates,
+                        now_ms,
+                    );
+                for item in items {
                     let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
-                    fresh
-                        && !matches!(
-                            item.status.as_str(),
-                            "running" | "waiting" | "reply_needed" | "failed"
-                        )
-                        && item.read_error.is_none()
-                })
-                .collect();
-            let batch_snapshots = crate::antigravity::sessions::probe_live_stream_snapshots_batch(
-                ag_paths,
-                &snapshot_candidates,
-                now_ms,
-            );
-            for item in items {
-                let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
-                let bucket = match item.status.as_str() {
-                    "running" => Some("running"),
-                    "waiting" => Some("reply_needed"),
-                    "reply_needed" if fresh => Some("reply_needed"),
-                    "failed" if fresh => Some("recoverable"),
-                    _ if item.read_error.is_some() && fresh => Some("recoverable"),
-                    _ if fresh => batch_snapshots.get(&item.id).and_then(|s| {
-                        if s.settled_count < s.record_count {
-                            Some("running")
-                        } else {
-                            native_stream_live_bucket(s, now_ms)
-                        }
-                    }),
-                    _ => None,
-                };
-                if let Some(bucket) = bucket {
-                    sessions.push(live_session(
-                        "antigravity",
-                        item.id,
-                        item.session_key,
-                        item.title,
-                        bucket,
-                        item.updated_at,
-                        Some(item.cwd),
-                    ));
+                    let bucket = match item.status.as_str() {
+                        "running" => Some("running"),
+                        "waiting" => Some("reply_needed"),
+                        "reply_needed" if fresh => Some("reply_needed"),
+                        "failed" if fresh => Some("recoverable"),
+                        _ if item.read_error.is_some() && fresh => Some("recoverable"),
+                        _ if fresh => batch_snapshots.get(&item.id).and_then(|s| {
+                            if s.settled_count < s.record_count {
+                                Some("running")
+                            } else {
+                                native_stream_live_bucket(s, now_ms)
+                            }
+                        }),
+                        _ => None,
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(live_session(
+                            "antigravity",
+                            item.id,
+                            item.session_key,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        ));
+                    }
                 }
             }
         }
     }
 
-    let dsh_paths = &resolved.dsh;
-    if dsh_paths.home.join("sessions").is_dir() {
-        if let Ok((items, scan)) =
-            crate::dsh::sessions::probe_sessions(dsh_paths, &list_req, |item| {
-                !matches!(
-                    item.status.as_str(),
-                    "running" | "waiting" | "reply_needed" | "failed"
-                ) && item.read_error.is_none()
-                    && is_updated_within_fresh_window(&item.updated_at, now_ms)
-            })
-        {
-            let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
-            for item in items {
-                let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
-                let bucket = if item.status == "running" {
-                    Some("running")
-                } else if item.status == "waiting" || (item.status == "reply_needed" && fresh) {
-                    Some("reply_needed")
-                } else if item.status == "failed" && fresh {
-                    Some("recoverable")
-                } else if let Some(&b) = stream_buckets.get(&item.id) {
-                    Some(b)
-                } else if item.read_error.is_some() {
-                    Some("recoverable")
-                } else {
-                    None
-                };
-                if let Some(bucket) = bucket {
-                    sessions.push(live_session(
-                        "dsh",
-                        item.id,
-                        item.session_key,
-                        item.title,
-                        bucket,
-                        item.updated_at,
-                        Some(item.cwd),
-                    ));
+    if let Some(dsh_paths) = &resolved.dsh {
+        if dsh_paths.home.join("sessions").is_dir() {
+            if let Ok((items, scan)) =
+                crate::dsh::sessions::probe_sessions(dsh_paths, &list_req, |item| {
+                    !matches!(
+                        item.status.as_str(),
+                        "running" | "waiting" | "reply_needed" | "failed"
+                    ) && item.read_error.is_none()
+                        && is_updated_within_fresh_window(&item.updated_at, now_ms)
+                })
+            {
+                let stream_buckets = stream_live_buckets(&scan.streams, now_ms);
+                for item in items {
+                    let fresh = is_updated_within_fresh_window(&item.updated_at, now_ms);
+                    let bucket = if item.status == "running" {
+                        Some("running")
+                    } else if item.status == "waiting" || (item.status == "reply_needed" && fresh) {
+                        Some("reply_needed")
+                    } else if item.status == "failed" && fresh {
+                        Some("recoverable")
+                    } else if let Some(&b) = stream_buckets.get(&item.id) {
+                        Some(b)
+                    } else if item.read_error.is_some() {
+                        Some("recoverable")
+                    } else {
+                        None
+                    };
+                    if let Some(bucket) = bucket {
+                        sessions.push(live_session(
+                            "dsh",
+                            item.id,
+                            item.session_key,
+                            item.title,
+                            bucket,
+                            item.updated_at,
+                            Some(item.cwd),
+                        ));
+                    }
                 }
             }
         }
@@ -639,7 +637,7 @@ pub fn aggregate_probe_status_with_db(
     db: &crate::db::PanelDb,
     force_refresh: bool,
 ) -> Result<ProbeStatusAggregation> {
-    let resolved = ResolvedLiveProviderPaths::default_for_user()?;
+    let resolved = ResolvedLiveProviderPaths::default_for_user();
     aggregate_probe_status_with_db_and_paths(config, db, &resolved, force_refresh)
 }
 
@@ -1461,26 +1459,33 @@ mod tests {
         // rather than deriving .claude / .grok / .dsh / Grok Bot from custom codex.home.
         let mut custom_codex_cfg = Config::current_defaults().unwrap();
         custom_codex_cfg.codex.home = root.join("isolated-custom-codex-storage");
-        let prod_resolved = super::ResolvedLiveProviderPaths::default_for_user().unwrap();
+        let prod_resolved = super::ResolvedLiveProviderPaths::default_for_user();
         assert_eq!(
-            prod_resolved.dsh.home,
-            crate::dsh::DshPaths::default_for_user().unwrap().home
+            prod_resolved.dsh.as_ref().map(|p| &p.home),
+            crate::dsh::DshPaths::default_for_user()
+                .ok()
+                .as_ref()
+                .map(|p| &p.home)
         );
         assert_eq!(
-            prod_resolved.grok.home,
-            crate::grok::GrokPaths::default_for_user().unwrap().home
+            prod_resolved.grok.as_ref().map(|p| &p.home),
+            crate::grok::GrokPaths::default_for_user()
+                .ok()
+                .as_ref()
+                .map(|p| &p.home)
         );
         assert_eq!(
-            prod_resolved.claude.projects,
+            prod_resolved.claude.as_ref().map(|p| &p.projects),
             crate::claude::ClaudePaths::default_for_user()
-                .unwrap()
-                .projects
+                .ok()
+                .as_ref()
+                .map(|p| &p.projects)
         );
         assert!(
             !prod_resolved
                 .dsh
-                .home
-                .starts_with(&custom_codex_cfg.codex.home),
+                .as_ref()
+                .is_some_and(|p| p.home.starts_with(&custom_codex_cfg.codex.home)),
             "custom codex.home must never redirect DSH path resolution"
         );
         if cfg!(target_os = "macos") {
@@ -1652,17 +1657,19 @@ mod tests {
         let mut auto_cfg = Config::current_defaults().unwrap();
         auto_cfg.codex.home = std::path::PathBuf::from("auto");
         let mut resolved_one = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_a);
-        resolved_one.grok.home = root_a.join("custom-grok-1");
-        resolved_one.claude.projects = root_a.join("custom-claude/projects");
-        resolved_one.ag =
-            crate::antigravity::sessions::AntigravityPaths::offline(root_a.join("custom-ag"));
-        resolved_one.dsh.home = root_a.join("custom-dsh");
+        resolved_one.grok.as_mut().unwrap().home = root_a.join("custom-grok-1");
+        resolved_one.claude.as_mut().unwrap().projects = root_a.join("custom-claude/projects");
+        resolved_one.ag = Some(crate::antigravity::sessions::AntigravityPaths::offline(
+            root_a.join("custom-ag"),
+        ));
+        resolved_one.dsh.as_mut().unwrap().home = root_a.join("custom-dsh");
         let mut resolved_two = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_b);
-        resolved_two.grok.home = root_b.join("custom-grok-2");
-        resolved_two.claude.projects = root_b.join("custom-claude/projects");
-        resolved_two.ag =
-            crate::antigravity::sessions::AntigravityPaths::offline(root_b.join("custom-ag"));
-        resolved_two.dsh.home = root_b.join("custom-dsh");
+        resolved_two.grok.as_mut().unwrap().home = root_b.join("custom-grok-2");
+        resolved_two.claude.as_mut().unwrap().projects = root_b.join("custom-claude/projects");
+        resolved_two.ag = Some(crate::antigravity::sessions::AntigravityPaths::offline(
+            root_b.join("custom-ag"),
+        ));
+        resolved_two.dsh.as_mut().unwrap().home = root_b.join("custom-dsh");
         assert_ne!(
             resolved_one.cache_key(&auto_cfg.codex.home, 20),
             resolved_two.cache_key(&auto_cfg.codex.home, 20)

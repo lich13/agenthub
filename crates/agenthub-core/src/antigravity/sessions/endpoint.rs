@@ -1020,7 +1020,42 @@ impl LiveEndpointSet {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_AUTO_DISCOVER_CANDIDATES: std::cell::RefCell<Option<Vec<DiscoveredAntigravityEndpoint>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_auto_discover_candidates<R>(
+    candidates: Vec<DiscoveredAntigravityEndpoint>,
+    f: impl FnOnce() -> R,
+) -> R {
+    struct Reset(Option<Vec<DiscoveredAntigravityEndpoint>>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_AUTO_DISCOVER_CANDIDATES.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let prev = TEST_AUTO_DISCOVER_CANDIDATES.with(|slot| slot.replace(Some(candidates)));
+    let _reset = Reset(prev);
+    f()
+}
+
 pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndpointSet> {
+    connect_all_endpoints_inner(paths, true)
+}
+
+pub(crate) fn connect_all_endpoints_for_mutation(
+    paths: &AntigravityPaths,
+) -> Result<LiveEndpointSet> {
+    connect_all_endpoints_inner(paths, false)
+}
+
+fn connect_all_endpoints_inner(
+    paths: &AntigravityPaths,
+    use_cache: bool,
+) -> Result<LiveEndpointSet> {
     let probe_endpoint = |port: u16, token: &str| match connect_rpc_post(
         port,
         token,
@@ -1059,22 +1094,12 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
             Ok(None) => Ok(LiveEndpointSet::default()),
             Err(error) => {
                 if service_unreachable(&error) {
-                    let is_timeout = error.downcast_ref::<std::io::Error>().is_some_and(|io| {
-                        matches!(
-                            io.kind(),
-                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                        )
-                    });
-                    if is_timeout {
-                        Ok(LiveEndpointSet::from_probe(
-                            Vec::new(),
-                            Some(format!(
-                                "Antigravity 实例响应超时（端口 {port}），无法确认会话归属，请稍后重试"
-                            )),
-                        ))
-                    } else {
-                        Ok(LiveEndpointSet::default())
-                    }
+                    Ok(LiveEndpointSet::from_probe(
+                        Vec::new(),
+                        Some(format!(
+                            "Antigravity 实例未响应或连接中断（端口 {port}），无法确认会话归属：{error}"
+                        )),
+                    ))
                 } else {
                     Err(error)
                 }
@@ -1108,41 +1133,48 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
             Ok(LiveEndpointSet::from_probe(instances, incomplete_reason))
         }
         RpcMode::AutoDiscover => {
-            match get_cached_live_endpoints() {
-                Some(Ok(cached)) => {
-                    let mut instances = Vec::new();
-                    let mut all_alive = true;
-                    for ep in cached {
-                        if ep.pid > 0 && !crate::platform::pid_is_alive(ep.pid) {
-                            all_alive = false;
-                            break;
-                        }
-                        let mut connected = false;
-                        for &port in &ep.ports {
-                            if let Ok(Some(value)) = probe_endpoint(port, &ep.token) {
-                                instances.push((
-                                    LiveRpc {
-                                        port,
-                                        token: ep.token.clone(),
-                                    },
-                                    value,
-                                ));
-                                connected = true;
+            if use_cache {
+                match get_cached_live_endpoints() {
+                    Some(Ok(cached)) => {
+                        let mut instances = Vec::new();
+                        let mut all_alive = true;
+                        for ep in cached {
+                            if ep.pid > 0 && !crate::platform::pid_is_alive(ep.pid) {
+                                all_alive = false;
+                                break;
+                            }
+                            let mut connected = false;
+                            for &port in &ep.ports {
+                                if let Ok(Some(value)) = probe_endpoint(port, &ep.token) {
+                                    instances.push((
+                                        LiveRpc {
+                                            port,
+                                            token: ep.token.clone(),
+                                        },
+                                        value,
+                                    ));
+                                    connected = true;
+                                    break;
+                                }
+                            }
+                            if !connected {
+                                all_alive = false;
                                 break;
                             }
                         }
-                        if !connected {
-                            all_alive = false;
-                            break;
+                        if all_alive && !instances.is_empty() {
+                            return Ok(LiveEndpointSet::from_instances(instances));
                         }
                     }
-                    if all_alive && !instances.is_empty() {
-                        return Ok(LiveEndpointSet::from_instances(instances));
-                    }
+                    Some(Err(())) => return Ok(LiveEndpointSet::default()),
+                    None => {}
                 }
-                Some(Err(())) => return Ok(LiveEndpointSet::default()),
-                None => {}
             }
+            #[cfg(test)]
+            let candidates = TEST_AUTO_DISCOVER_CANDIDATES
+                .with(|slot| slot.borrow().clone())
+                .unwrap_or_else(discover_host_endpoints);
+            #[cfg(not(test))]
             let candidates = discover_host_endpoints();
             let mut instances = Vec::new();
             let mut verified = Vec::new();

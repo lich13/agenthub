@@ -107,15 +107,19 @@ impl std::fmt::Display for LegacyMessagesSnapshotChanged {
 impl std::error::Error for LegacyMessagesSnapshotChanged {}
 
 #[cfg(test)]
-type BeforeLegacyMessagesHook = Box<dyn FnOnce(&Path) + Send>;
+type BeforeLegacyMessagesHook = Box<dyn FnOnce(&Path)>;
 
 #[cfg(test)]
-static TEST_BEFORE_LEGACY_MESSAGES_HOOK: std::sync::Mutex<Option<BeforeLegacyMessagesHook>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_BEFORE_LEGACY_MESSAGES_HOOK: std::cell::RefCell<Option<BeforeLegacyMessagesHook>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 #[cfg(test)]
-pub(crate) fn set_test_before_legacy_messages_hook(hook: impl FnOnce(&Path) + Send + 'static) {
-    *TEST_BEFORE_LEGACY_MESSAGES_HOOK.lock().unwrap() = Some(Box::new(hook));
+pub(crate) fn set_test_before_legacy_messages_hook(hook: impl FnOnce(&Path) + 'static) {
+    TEST_BEFORE_LEGACY_MESSAGES_HOOK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
 }
 
 fn load_legacy_messages_for_snapshot(
@@ -124,7 +128,7 @@ fn load_legacy_messages_for_snapshot(
 ) -> Result<Vec<CodexMessage>> {
     use std::io::{BufRead, Read, Seek, SeekFrom};
     #[cfg(test)]
-    if let Some(hook) = TEST_BEFORE_LEGACY_MESSAGES_HOOK.lock().unwrap().take() {
+    if let Some(hook) = TEST_BEFORE_LEGACY_MESSAGES_HOOK.with(|slot| slot.borrow_mut().take()) {
         hook(path);
     }
     let compressed = crate::codex::rollout_file::is_compressed(path);
@@ -148,9 +152,7 @@ fn load_legacy_messages_for_snapshot(
     }
     file.seek(SeekFrom::Start(0))?;
     let bounded_reader: Box<dyn Read + '_> = if compressed {
-        Box::new(zstd::stream::read::Decoder::new(
-            (&mut file).take(byte_limit),
-        )?)
+        Box::new(zstd::stream::read::Decoder::new((&mut file).take(byte_limit))?.take(info.offset))
     } else {
         Box::new((&mut file).take(byte_limit))
     };

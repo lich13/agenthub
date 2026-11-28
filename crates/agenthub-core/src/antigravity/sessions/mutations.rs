@@ -207,7 +207,7 @@ fn resolve_mutation_store_and_endpoint(
         return Ok((cli, None));
     }
     let primary = paths.primary_store();
-    let endpoints = connect_all_endpoints(&primary)?;
+    let endpoints = connect_all_endpoints_for_mutation(&primary)?;
     let store = paths.store_for_id(key, endpoints.merged_payload.as_ref());
     if store.home != primary.home {
         return Ok((store, None));
@@ -842,7 +842,7 @@ pub fn preview_batch(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let context = (|| -> Result<_> {
-        let live_set = connect_all_endpoints(&primary)?;
+        let live_set = connect_all_endpoints_for_mutation(&primary)?;
         let live = live_set.merged_payload.clone();
         let summaries = list_summaries_from_source(paths, None, live.as_ref())?
             .into_iter()
@@ -1203,7 +1203,7 @@ fn resolve_delete_store_and_endpoints(
         return Ok((cli, None));
     }
     let primary = paths.primary_store();
-    let endpoints = connect_all_endpoints(&primary)?;
+    let endpoints = connect_all_endpoints_for_mutation(&primary)?;
     if endpoints
         .merged_payload
         .as_ref()
@@ -2118,7 +2118,7 @@ pub fn preview_unified_cleanup_candidates(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let now_ms = super::now_epoch_ms();
-    let live_set = connect_all_endpoints(&primary)?;
+    let live_set = connect_all_endpoints_for_mutation(&primary)?;
     let live = live_set.merged_payload.clone();
     let archived_summaries: Vec<ProviderSessionSummary> =
         super::list_summaries_from_source_filtered(paths, None, Some(true), live.as_ref())?;
@@ -2199,13 +2199,25 @@ pub fn preview_unified_cleanup_candidates(
     )?;
     for (_, orphan) in primary_orphans {
         if seen_ids.insert(orphan.id.clone()) {
-            out.push(UnifiedAntigravityCleanupCandidate {
-                id: orphan.id,
-                title: orphan.title,
-                bytes: orphan.bytes,
-                fingerprint: Some(orphan.fingerprint),
-                blocked_reason: None,
-            });
+            match live_set.resolve_mutation_owner(
+                std::iter::once(orphan.id.as_str())
+                    .chain(orphan.descendants.iter().map(String::as_str)),
+            ) {
+                Ok(_) => out.push(UnifiedAntigravityCleanupCandidate {
+                    id: orphan.id,
+                    title: orphan.title,
+                    bytes: orphan.bytes,
+                    fingerprint: Some(orphan.fingerprint),
+                    blocked_reason: None,
+                }),
+                Err(err) => out.push(UnifiedAntigravityCleanupCandidate {
+                    id: orphan.id,
+                    title: orphan.title,
+                    bytes: 0,
+                    fingerprint: None,
+                    blocked_reason: Some(err.to_string()),
+                }),
+            }
         }
     }
     if let Some(c) = &cli {
@@ -2236,7 +2248,7 @@ pub fn execute_unified_cleanup_targets(
     let primary = paths.primary_store();
     let cli = paths.cli_store();
     let now_ms = super::now_epoch_ms();
-    let live_set = connect_all_endpoints(&primary)?;
+    let live_set = connect_all_endpoints_for_mutation(&primary)?;
     let live_payload = live_set.merged_payload.clone();
     let archived_map: BTreeMap<String, ProviderSessionSummary> =
         super::list_summaries_from_source_filtered(paths, None, Some(true), live_payload.as_ref())?

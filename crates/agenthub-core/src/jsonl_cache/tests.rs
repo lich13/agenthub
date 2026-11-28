@@ -1271,7 +1271,12 @@ fn concurrent_tail_append_during_read_succeeds_while_inplace_prefix_rewrite_plus
         poisoned.is_err(),
         "in-place prefix rewrite masked by tail growth must be rejected"
     );
+    assert!(
+        !cold_cache.has_entry(&path, ""),
+        "failed JsonlCache read must not leave a zombie 0-weight entry reported by has_entry"
+    );
     let clean = read(&cold_cache, &path, &count).unwrap();
+    assert!(cold_cache.has_entry(&path, ""));
     assert_eq!(clean.ids.first().copied(), Some(9));
     assert_eq!(clean.ids.last().copied(), Some(2002));
 }

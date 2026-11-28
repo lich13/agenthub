@@ -92,6 +92,36 @@ fn escape_prototext_string(value: &str) -> String {
     out
 }
 
+fn count_unquoted_braces(line: &str) -> (usize, usize) {
+    let bytes = line.as_bytes();
+    let mut opens = 0usize;
+    let mut closes = 0usize;
+    let mut in_quotes = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_quotes {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'"' {
+                in_quotes = false;
+            }
+        } else {
+            match b {
+                b'"' => in_quotes = true,
+                b'{' => opens += 1,
+                b'}' => closes += 1,
+                b'#' => break,
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    (opens, closes)
+}
+
 fn parse_pbtxt_annotations(content: &str) -> AnnotationOverlay {
     let mut overlay = AnnotationOverlay::default();
     let mut depth = 0usize;
@@ -114,13 +144,8 @@ fn parse_pbtxt_annotations(content: &str) -> AnnotationOverlay {
                 }
             }
         }
-        for ch in trimmed.chars() {
-            if ch == '{' {
-                depth = depth.saturating_add(1);
-            } else if ch == '}' {
-                depth = depth.saturating_sub(1);
-            }
-        }
+        let (opens, closes) = count_unquoted_braces(trimmed);
+        depth = depth.saturating_add(opens).saturating_sub(closes);
     }
     overlay
 }
@@ -129,15 +154,28 @@ const MAX_ANNOTATION_BYTES: u64 = 4 * 1024 * 1024;
 static ANNOTATION_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-type BeforePersistHook = Box<dyn FnOnce(&Path) + Send>;
+type BeforePersistHook = Box<dyn FnOnce(&Path)>;
 
 #[cfg(test)]
-static TEST_ANNOTATION_BEFORE_PERSIST_HOOK: std::sync::Mutex<Option<BeforePersistHook>> =
-    std::sync::Mutex::new(None);
+thread_local! {
+    static TEST_ANNOTATION_BEFORE_PERSIST_HOOKS: std::cell::RefCell<VecDeque<BeforePersistHook>> =
+        const { std::cell::RefCell::new(VecDeque::new()) };
+}
 
 #[cfg(test)]
-pub(crate) fn set_test_annotation_before_persist_hook(hook: impl FnOnce(&Path) + Send + 'static) {
-    *TEST_ANNOTATION_BEFORE_PERSIST_HOOK.lock().unwrap() = Some(Box::new(hook));
+pub(crate) fn set_test_annotation_before_persist_hook(hook: impl FnOnce(&Path) + 'static) {
+    TEST_ANNOTATION_BEFORE_PERSIST_HOOKS.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        guard.clear();
+        guard.push_back(Box::new(hook));
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn push_test_annotation_before_persist_hook(hook: impl FnOnce(&Path) + 'static) {
+    TEST_ANNOTATION_BEFORE_PERSIST_HOOKS.with(|slot| {
+        slot.borrow_mut().push_back(Box::new(hook));
+    });
 }
 
 #[derive(Debug)]
@@ -260,28 +298,28 @@ pub(super) fn write_annotation_overlay(
         let archived = new_archived.or(current.archived);
 
         let mut preserved = Vec::new();
+        let mut depth = 0usize;
         let mut skip_block_depth = 0usize;
         for line in existing.lines() {
             let trimmed = line.trim();
+            let (opens, closes) = count_unquoted_braces(trimmed);
             if skip_block_depth > 0 {
-                for ch in trimmed.chars() {
-                    if ch == '{' {
-                        skip_block_depth += 1;
-                    } else if ch == '}' {
-                        skip_block_depth = skip_block_depth.saturating_sub(1);
-                    }
+                skip_block_depth = skip_block_depth
+                    .saturating_add(opens)
+                    .saturating_sub(closes);
+                continue;
+            }
+            if depth == 0 {
+                if trimmed.starts_with("title:") || trimmed.starts_with("archived:") {
+                    depth = depth.saturating_add(opens).saturating_sub(closes);
+                    continue;
                 }
-                continue;
+                if trimmed.starts_with("archival_status_timestamp") && new_archived.is_some() {
+                    skip_block_depth = opens.saturating_sub(closes);
+                    continue;
+                }
             }
-            if trimmed.starts_with("title:") || trimmed.starts_with("archived:") {
-                continue;
-            }
-            if trimmed.starts_with("archival_status_timestamp") && new_archived.is_some() {
-                let opens = trimmed.chars().filter(|&c| c == '{').count();
-                let closes = trimmed.chars().filter(|&c| c == '}').count();
-                skip_block_depth = opens.saturating_sub(closes);
-                continue;
-            }
+            depth = depth.saturating_add(opens).saturating_sub(closes);
             if !trimmed.is_empty() {
                 preserved.push(line.to_owned());
             }
@@ -310,6 +348,10 @@ pub(super) fn write_annotation_overlay(
             output.push_str(&line);
             output.push('\n');
         }
+        ensure!(
+            output.len() as u64 <= MAX_ANNOTATION_BYTES,
+            "注解文件超出 4 MiB 安全上限，已保留原文件"
+        );
 
         let replace_res = session_delete::atomic_replace_file(
             &path,
@@ -322,7 +364,9 @@ pub(super) fn write_annotation_overlay(
             },
             || {
                 #[cfg(test)]
-                if let Some(hook) = TEST_ANNOTATION_BEFORE_PERSIST_HOOK.lock().unwrap().take() {
+                if let Some(hook) =
+                    TEST_ANNOTATION_BEFORE_PERSIST_HOOKS.with(|slot| slot.borrow_mut().pop_front())
+                {
                     hook(&path);
                 }
                 let dir_after = fs::symlink_metadata(&dir)?;

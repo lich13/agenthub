@@ -182,10 +182,13 @@ impl<S: Default> JsonlCache<S> {
     }
 
     pub fn has_entry(&self, path: &Path, scope: &str) -> bool {
-        self.entries
-            .lock()
-            .ok()
-            .is_some_and(|entries| entries.iter().any(|e| e.path == path && e.scope == scope))
+        self.entries.lock().ok().is_some_and(|entries| {
+            entries.iter().any(|e| {
+                e.path == path
+                    && e.scope == scope
+                    && e.weight.load(std::sync::atomic::Ordering::Relaxed) > 0
+            })
+        })
     }
 
     /// The per-file lock coalesces readers. No global lock is held during I/O,
@@ -555,8 +558,10 @@ impl<S: Default> JsonlCache<S> {
             |entry| Arc::strong_count(entry) == 1,
             |entry| entry.weight.load(Ordering::Relaxed),
         );
-        // An oversize active snapshot is not retained once its reader releases it.
-        if entry.weight.load(Ordering::Relaxed) > self.max_bytes {
+        // Failed or oversize snapshots are not retained once their reader releases them.
+        if entry.weight.load(Ordering::Relaxed) == 0
+            || entry.weight.load(Ordering::Relaxed) > self.max_bytes
+        {
             entries.retain(|candidate| !Arc::ptr_eq(candidate, &entry));
         }
         result

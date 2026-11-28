@@ -3861,4 +3861,93 @@ fn non_retained_snapshots_stay_exempt_in_summary_but_enforce_200k_cap_in_detail_
         detail.summary.read_error.as_deref(),
         Some("会话无法读取或超出读取上限")
     );
+
+    // Appending a completion after `claude_session_detail` failed DETAIL_CACHE must still allow
+    // `list_claude_sessions` and `notification_snapshots` to succeed via SUMMARY_CACHE / PROBE_DETAIL_CACHE.
+    {
+        let mut w = fs::OpenOptions::new().append(true).open(&f.file).unwrap();
+        writeln!(
+            w,
+            "{}",
+            json!({
+                "type": "assistant",
+                "sessionId": "native-fixture",
+                "cwd": "/workspace/claude-fixture",
+                "version": "2.1.76",
+                "uuid": "a-cap-1",
+                "parentUuid": "u-cap-1",
+                "promptId": "p-cap-1",
+                "timestamp": "2026-11-28T01:01:00Z",
+                "message": { "role": "assistant", "content": [{ "type": "text", "text": "已完成处理。" }] }
+            })
+        )
+        .unwrap();
+        writeln!(
+            w,
+            "{}",
+            json!({
+                "type": "result",
+                "subtype": "success",
+                "is_error": false,
+                "stop_reason": "end_turn",
+                "sessionId": "native-fixture",
+                "promptId": "p-cap-1",
+                "timestamp": "2026-11-28T01:01:01Z",
+                "result": "已完成处理。"
+            })
+        )
+        .unwrap();
+    }
+    let listed_after = list_claude_sessions(&f.paths, 10, None).unwrap();
+    assert_eq!(listed_after[0].read_error, None);
+    assert_eq!(listed_after[0].message_count, 2);
+    let probe_after = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(
+        probe_after.errors, 0,
+        "failed DETAIL_CACHE entry must never poison subsequent probe notification scans"
+    );
+    assert!(probe_after
+        .streams
+        .iter()
+        .any(|s| s.id == "native-fixture" && !s.events.is_empty()));
+
+    // Also verify cold `reader::read` failure FIRST (before SUMMARY_CACHE or PROBE_DETAIL_CACHE is populated)
+    // does not block subsequent `list_claude_sessions` or `notification_snapshots`.
+    let cold_id = "22222222-3333-4444-8555-666666666666";
+    let cold_file = f.file.with_file_name(format!("{cold_id}.jsonl"));
+    {
+        let mut w = BufWriter::with_capacity(256 * 1024, fs::File::create(&cold_file).unwrap());
+        writeln!(
+            w,
+            "{}",
+            json!({
+                "type": "user",
+                "sessionId": cold_id,
+                "cwd": "/workspace/claude-fixture",
+                "version": "2.1.76",
+                "uuid": "u-cold-1",
+                "promptId": "p-cold-1",
+                "timestamp": "2026-11-28T02:00:00Z",
+                "message": { "role": "user", "content": "冷启动先走详情超限" }
+            })
+        )
+        .unwrap();
+        for _ in 0..200_000 {
+            w.write_all(b"{\"type\":\"file-history-snapshot\",\"files\":{}}\n")
+                .unwrap();
+        }
+        w.flush().unwrap();
+    }
+    assert!(super::reader::read(&cold_file).is_err());
+    let listed_with_cold = list_claude_sessions(&f.paths, 10, None).unwrap();
+    let cold_summary = listed_with_cold
+        .iter()
+        .find(|item| item.id == cold_id)
+        .expect("cold session must be listed");
+    assert_eq!(
+        cold_summary.read_error, None,
+        "cold detail 200k failure must fall back cleanly to SUMMARY_CACHE"
+    );
+    let probe_with_cold = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(probe_with_cold.errors, 0);
 }

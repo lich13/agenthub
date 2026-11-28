@@ -29,8 +29,9 @@ mod endpoint;
 #[cfg(test)]
 use endpoint::resolve_daemon_hub_endpoint;
 pub(crate) use endpoint::{
-    connect_all_endpoints, connect_endpoint, connect_rpc_post, fetch_live_trajectory_steps,
-    ConnectRpcHttpError, LiveEndpointSet, LiveHistoryUnavailable, LiveRpc,
+    connect_all_endpoints, connect_all_endpoints_for_mutation, connect_endpoint, connect_rpc_post,
+    fetch_live_trajectory_steps, ConnectRpcHttpError, LiveEndpointSet, LiveHistoryUnavailable,
+    LiveRpc,
 };
 pub use endpoint::{
     discover_host_endpoints, evict_idle_endpoint_cache, get_cached_live_endpoint,
@@ -107,7 +108,9 @@ impl AntigravityPaths {
         let home = crate::platform::provider_root("ANTIGRAVITY_HOME", ".gemini/antigravity")?;
         let cli_home = match std::env::var_os("ANTIGRAVITY_CLI_HOME").filter(|v| !v.is_empty()) {
             Some(custom) => Some(PathBuf::from(custom)),
-            None => Some(crate::platform::current_home()?.join(".gemini/antigravity-cli")),
+            None => crate::platform::current_home()
+                .ok()
+                .map(|h| h.join(".gemini/antigravity-cli")),
         }
         .filter(|cli| cli != &home);
         Ok(Self {
@@ -6830,6 +6833,49 @@ mod tests {
         .unwrap();
         assert!(raw_ann_b.contains("custom_ext: \"inplace_v2\""));
 
+        // (2c) Nested prototext block containing `title:` and `archived:` subfields is preserved intact,
+        //      and continuous contention across all 3 attempts surfaces conflict without clobbering external edits.
+        let race_ann_path = race_root
+            .join("annotations")
+            .join(format!("{race_id}.pbtxt"));
+        fs::write(
+            &race_ann_path,
+            "title: \"Top {brace\" # comment {\narchived: false\nplan_summary {\n  title: \"Nested Plan Title\"\n  archived: true\n}\n",
+        )
+        .unwrap();
+        let nested_renamed = rename_session(&race_paths, race_id, "Updated Top Title").unwrap();
+        assert_eq!(nested_renamed.title, "Updated Top Title");
+        assert!(!nested_renamed.archived);
+        let raw_nested = fs::read_to_string(&race_ann_path).unwrap();
+        assert!(
+            raw_nested.contains("  title: \"Nested Plan Title\""),
+            "nested block title subfield must not be stripped: {raw_nested}"
+        );
+        assert!(
+            raw_nested.contains("  archived: true"),
+            "nested block archived subfield must not be stripped: {raw_nested}"
+        );
+
+        annotations::set_test_annotation_before_persist_hook(|path| {
+            fs::write(path, "title: \"Contend 1\"\n").unwrap();
+        });
+        annotations::push_test_annotation_before_persist_hook(|path| {
+            fs::write(path, "title: \"Contend 2\"\n").unwrap();
+        });
+        annotations::push_test_annotation_before_persist_hook(|path| {
+            fs::write(path, "title: \"Contend 3\"\n").unwrap();
+        });
+        let contend_err =
+            rename_session(&race_paths, race_id, "Should Exhaust Retries").unwrap_err();
+        assert!(
+            contend_err.to_string().contains("并发变更"),
+            "unexpected exhausted contention error: {contend_err:#}"
+        );
+        assert_eq!(
+            fs::read_to_string(&race_ann_path).unwrap(),
+            "title: \"Contend 3\"\n"
+        );
+
         // 3. Symlinked `conversation_summaries.db` is rejected across offline delete, online 404 cleanup, and mirror cleanup.
         #[cfg(unix)]
         {
@@ -7125,6 +7171,82 @@ mod tests {
             .join("conversations")
             .join(format!("{shared_id}.pb"))
             .exists());
+
+        // (4b) Primary-store orphan subagents in `preview_unified_cleanup_candidates` are also blocked
+        //      when a live instance is unresponsive, and `RpcMode::AutoDiscover` mutations bypass stale
+        //      positive/negative `CACHED_LIVE_RPC` entries to discover newly active / hung live instances.
+        let orphan_id = "11111111-2222-4333-8444-ccccccccccc2";
+        let missing_parent_id = "11111111-2222-4333-8444-ccccccccccc0";
+        fs::write(
+            hang_root
+                .join("conversations")
+                .join(format!("{orphan_id}.pb")),
+            b"pb-orphan",
+        )
+        .unwrap();
+        {
+            let conn = Connection::open(hang_root.join("conversation_summaries.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, parent_conversation_id TEXT, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, ?2, 'Orphan Subagent', '2026-11-28T03:00:00Z', 'idle', NULL)",
+                params![orphan_id, missing_parent_id],
+            )
+            .unwrap();
+        }
+        endpoint::with_test_rpc_read_timeout_ms(80, || {
+            let cleanup_cands =
+                mutations::preview_unified_cleanup_candidates(&incomplete_paths).unwrap();
+            let orphan_cand = cleanup_cands
+                .iter()
+                .find(|c| c.id == orphan_id)
+                .expect("orphan candidate must be surfaced");
+            assert!(
+                orphan_cand.blocked_reason.is_some() && orphan_cand.fingerprint.is_none(),
+                "primary orphan subagent must be blocked when another live instance is unresponsive"
+            );
+
+            let auto_paths = AntigravityPaths {
+                home: hang_root.clone(),
+                cli_home: None,
+                rpc_mode: RpcMode::AutoDiscover,
+            };
+            let self_pid = std::process::id();
+            let auto_cands = vec![
+                DiscoveredAntigravityEndpoint {
+                    pid: self_pid,
+                    ports: vec![ok_port],
+                    token: "tok_ok".into(),
+                },
+                DiscoveredAntigravityEndpoint {
+                    pid: self_pid,
+                    ports: vec![stall_port],
+                    token: "tok_stall".into(),
+                },
+            ];
+            endpoint::with_test_auto_discover_candidates(auto_cands, || {
+                let _cache_guard = TEST_GLOBAL_CACHE_LOCK
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                // Seed stale negative cache (simulating Antigravity launching right after a poll).
+                record_endpoint_failure(false);
+                assert!(
+                    rename_session(&auto_paths, shared_id, "Must Not Bypass Negative Cache")
+                        .is_err(),
+                    "AutoDiscover mutation must bypass negative endpoint cache"
+                );
+                // Seed stale single-window positive cache (simulating 2nd window opening within 3s TTL).
+                record_verified_live_endpoint(self_pid, ok_port, "tok_ok".into());
+                assert!(
+                    execute_batch_item(&auto_paths, shared_id, SessionOperation::Delete, &[], true)
+                        .is_err(),
+                    "AutoDiscover mutation must bypass stale single-instance positive cache"
+                );
+                evict_idle_endpoint_cache(Duration::ZERO);
+            });
+        });
 
         stop_servers.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = std::net::TcpStream::connect(("127.0.0.1", ok_port));
