@@ -304,10 +304,11 @@ pub(crate) fn collect_kernel_open_vnodes(pid: u32) -> Option<KernelOpenVnodes> {
                 continue;
             }
             inodes.insert((meta.dev(), meta.ino()));
-            if let Ok(target) = std::fs::read_link(&fd_path) {
-                if target.is_absolute() {
-                    paths.insert(target);
-                }
+            if let Some(target) = std::fs::read_link(&fd_path)
+                .ok()
+                .filter(|p| p.is_absolute())
+            {
+                paths.insert(target);
             }
         }
         Some((paths, inodes))
@@ -393,12 +394,11 @@ pub fn pid_is_alive(pid: u32) -> bool {
         let ok = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
             || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
         #[cfg(target_os = "linux")]
-        if ok {
-            if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-                if linux_proc_stat_is_dead_or_zombie(&stat) {
-                    return false;
-                }
-            }
+        if ok
+            && std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| linux_proc_stat_is_dead_or_zombie(&stat))
+        {
+            return false;
         }
         ok
     }

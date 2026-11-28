@@ -4210,3 +4210,103 @@ fn full_detail_legacy_messages_and_tail_forward_cursor_stay_snapshot_consistent_
 
     let _ = fs::remove_dir_all(home);
 }
+
+#[cfg(unix)]
+#[test]
+fn managed_codex_home_distinguishes_system_homes_from_temp_dot_codex_under_zero_host_workers() {
+    use std::os::unix::io::AsRawFd;
+
+    struct ZeroWorkersGuard;
+    impl Drop for ZeroWorkersGuard {
+        fn drop(&mut self) {
+            super::TEST_CODEX_ZERO_HOST_WORKERS.with(|slot| slot.set(false));
+        }
+    }
+
+    assert!(super::is_managed_codex_home(Path::new("/root/.codex")));
+    assert!(super::is_managed_codex_home(Path::new(
+        "/home/ubuntu/.codex"
+    )));
+    assert!(super::is_managed_codex_home(Path::new(
+        "/Users/example/.codex"
+    )));
+    assert!(!super::is_managed_codex_home(Path::new(
+        "/tmp/fixture-sandbox/.codex"
+    )));
+    assert!(!super::is_managed_codex_home(Path::new(
+        "/home/runner/work/agenthub/tmp/.codex"
+    )));
+
+    let sandbox = std::env::temp_dir().join(format!(
+        "agenthub-codex-zero-workers-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let dot_codex = sandbox.join(".codex");
+    fs::create_dir_all(dot_codex.join("sessions")).unwrap();
+    let id = "66666666-6666-4666-8666-666666666666";
+    let rollout = dot_codex.join("sessions/running.jsonl");
+    fs::write(
+        &rollout,
+        [
+            format!(
+                r#"{{"timestamp":"2026-11-28T00:00:00Z","type":"session_meta","payload":{{"id":"{id}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#
+            ),
+            r#"{"timestamp":"2026-11-28T00:00:01Z","type":"turn_started","turn_id":"turn-live"}"#
+                .to_owned(),
+            r#"{"timestamp":"2026-11-28T00:00:02Z","type":"response_item","turn_id":"turn-live","payload":{"type":"message","role":"assistant","content":[{"text":"working"}]}}"#
+                .to_owned(),
+        ]
+        .join("\n")
+            + "\n",
+    )
+    .unwrap();
+    let conn = Connection::open(dot_codex.join("state_5.sqlite")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, updated_at INTEGER, archived INTEGER, rollout_path TEXT, cwd TEXT, source TEXT, thread_source TEXT);",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO threads VALUES (?1, 'Synthetic Dot Codex', 1732500000, 0, ?2, '/workspace/example.invalid', 'cli', 'user')",
+        [id, &rollout.display().to_string()],
+    )
+    .unwrap();
+    drop(conn);
+
+    super::TEST_CODEX_ZERO_HOST_WORKERS.with(|slot| slot.set(true));
+    let _guard = ZeroWorkersGuard;
+
+    // 1. Unmanaged temp `.codex` fixture stays `Running` even with zero host Codex workers.
+    assert!(!super::is_managed_codex_home(&dot_codex));
+    let paths = CodexPaths::new(&dot_codex);
+    let synthetic = super::local_thread_summary(&paths, id).unwrap().unwrap();
+    assert_eq!(synthetic.status, ThreadStatus::Running);
+    assert_eq!(synthetic.active_turn_id.as_deref(), Some("turn-live"));
+
+    // 2. Once managed runtime markers exist (`thread-writer-locks/`) without a held lock or worker,
+    //    the crashed turn downgrades to `Recoverable`.
+    let locks_dir = dot_codex.join("thread-writer-locks");
+    fs::create_dir_all(&locks_dir).unwrap();
+    assert!(super::is_managed_codex_home(&dot_codex));
+    let orphaned = super::local_thread_summary(&paths, id).unwrap().unwrap();
+    assert_eq!(orphaned.status, ThreadStatus::Recoverable);
+    assert_eq!(orphaned.active_turn_id, None);
+
+    // 3. Acquiring `<id>.lock` proves live ownership even with zero host workers in `ps`.
+    let lock_file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(locks_dir.join(format!("{id}.lock")))
+        .unwrap();
+    assert_eq!(
+        unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
+    let locked_live = super::local_thread_summary(&paths, id).unwrap().unwrap();
+    assert_eq!(locked_live.status, ThreadStatus::Running);
+    assert_eq!(locked_live.active_turn_id.as_deref(), Some("turn-live"));
+
+    drop(lock_file);
+    let _ = fs::remove_dir_all(sandbox);
+}

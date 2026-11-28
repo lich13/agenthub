@@ -461,6 +461,7 @@ fn enrich_thread_from_rollout_inner(
 #[cfg(test)]
 thread_local! {
     static TEST_CODEX_HOST_ALIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static TEST_CODEX_ZERO_HOST_WORKERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 type CodexHostSnapshot = (
@@ -472,13 +473,40 @@ type CodexHostSnapshot = (
 static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(u32, CodexHostSnapshot)>> =
     std::sync::Mutex::new(None);
 
+fn is_system_user_codex_home(root: &Path) -> bool {
+    let matches_system_layout = |path: &Path| {
+        if path == Path::new("/root/.codex") {
+            return true;
+        }
+        path.file_name().and_then(|s| s.to_str()) == Some(".codex")
+            && path
+                .parent()
+                .and_then(|user_dir| {
+                    user_dir
+                        .file_name()
+                        .filter(|name| !name.is_empty())
+                        .zip(user_dir.parent())
+                })
+                .is_some_and(|(_, home_base)| {
+                    home_base == Path::new("/home") || home_base == Path::new("/Users")
+                })
+    };
+    matches_system_layout(root)
+        || (!is_macos_network_volume_path(root)
+            && fs::canonicalize(root)
+                .ok()
+                .is_some_and(|canon| matches_system_layout(&canon)))
+}
+
 fn is_managed_codex_home(root: &Path) -> bool {
-    root.file_name().and_then(|s| s.to_str()) == Some(".codex")
-        || root.join("thread-writer-locks").is_dir()
+    root.join("thread-writer-locks").is_dir()
         || root.join("auth.json").is_file()
         || root.join("version.json").is_file()
-        || dirs::home_dir()
-            .is_some_and(|home| crate::platform::same_canonical_dir(root, &home.join(".codex")))
+        || is_system_user_codex_home(root)
+        || (!is_macos_network_volume_path(root)
+            && dirs::home_dir().is_some_and(|home| {
+                crate::platform::same_canonical_dir(root, &home.join(".codex"))
+            }))
 }
 
 fn codex_rollout_turn_can_be_live(
@@ -533,6 +561,10 @@ fn codex_rollout_turn_can_be_live(
 
 #[cfg(unix)]
 fn codex_host_snapshot_for_uid(target_uid: u32) -> (bool, std::collections::HashSet<(u64, u64)>) {
+    #[cfg(test)]
+    if TEST_CODEX_ZERO_HOST_WORKERS.with(std::cell::Cell::get) {
+        return (false, std::collections::HashSet::new());
+    }
     if let Ok(guard) = CODEX_HOST_PROCESS_CACHE.lock() {
         if let Some((cached_uid, (alive, ref inodes, ts))) = *guard {
             if cached_uid == target_uid && ts.elapsed() < std::time::Duration::from_secs(2) {
