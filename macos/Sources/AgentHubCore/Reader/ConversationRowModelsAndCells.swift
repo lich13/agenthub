@@ -1036,6 +1036,7 @@ final class ReaderSelectableTextView: NSTextView {
     }()
 
     static func measureHeight(attributed: NSAttributedString, width: CGFloat) -> CGFloat {
+        MainActor.assertIsolated("ReaderSelectableTextView.measureHeight must run on MainActor")
         guard attributed.length > 0, width > 1 else { return 0 }
         let (storage, container, manager) = scratchMeasureStack
         defer {

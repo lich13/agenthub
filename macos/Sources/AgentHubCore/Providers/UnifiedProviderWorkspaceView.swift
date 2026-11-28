@@ -97,6 +97,7 @@ struct UnifiedProviderWorkspaceView: View {
     var externalSeedItem: UnifiedSessionSummaryItem?
     var onExternalMutation: (() -> Void)?
     var onExternalSelectSession: ((String?) -> Void)?
+    var onExternalSummaryUpdated: ((UnifiedSessionSummaryItem, UInt64) -> Void)?
 
     @StateObject private var model: ProviderWorkspaceStore
     @StateObject private var timelineTracker = TimelineActiveTracker()
@@ -111,7 +112,8 @@ struct UnifiedProviderWorkspaceView: View {
         hideSidebar: Bool = false,
         externalSeedItem: UnifiedSessionSummaryItem? = nil,
         onExternalMutation: (() -> Void)? = nil,
-        onExternalSelectSession: ((String?) -> Void)? = nil
+        onExternalSelectSession: ((String?) -> Void)? = nil,
+        onExternalSummaryUpdated: ((UnifiedSessionSummaryItem, UInt64) -> Void)? = nil
     ) {
         _model = StateObject(wrappedValue: {
             let initialStore = ProviderWorkspaceStore(store: store, workspace: workspace)
@@ -122,6 +124,7 @@ struct UnifiedProviderWorkspaceView: View {
             }
             initialStore.onExternalMutation = onExternalMutation
             initialStore.onExternalSelectSession = onExternalSelectSession
+            initialStore.onExternalSummaryUpdated = onExternalSummaryUpdated
             return initialStore
         }())
         self.store = store
@@ -131,6 +134,7 @@ struct UnifiedProviderWorkspaceView: View {
         self.externalSeedItem = externalSeedItem
         self.onExternalMutation = onExternalMutation
         self.onExternalSelectSession = onExternalSelectSession
+        self.onExternalSummaryUpdated = onExternalSummaryUpdated
     }
 
     init(
@@ -139,7 +143,8 @@ struct UnifiedProviderWorkspaceView: View {
         hideSidebar: Bool = false,
         externalSeedItem: UnifiedSessionSummaryItem? = nil,
         onExternalMutation: (() -> Void)? = nil,
-        onExternalSelectSession: ((String?) -> Void)? = nil
+        onExternalSelectSession: ((String?) -> Void)? = nil,
+        onExternalSummaryUpdated: ((UnifiedSessionSummaryItem, UInt64) -> Void)? = nil
     ) {
         _model = StateObject(wrappedValue: {
             model.skipSidebarListFetch = hideSidebar
@@ -153,6 +158,9 @@ struct UnifiedProviderWorkspaceView: View {
             if let onExternalSelectSession {
                 model.onExternalSelectSession = onExternalSelectSession
             }
+            if let onExternalSummaryUpdated {
+                model.onExternalSummaryUpdated = onExternalSummaryUpdated
+            }
             return model
         }())
         self.store = model.store
@@ -162,12 +170,14 @@ struct UnifiedProviderWorkspaceView: View {
         self.externalSeedItem = externalSeedItem ?? model.externalSeedItem
         self.onExternalMutation = onExternalMutation ?? model.onExternalMutation
         self.onExternalSelectSession = onExternalSelectSession ?? model.onExternalSelectSession
+        self.onExternalSummaryUpdated = onExternalSummaryUpdated ?? model.onExternalSummaryUpdated
     }
 
     private func syncExternalBindings() {
         model.skipSidebarListFetch = hideSidebar
         model.onExternalMutation = onExternalMutation
         model.onExternalSelectSession = onExternalSelectSession
+        model.onExternalSummaryUpdated = onExternalSummaryUpdated
     }
 
     private struct ExternalBindingsSyncView: NSViewRepresentable {
@@ -175,6 +185,7 @@ struct UnifiedProviderWorkspaceView: View {
         let hideSidebar: Bool
         let onExternalMutation: (() -> Void)?
         let onExternalSelectSession: ((String?) -> Void)?
+        let onExternalSummaryUpdated: ((UnifiedSessionSummaryItem, UInt64) -> Void)?
 
         func makeNSView(context: Context) -> NSView {
             sync()
@@ -190,6 +201,7 @@ struct UnifiedProviderWorkspaceView: View {
             model.skipSidebarListFetch = hideSidebar
             model.onExternalMutation = onExternalMutation
             model.onExternalSelectSession = onExternalSelectSession
+            model.onExternalSummaryUpdated = onExternalSummaryUpdated
         }
     }
 
@@ -279,7 +291,8 @@ struct UnifiedProviderWorkspaceView: View {
                 model: model,
                 hideSidebar: hideSidebar,
                 onExternalMutation: onExternalMutation,
-                onExternalSelectSession: onExternalSelectSession
+                onExternalSelectSession: onExternalSelectSession,
+                onExternalSummaryUpdated: onExternalSummaryUpdated
             )
             .frame(width: 0, height: 0)
         )
@@ -412,39 +425,44 @@ struct UnifiedProviderWorkspaceView: View {
         let filtArchived = model.filteredArchivedItems
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(palette.accentSoft.color)
-                        .frame(width: 24, height: 24)
-                    AgentBrandIcon(brandId, size: 16)
+            HStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(palette.accentSoft.color)
+                            .frame(width: 22, height: 22)
+                        AgentBrandIcon(brandId, size: 14)
+                            .foregroundStyle(palette.accent.color)
+                    }
+
+                    Text(workspace.label)
+                        .font(DesignFonts.body(14, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .layoutPriority(2)
+
+                    Text("\(filtActive.count)")
+                        .font(DesignFonts.body(11, weight: .medium).monospacedDigit())
                         .foregroundStyle(palette.accent.color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .frame(minWidth: 20)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .background(Capsule().fill(palette.accentSoft.color))
+                        .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
                 }
 
-                Text(workspace.label)
-                    .font(DesignFonts.body(15, weight: .bold))
-                    .foregroundStyle(palette.textPrimary.color)
-                    .lineLimit(1)
+                Spacer(minLength: 2)
 
-                Text("\(filtActive.count)")
-                    .font(DesignFonts.body(11, weight: .medium))
-                    .foregroundStyle(palette.accent.color)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 1)
-                    .frame(minWidth: 22)
-                    .background(Capsule().fill(palette.accentSoft.color))
-                    .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
-
-                Spacer(minLength: 4)
-
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     if model.supportsWorkspaceGrouping {
                         Button {
                             model.groupingMode = (model.groupingMode == .byWorkspace) ? .flat : .byWorkspace
                         } label: {
-                            LucideIcon(.folderGit2, size: 15)
+                            LucideIcon(.folderGit2, size: 14)
                                 .foregroundStyle((model.groupingMode == .byWorkspace ? palette.accent : palette.textMuted).color)
-                                .frame(width: 28, height: 28)
+                                .frame(width: 25, height: 25)
                                 .background(
                                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                                         .fill(model.groupingMode == .byWorkspace ? palette.accentSoft.color : Color.clear)
@@ -472,13 +490,12 @@ struct UnifiedProviderWorkspaceView: View {
                     Button {
                         Task { await model.fetchSessionList() }
                     } label: {
-                        LucideIcon(.refreshCw, size: 15)
+                        LucideIcon(.refreshCw, size: 14)
                     }
-                    .buttonStyle(IconButtonStyle(dimension: 28))
+                    .buttonStyle(IconButtonStyle(dimension: 25))
                     .accessibilityLabel("刷新列表")
                 }
             }
-            .padding(.horizontal, 4)
 
             WorkspaceSidebarSearchField(placeholder: searchPlaceholderText, query: $model.query)
 
@@ -831,22 +848,41 @@ struct UnifiedProviderWorkspaceView: View {
                            let blockReason = item.renameBlockReason,
                            !blockReason.isEmpty
                         {
-                            VStack(alignment: .leading, spacing: 6) {
+                            let hasExpandedDiag = store.target == .local
+                                && model.claudeOwnershipKey == item.sessionKey
+                                && (model.claudeOwnershipError != nil || model.claudeOwnershipData != nil)
+                            VStack(alignment: .leading, spacing: 5) {
                                 HStack(spacing: 8) {
                                     Text(blockReason)
-                                        .font(DesignFonts.body(12))
-                                        .foregroundStyle(palette.textSecondary.color)
-                                    Spacer()
+                                        .font(DesignFonts.body(11.5))
+                                        .foregroundStyle(palette.textMuted.color)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 8)
                                     if store.target == .local {
-                                        Button("查看占用详情") {
+                                        Button {
                                             Task { await model.fetchClaudeOwnershipDiagnostics(sessionKey: item.sessionKey) }
+                                        } label: {
+                                            Text("查看占用详情")
+                                                .font(DesignFonts.body(11.5, weight: .medium))
+                                                .foregroundStyle(palette.textSecondary.color)
+                                                .padding(.horizontal, 8)
+                                                .frame(height: 24)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                        .fill(palette.elevated.color)
+                                                )
+                                                .overlay(
+                                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                                        .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+                                                )
+                                                .contentShape(Rectangle())
                                         }
-                                        .buttonStyle(SecondaryButtonStyle())
+                                        .buttonStyle(PlainHitButtonStyle())
                                         .disabled(model.claudeOwnershipLoading)
                                     }
                                 }
 
-                                if store.target == .local, model.claudeOwnershipKey == item.sessionKey {
+                                if hasExpandedDiag {
                                     if let diagErr = model.claudeOwnershipError {
                                         Text(diagErr)
                                             .font(DesignFonts.body(12))
@@ -882,7 +918,7 @@ struct UnifiedProviderWorkspaceView: View {
                                 }
                             }
                             .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, hasExpandedDiag ? 8 : 5)
                             .background(palette.surface.color)
                             .overlay(alignment: .bottom) {
                                 Rectangle().fill(palette.borderSubtle.color).frame(height: 1)

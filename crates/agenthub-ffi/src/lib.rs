@@ -214,12 +214,17 @@ pub unsafe extern "C" fn agenthub_ffi_string_free(ptr: *mut c_char) {
 }
 
 /// # Safety
-/// When `len > 0`, `utf8_ptr` must point to `len` readable bytes.
+/// When `len > 0`, `utf8_ptr` must point to `len` readable bytes; `out_len` must be null or writable.
 #[no_mangle]
 pub unsafe extern "C" fn agenthub_ffi_parse_gfm_markdown(
     utf8_ptr: *const c_char,
     len: usize,
+    out_len: *mut usize,
 ) -> *mut c_char {
+    if !out_len.is_null() {
+        // SAFETY: Checked non-null C out-parameter.
+        unsafe { *out_len = 0 };
+    }
     let source = if len == 0 || utf8_ptr.is_null() {
         ""
     } else {
@@ -228,10 +233,17 @@ pub unsafe extern "C" fn agenthub_ffi_parse_gfm_markdown(
         std::str::from_utf8(bytes).unwrap_or("")
     };
     let doc = gfm_markdown::parse_gfm_markdown(source);
-    match serde_json::to_string(&doc) {
-        Ok(json) => into_c_string_ptr(json),
-        Err(_) => std::ptr::null_mut(),
+    let Ok(json) = serde_json::to_vec(&doc) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(cstr) = CString::new(json) else {
+        return std::ptr::null_mut();
+    };
+    if !out_len.is_null() {
+        // SAFETY: Checked non-null C out-parameter.
+        unsafe { *out_len = cstr.as_bytes().len() };
     }
+    cstr.into_raw()
 }
 
 /// # Safety

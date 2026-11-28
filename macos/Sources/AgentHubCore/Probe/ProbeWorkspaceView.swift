@@ -200,6 +200,7 @@ struct ProbeWorkspaceView: View {
     var body: some View {
         GeometryReader { geo in
             let isNarrow = geo.size.width <= LayoutMetrics.narrowBreakpoint
+            let isCompactGrid = geo.size.width < 880
             ZStack {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -235,11 +236,11 @@ struct ProbeWorkspaceView: View {
                             )
                         }
 
-                        notificationSettingsCard(isNarrow: isNarrow)
+                        notificationSettingsCard(isNarrow: isCompactGrid)
 
-                        barkPanelBody(draft: draft, isNarrow: isNarrow)
+                        barkPanelBody(draft: draft, isNarrow: isCompactGrid)
 
-                        hostMatrixSection(isNarrow: isNarrow)
+                        hostMatrixSection(isNarrow: isCompactGrid)
 
                         liveOverviewPanel
 
@@ -458,7 +459,12 @@ struct ProbeWorkspaceView: View {
                 }
             }
             let platformCols = isNarrow
-                ? [GridItem(.flexible(), alignment: .top)]
+                ? (
+                    [
+                        GridItem(.flexible(), alignment: .top),
+                        GridItem(.flexible(), alignment: .top),
+                    ]
+                )
                 : [
                     GridItem(.flexible(), alignment: .top),
                     GridItem(.flexible(), alignment: .top),
@@ -560,7 +566,7 @@ struct ProbeWorkspaceView: View {
 
                 if advOpen {
                     let advCols = isNarrow
-                        ? [GridItem(.flexible())]
+                        ? [GridItem(.flexible()), GridItem(.flexible())]
                         : [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
                     LazyVGrid(columns: advCols, spacing: 10) {
                         labeledField("Codex Home", placeholder: "auto", value: d.codexHome) { v in
@@ -1440,6 +1446,7 @@ private struct ProbeDraftField: View {
     let isSecure: Bool
     let onChange: @MainActor (String) -> Void
     @State private var localText: String
+    @FocusState private var isFocused: Bool
 
     init(
         label: String,
@@ -1464,17 +1471,26 @@ private struct ProbeDraftField: View {
             Group {
                 if isSecure {
                     SecureField(placeholder, text: $localText)
+                        .focused($isFocused)
                 } else {
                     TextField(placeholder, text: $localText)
+                        .focused($isFocused)
                 }
             }
             .textFieldStyle(.plain)
             .font(DesignFonts.body(13))
             .foregroundStyle(palette.textPrimary.color)
             .padding(.horizontal, 10)
-            .frame(height: LayoutMetrics.formControlHeight)
-            .background(RoundedRectangle(cornerRadius: 8).fill(palette.elevated.color))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(palette.borderStrong.color, lineWidth: 1))
+            .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight, maxHeight: LayoutMetrics.formControlHeight)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.elevated.color))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isFocused ? palette.accent.color : palette.borderStrong.color, lineWidth: isFocused ? 1.5 : 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isFocused = true
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .onChange(of: value) { next in

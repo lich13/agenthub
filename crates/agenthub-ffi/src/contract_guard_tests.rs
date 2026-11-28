@@ -130,8 +130,10 @@ fn c_abi_isolated_init_invoke_capabilities_rejects_unknown_command_and_shutdown_
     assert!(json["capabilities"].is_object());
 
     // Zero-length GFM parse with null pointer must never UB.
-    let empty_gfm = unsafe { agenthub_ffi_parse_gfm_markdown(std::ptr::null(), 0) };
+    let mut empty_len: usize = usize::MAX;
+    let empty_gfm = unsafe { agenthub_ffi_parse_gfm_markdown(std::ptr::null(), 0, &mut empty_len) };
     assert!(!empty_gfm.is_null());
+    assert!(empty_len > 0);
     unsafe { agenthub_ffi_string_free(empty_gfm) };
 
     // Unknown desktop commands must fail closed via the positive allowlist.

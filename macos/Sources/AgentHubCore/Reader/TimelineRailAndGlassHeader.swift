@@ -17,7 +17,6 @@ struct TimelineRailView: View {
     @State private var focusedIndex: Int?
     @State private var activeTickScrollY: CGFloat?
     @State private var windowStart: Int = 0
-    @State private var railHeightState: CGFloat = 600
 
     init(
         entries: [TimelineEntry],
@@ -38,11 +37,6 @@ struct TimelineRailView: View {
     var body: some View {
         let olderOffset: CGFloat = (loadOlder != nil) ? 18 : 0
         let topPadding: CGFloat = 20 + olderOffset
-        let usableHeight = max(24, railHeightState - topPadding - 20)
-        let windowCapacity = Self.virtualWindowCapacity(usableHeight: usableHeight)
-        let first = min(windowStart, max(0, entries.count - 1))
-        let last = min(entries.count, first + windowCapacity)
-        let visibleSlice: ArraySlice<TimelineEntry> = (first < last) ? entries[first ..< last] : []
         let previewIdx = hoveredIndex ?? focusedIndex
         let previewEntry: TimelineEntry? = if let idx = previewIdx, entries.indices.contains(idx) {
             entries[idx]
@@ -51,6 +45,12 @@ struct TimelineRailView: View {
         }
 
         GeometryReader { geo in
+            let railHeight = max(48, geo.size.height)
+            let usableHeight = max(24, railHeight - topPadding - 20)
+            let windowCapacity = Self.virtualWindowCapacity(usableHeight: usableHeight)
+            let first = min(windowStart, max(0, entries.count - 1))
+            let last = min(entries.count, first + windowCapacity)
+            let visibleSlice: ArraySlice<TimelineEntry> = (first < last) ? entries[first ..< last] : []
             ZStack(alignment: .topLeading) {
                 if let loadOlder {
                     Button(action: loadOlder) {
@@ -148,7 +148,7 @@ struct TimelineRailView: View {
                             }
                         }
                     }
-                    .frame(width: LayoutMetrics.timelineRailWidth, height: max(24, geo.size.height - topPadding - 20))
+                    .frame(width: LayoutMetrics.timelineRailWidth, height: usableHeight)
                     .padding(.top, topPadding)
                     .padding(.leading, LayoutMetrics.timelineRailLeft)
                     .onChange(of: activeId) { nextActiveId in
@@ -167,49 +167,38 @@ struct TimelineRailView: View {
                     }
                 }
             }
-            .onAppear {
-                if geo.size.height > 1, abs(railHeightState - geo.size.height) > 0.5 {
-                    let h = geo.size.height
-                    DispatchQueue.main.async { railHeightState = h }
-                }
-            }
-            .onChange(of: geo.size.height) { nextH in
-                if nextH > 1, abs(railHeightState - nextH) > 0.5 {
-                    DispatchQueue.main.async { railHeightState = nextH }
+            .frame(width: 34, height: railHeight, alignment: .topLeading)
+            .overlay(alignment: .topLeading) {
+                if let hovered = previewEntry, let idx = previewIdx {
+                    let previewMax: CGFloat = Self.previewMaxWidth(for: availableWidth)
+                    let visibleOffset: Int = max(0, idx - first)
+                    let centerY: CGFloat = if let convertedScrollY = activeTickScrollY {
+                        max(12, min(max(12, railHeight - 12), topPadding + convertedScrollY))
+                    } else {
+                        Self.previewTopY(
+                            forTickIndex: visibleOffset,
+                            topPadding: topPadding,
+                            tickHeight: 12,
+                            railHeight: railHeight
+                        )
+                    }
+                    let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
+                    let cardHeight: CGFloat = estimatedHalfHeight * 2
+                    let maxCardTopY: CGFloat = max(6, railHeight - cardHeight - 6)
+                    let desiredTopY: CGFloat = centerY - estimatedHalfHeight
+                    let cardTopY: CGFloat = max(6, min(maxCardTopY, desiredTopY))
+
+                    Color.clear
+                        .frame(width: previewMax, height: railHeight, alignment: .topLeading)
+                        .overlay(alignment: .topLeading) {
+                            TimelinePreviewCardView(entry: hovered, maxWidth: previewMax)
+                                .offset(x: 28, y: cardTopY)
+                        }
+                        .allowsHitTesting(false)
                 }
             }
         }
         .frame(width: 34)
-        // Render hover/focus preview OUTSIDE the 34pt GeometryReader so width sizes naturally up to min(288pt, 60vw)!
-        .overlay(alignment: .topLeading) {
-            if let hovered = previewEntry, let idx = previewIdx {
-                let previewMax: CGFloat = Self.previewMaxWidth(for: availableWidth)
-                let visibleOffset: Int = max(0, idx - first)
-                let centerY: CGFloat = if let convertedScrollY = activeTickScrollY {
-                    max(12, min(max(12, railHeightState - 12), topPadding + convertedScrollY))
-                } else {
-                    Self.previewTopY(
-                        forTickIndex: visibleOffset,
-                        topPadding: topPadding,
-                        tickHeight: 12,
-                        railHeight: railHeightState
-                    )
-                }
-                let estimatedHalfHeight: CGFloat = (hovered.preview?.isEmpty == false) ? 28 : 16
-                let cardHeight: CGFloat = estimatedHalfHeight * 2
-                let maxCardTopY: CGFloat = max(6, railHeightState - cardHeight - 6)
-                let desiredTopY: CGFloat = centerY - estimatedHalfHeight
-                let cardTopY: CGFloat = max(6, min(maxCardTopY, desiredTopY))
-
-                Color.clear
-                    .frame(width: previewMax, height: max(48, railHeightState), alignment: .topLeading)
-                    .overlay(alignment: .topLeading) {
-                        TimelinePreviewCardView(entry: hovered, maxWidth: previewMax)
-                            .offset(x: 28, y: cardTopY)
-                    }
-                    .allowsHitTesting(false)
-            }
-        }
         .onChange(of: entries) { _ in
             hoveredIndex = nil
             focusedIndex = nil
@@ -647,10 +636,11 @@ struct WorkspaceStageHeaderView<TrailingContent: View>: View {
 
                     if let subtitle, !subtitle.isEmpty {
                         Text(subtitle)
-                            .font(DesignFonts.mono(12))
+                            .font(DesignFonts.body(11.5))
+                            .kerning(-0.001)
                             .foregroundStyle(palette.textMuted.color)
-                            .lineLimit(2)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                             .help(subtitle)
                     }
                 }
@@ -977,6 +967,11 @@ struct ImagePreviewModalView: View {
                     .strokeBorder(palette.borderStrong.color, lineWidth: 1)
             )
             .padding(32)
+        }
+        .onExitCommand {
+            if !AppInputCompositionGuard.responderHasMarkedText() {
+                onClose()
+            }
         }
     }
 }

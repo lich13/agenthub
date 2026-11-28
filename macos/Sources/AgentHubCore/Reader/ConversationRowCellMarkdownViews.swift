@@ -215,6 +215,7 @@ extension ConversationRowCellView {
         card.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
 
         let header = ActionRowContainerView()
+        header.hoverFill = palette.hover.nsColor
         header.focusRingColor = palette.accent.nsColor
         header.accessibilityExpandedState = open
         header.setAccessibilityLabel(title)

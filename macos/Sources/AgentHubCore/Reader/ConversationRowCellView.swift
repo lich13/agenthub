@@ -14,12 +14,12 @@ final class ConversationRowCellView: NSTableCellView {
     }
     private var configuredLeadingInset: CGFloat = 0
     private var configuredContentWidth: CGFloat = 0
+    private var leadingConstraint: NSLayoutConstraint?
     private var stackConstraints: [NSLayoutConstraint] = []
 
     private struct CellConfigSignature: Equatable {
         let sessionScopeKey: String
         let item: ConversationRowItem
-        let leadingInset: CGFloat
         let contentWidth: CGFloat
         let highlighted: Bool
         let scheme: ColorSchemeKind
@@ -123,10 +123,18 @@ final class ConversationRowCellView: NSTableCellView {
         }
     }
 
+    func updateHorizontalInset(_ leadingInset: CGFloat) {
+        configuredLeadingInset = leadingInset
+        if let leadingConstraint, abs(leadingConstraint.constant - leadingInset) > 0.01 {
+            leadingConstraint.constant = leadingInset
+        }
+        positionFloatingCopyButton()
+    }
+
     func configure(
         item: ConversationRowItem,
         leadingInset: CGFloat,
-        trailingInset: CGFloat,
+        trailingInset _: CGFloat,
         contentWidth: CGFloat,
         highlighted: Bool,
         coordinator: ConversationTableCoordinator
@@ -134,7 +142,6 @@ final class ConversationRowCellView: NSTableCellView {
         let nextSig = CellConfigSignature(
             sessionScopeKey: coordinator.sessionScopeKey,
             item: item,
-            leadingInset: leadingInset,
             contentWidth: contentWidth,
             highlighted: highlighted,
             scheme: coordinator.scheme,
@@ -144,7 +151,7 @@ final class ConversationRowCellView: NSTableCellView {
             loadedAttachmentState: coordinator.loadedAttachmentState(for: item)
         )
         if lastConfiguredSignature == nextSig, !containerStack.arrangedSubviews.isEmpty {
-            positionFloatingCopyButton()
+            updateHorizontalInset(leadingInset)
             return
         }
         lastConfiguredSignature = nextSig
@@ -161,8 +168,10 @@ final class ConversationRowCellView: NSTableCellView {
             v.removeFromSuperview()
         }
         NSLayoutConstraint.deactivate(stackConstraints)
+        let lead = containerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset)
+        leadingConstraint = lead
         stackConstraints = [
-            containerStack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: leadingInset),
+            lead,
             containerStack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
         ]
         NSLayoutConstraint.activate(stackConstraints)
@@ -441,6 +450,7 @@ final class ConversationRowCellView: NSTableCellView {
                     let targetInnerW = min(availBubbleTextW, max(computedAnsW, qSingleWidth))
 
                     let qHeaderBox = ActionRowContainerView()
+                    qHeaderBox.hoverFill = palette.hover.nsColor
                     qHeaderBox.focusRingColor = palette.accent.nsColor
                     qHeaderBox.accessibilityExpandedState = qOpen
                     qHeaderBox.setAccessibilityLabel(trimmedQ)
@@ -558,6 +568,7 @@ final class ConversationRowCellView: NSTableCellView {
         card.layer?.borderColor = palette.borderSubtle.nsColor.cgColor
 
         let header = ActionRowContainerView()
+        header.hoverFill = palette.hover.nsColor
         header.focusRingColor = palette.accent.nsColor
         header.accessibilityExpandedState = open
         header.setAccessibilityLabel("上下文")
@@ -592,10 +603,10 @@ final class ConversationRowCellView: NSTableCellView {
             hStack.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             hStack.centerYAnchor.constraint(equalTo: header.centerYAnchor),
         ])
-        hStack.addArrangedSubview(titleLbl)
         if open {
             hStack.addArrangedSubview(NSView())
         }
+        hStack.addArrangedSubview(titleLbl)
         hStack.addArrangedSubview(chev)
         card.addSubview(header)
 

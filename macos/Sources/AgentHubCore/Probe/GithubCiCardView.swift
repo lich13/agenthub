@@ -19,6 +19,7 @@ struct GithubCiCardView: View {
     @State private var fetchEpoch: UInt64 = 0
     @State private var errorMessage: String?
     @State private var repoQuery: String = ""
+    @FocusState private var repoSearchFocused: Bool
 
     init(
         store: RuntimeConnectionStore,
@@ -281,18 +282,23 @@ struct GithubCiCardView: View {
                             LucideIcon(.search, size: 14)
                                 .foregroundStyle(palette.textMuted.color)
                             TextField("搜索或输入 owner/repo", text: $repoQuery)
+                                .focused($repoSearchFocused)
                                 .textFieldStyle(.plain)
                                 .font(DesignFonts.body(13))
                                 .foregroundStyle(palette.textPrimary.color)
                                 .onSubmit { addQueryRepo(catalog: currentCatalog, configured: configured) }
                         }
                         .padding(.horizontal, 10)
-                        .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight)
+                        .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight, maxHeight: LayoutMetrics.formControlHeight)
                         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.surface.color))
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+                                .strokeBorder(repoSearchFocused ? palette.accent.color : palette.borderStrong.color, lineWidth: repoSearchFocused ? 1.5 : 1)
                         )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            repoSearchFocused = true
+                        }
 
                         BoundedPassthroughScrollView(maxHeight: 180) {
                             FlowButtonRow(spacing: 8, lineSpacing: 8) {

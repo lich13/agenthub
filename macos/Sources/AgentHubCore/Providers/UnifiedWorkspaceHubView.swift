@@ -50,7 +50,10 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     let sourceRevision: UInt64
     let codexThreadStore = ThreadMessageStore()
     private var listFetchSeq: UInt64 = 0
-    private var sidebarCacheRevision: UInt64 = 0
+    private var sidebarDataRevision: UInt64 = 0
+    private var sidebarCollapseRevision: UInt64 = 0
+    private var stageWritebackSeq: UInt64 = 0
+    private var stageWritebacks: [String: (seq: UInt64, item: UnifiedSessionSummaryItem)] = [:]
 
     struct FeedbackNotice: Equatable, Sendable {
         let text: String
@@ -58,7 +61,9 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     private struct HubSidebarCache {
-        var revision: UInt64 = .max
+        var dataRevision: UInt64 = .max
+        var collapseRevision: UInt64 = .max
+        var itemsByCompositeKey: [String: CrossProviderSessionItem] = [:]
         var filteredActiveItems: [CrossProviderSessionItem] = []
         var filteredArchivedItems: [CrossProviderSessionItem] = []
         var activeWorkspaceGroups: [ProjectWorkspaceGroup<CrossProviderSessionItem>] = []
@@ -73,7 +78,7 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     @Published var workspaceFilter: ProjectWorkspaceFilter = .all {
         didSet {
             if oldValue != workspaceFilter {
-                sidebarCacheRevision &+= 1
+                sidebarDataRevision &+= 1
                 syncPartitionedSelection()
             }
         }
@@ -81,7 +86,7 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     @Published var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedWorkspaceKeys {
-                sidebarCacheRevision &+= 1
+                sidebarCollapseRevision &+= 1
                 syncPartitionedSelection()
             }
         }
@@ -89,19 +94,19 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     @Published var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedArchivedWorkspaceKeys {
-                sidebarCacheRevision &+= 1
+                sidebarCollapseRevision &+= 1
                 syncPartitionedSelection()
             }
         }
     }
     @Published var activeItems: [CrossProviderSessionItem] = [] {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var archivedItems: [CrossProviderSessionItem] = [] {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var archivedOpen: Bool = false {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var selectedCompositeKey: String?
     @Published var renameRequestSeqByKey: [String: Int] = [:]
@@ -122,9 +127,27 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     private func refreshedSidebarCache() -> HubSidebarCache {
-        if sidebarCache.revision == sidebarCacheRevision {
-            return sidebarCache
+        if sidebarCache.dataRevision == sidebarDataRevision {
+            if sidebarCache.collapseRevision == sidebarCollapseRevision {
+                return sidebarCache
+            }
+            var updated = sidebarCache
+            updated.collapseRevision = sidebarCollapseRevision
+            updated.visualOrderedActiveKeys = ProjectWorkspaceEngine.visualOrderedKeys(
+                groups: updated.activeWorkspaceGroups,
+                collapsedKeys: collapsedWorkspaceKeys
+            )
+            updated.visualOrderedArchivedKeys = ProjectWorkspaceEngine.visualOrderedKeys(
+                groups: updated.archivedWorkspaceGroups,
+                collapsedKeys: collapsedArchivedWorkspaceKeys
+            )
+            sidebarCache = updated
+            return updated
         }
+        var lookup: [String: CrossProviderSessionItem] = [:]
+        lookup.reserveCapacity(activeItems.count + archivedItems.count)
+        for item in archivedItems { lookup[item.compositeKey] = item }
+        for item in activeItems { lookup[item.compositeKey] = item }
         let filtActive = ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter)
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter)
         let activeGrps = ProjectWorkspaceEngine.buildGroups(items: filtActive)
@@ -138,7 +161,9 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
             collapsedKeys: collapsedArchivedWorkspaceKeys
         )
         let built = HubSidebarCache(
-            revision: sidebarCacheRevision,
+            dataRevision: sidebarDataRevision,
+            collapseRevision: sidebarCollapseRevision,
+            itemsByCompositeKey: lookup,
             filteredActiveItems: filtActive,
             filteredArchivedItems: filtArch,
             activeWorkspaceGroups: activeGrps,
@@ -188,17 +213,15 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
     }
 
     var selectedEntry: CrossProviderSessionItem? {
+        let cached = refreshedSidebarCache()
         if let key = selectedCompositeKey {
-            if let found = activeItems.first(where: { $0.compositeKey == key })
-                ?? archivedItems.first(where: { $0.compositeKey == key })
-            {
+            if let found = cached.itemsByCompositeKey[key] {
                 return found
             }
             if let searchFallbackEntry, searchFallbackEntry.compositeKey == key {
                 return searchFallbackEntry
             }
         }
-        let cached = refreshedSidebarCache()
         if workspaceFilter != .all || !query.isEmpty {
             return cached.activeWorkspaceGroups.first?.items.first ?? cached.filteredActiveItems.first
         }
@@ -330,9 +353,80 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
         }.map(\.element)
     }
 
+    func applyStageSummaryWriteback(
+        provider: SessionProvider,
+        updated: UnifiedSessionSummaryItem,
+        revision: UInt64
+    ) {
+        guard revision == store.revision, store.revision == sourceRevision else { return }
+        let compositeKey = "\(provider.rawValue)::\(updated.sessionKey)"
+        stageWritebackSeq &+= 1
+        stageWritebacks[compositeKey] = (seq: stageWritebackSeq, item: updated)
+
+        if let idx = activeItems.firstIndex(where: { $0.compositeKey == compositeKey }) {
+            var merged = updated
+            if merged.storageSize == nil {
+                merged.storageSize = activeItems[idx].item.storageSize
+            }
+            let nextEntry = CrossProviderSessionItem(provider: provider, item: merged)
+            if activeItems[idx] != nextEntry {
+                let updatedAtChanged = activeItems[idx].item.updatedAt != merged.updatedAt
+                activeItems[idx] = nextEntry
+                if updatedAtChanged {
+                    activeItems = Self.sortMergedItems(activeItems)
+                }
+            }
+        }
+        if let idx = archivedItems.firstIndex(where: { $0.compositeKey == compositeKey }) {
+            var merged = updated
+            if merged.storageSize == nil {
+                merged.storageSize = archivedItems[idx].item.storageSize
+            }
+            let nextEntry = CrossProviderSessionItem(provider: provider, item: merged)
+            if archivedItems[idx] != nextEntry {
+                let updatedAtChanged = archivedItems[idx].item.updatedAt != merged.updatedAt
+                archivedItems[idx] = nextEntry
+                if updatedAtChanged {
+                    archivedItems = Self.sortMergedItems(archivedItems)
+                }
+            }
+        }
+        if let fb = searchFallbackEntry, fb.compositeKey == compositeKey {
+            let nextFb = CrossProviderSessionItem(provider: provider, item: updated)
+            if searchFallbackEntry != nextFb {
+                searchFallbackEntry = nextFb
+            }
+        }
+    }
+
+    private func mergeFresherStageWritebacks(
+        into items: [CrossProviderSessionItem],
+        sinceWritebackSeq: UInt64
+    ) -> [CrossProviderSessionItem] {
+        guard !stageWritebacks.isEmpty else { return items }
+        var changed = false
+        var out = items
+        for idx in out.indices {
+            let key = out[idx].compositeKey
+            if let wb = stageWritebacks[key], wb.seq > sinceWritebackSeq {
+                var merged = wb.item
+                if merged.storageSize == nil {
+                    merged.storageSize = out[idx].item.storageSize
+                }
+                let replacement = CrossProviderSessionItem(provider: out[idx].provider, item: merged)
+                if out[idx] != replacement {
+                    out[idx] = replacement
+                    changed = true
+                }
+            }
+        }
+        return changed ? Self.sortMergedItems(out) : out
+    }
+
     func fetchAllSessions() async {
         listFetchSeq &+= 1
         let fetchSeq = listFetchSeq
+        let fetchStartWritebackSeq = stageWritebackSeq
         let requestedQuery = query
         let requestedArchived = archivedOpen
         func isCurrent() -> Bool {
@@ -358,7 +452,10 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
             threadStore: tStore
         )
         guard isCurrent() else { return }
-        let sortedActive = Self.sortMergedItems(mergedActive)
+        let sortedActive = mergeFresherStageWritebacks(
+            into: Self.sortMergedItems(mergedActive),
+            sinceWritebackSeq: fetchStartWritebackSeq
+        )
         if activeItems != sortedActive { activeItems = sortedActive }
 
         var allErrs = activeErrs
@@ -374,10 +471,14 @@ final class UnifiedWorkspaceHubStore: ObservableObject {
                 threadStore: tStore
             )
             guard isCurrent() else { return }
-            let sortedArch = Self.sortMergedItems(mergedArch)
+            let sortedArch = mergeFresherStageWritebacks(
+                into: Self.sortMergedItems(mergedArch),
+                sinceWritebackSeq: fetchStartWritebackSeq
+            )
             if archivedItems != sortedArch { archivedItems = sortedArch }
             allErrs.append(contentsOf: archErrs)
         }
+        stageWritebacks = stageWritebacks.filter { $0.value.seq > fetchStartWritebackSeq }
         if providerErrors != allErrs { providerErrors = allErrs }
         syncPartitionedSelection()
     }
@@ -782,32 +883,37 @@ struct UnifiedWorkspaceHubView: View {
         let activeGroups = hubModel.activeWorkspaceGroups
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 9) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(palette.accentSoft.color)
-                        .frame(width: 24, height: 24)
-                    LucideIcon(.folderGit2, size: 16)
+            HStack(spacing: 4) {
+                HStack(spacing: 5) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(palette.accentSoft.color)
+                            .frame(width: 22, height: 22)
+                        LucideIcon(.folderGit2, size: 14)
+                            .foregroundStyle(palette.accent.color)
+                    }
+
+                    Text("工作区")
+                        .font(DesignFonts.body(14, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.9)
+                        .layoutPriority(2)
+
+                    Text("\(filtActiveCount)")
+                        .font(DesignFonts.body(11, weight: .medium).monospacedDigit())
                         .foregroundStyle(palette.accent.color)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1)
+                        .frame(minWidth: 20)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .background(Capsule().fill(palette.accentSoft.color))
+                        .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
                 }
 
-                Text("工作区")
-                    .font(DesignFonts.body(15, weight: .bold))
-                    .foregroundStyle(palette.textPrimary.color)
-                    .lineLimit(1)
+                Spacer(minLength: 2)
 
-                Text("\(filtActiveCount)")
-                    .font(DesignFonts.body(11, weight: .medium))
-                    .foregroundStyle(palette.accent.color)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 1)
-                    .frame(minWidth: 22)
-                    .background(Capsule().fill(palette.accentSoft.color))
-                    .overlay(Capsule().strokeBorder(palette.accentBorder.color, lineWidth: 1))
-
-                Spacer(minLength: 4)
-
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     WorkspaceSidebarFilterMenuButton(
                         isFiltered: hubModel.workspaceFilter != .all,
                         makeActions: {
@@ -824,13 +930,12 @@ struct UnifiedWorkspaceHubView: View {
                     Button {
                         Task { await hubModel.fetchAllSessions() }
                     } label: {
-                        LucideIcon(.refreshCw, size: 15)
+                        LucideIcon(.refreshCw, size: 14)
                     }
-                    .buttonStyle(IconButtonStyle(dimension: 28))
+                    .buttonStyle(IconButtonStyle(dimension: 25))
                     .accessibilityLabel("刷新工作区列表")
                 }
             }
-            .padding(.horizontal, 4)
 
             WorkspaceSidebarSearchField(placeholder: "搜索标题、ID 或工作目录", query: $hubModel.query)
 
@@ -1093,6 +1198,7 @@ struct UnifiedWorkspaceHubView: View {
         if let entry = hubModel.selectedEntry {
             let targetWs = entry.provider.workspaceId
             let stagePalette = DesignPalette.resolve(scheme: scheme, workspace: targetWs)
+            let entryProvider = entry.provider
             UnifiedProviderWorkspaceView(
                 store: store,
                 workspace: targetWs,
@@ -1103,7 +1209,10 @@ struct UnifiedWorkspaceHubView: View {
                     Task { await hubModel.fetchAllSessions() }
                 },
                 onExternalSelectSession: { nextSessionKey in
-                    hubModel.handleStageSessionSelected(provider: entry.provider, sessionKey: nextSessionKey)
+                    hubModel.handleStageSessionSelected(provider: entryProvider, sessionKey: nextSessionKey)
+                },
+                onExternalSummaryUpdated: { updatedItem, rev in
+                    hubModel.applyStageSummaryWriteback(provider: entryProvider, updated: updatedItem, revision: rev)
                 }
             )
             .environment(\.agentHubPalette, stagePalette)

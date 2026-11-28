@@ -77,6 +77,10 @@ final class GfmLayoutCache {
         entries.removeAll()
     }
 
+    func trim() {
+        entries.trim(maxEntries: Self.maxEntries / 4, maxBytes: Self.maxBytes / 4)
+    }
+
     private static func buildSegments(
         cleaned: String,
         foldInstructions: Bool,

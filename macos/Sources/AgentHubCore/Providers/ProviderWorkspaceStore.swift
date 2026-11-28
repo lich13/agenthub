@@ -10,10 +10,13 @@ final class ProviderWorkspaceStore: ObservableObject {
     weak var coordinatorRef: ConversationTableCoordinator?
     private var observations = Set<AnyCancellable>()
     private var listFetchSeq: UInt64 = 0
-    private var sidebarCacheRevision: UInt64 = 0
+    private var sidebarDataRevision: UInt64 = 0
+    private var sidebarCollapseRevision: UInt64 = 0
 
     private struct SidebarDerivedCache {
-        var revision: UInt64 = .max
+        var dataRevision: UInt64 = .max
+        var collapseRevision: UInt64 = .max
+        var itemsBySessionKey: [String: UnifiedSessionSummaryItem] = [:]
         var filteredActiveItems: [UnifiedSessionSummaryItem] = []
         var filteredArchivedItems: [UnifiedSessionSummaryItem] = []
         var activeWorkspaceGroups: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]?
@@ -38,7 +41,7 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var groupingMode: ProjectWorkspaceGroupingMode = .flat {
         didSet {
             if oldValue != groupingMode {
-                sidebarCacheRevision &+= 1
+                sidebarDataRevision &+= 1
                 syncPartitionedSelection()
             }
         }
@@ -46,7 +49,7 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var workspaceFilter: ProjectWorkspaceFilter = .all {
         didSet {
             if oldValue != workspaceFilter {
-                sidebarCacheRevision &+= 1
+                sidebarDataRevision &+= 1
                 syncPartitionedSelection()
             }
         }
@@ -54,7 +57,7 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var collapsedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedWorkspaceKeys {
-                sidebarCacheRevision &+= 1
+                sidebarCollapseRevision &+= 1
                 syncPartitionedSelection()
             }
         }
@@ -62,25 +65,26 @@ final class ProviderWorkspaceStore: ObservableObject {
     @Published var collapsedArchivedWorkspaceKeys: Set<ProjectWorkspaceKey> = [] {
         didSet {
             if oldValue != collapsedArchivedWorkspaceKeys {
-                sidebarCacheRevision &+= 1
+                sidebarCollapseRevision &+= 1
                 syncPartitionedSelection()
             }
         }
     }
     @Published var activeItems: [UnifiedSessionSummaryItem] = [] {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var archivedItems: [UnifiedSessionSummaryItem] = [] {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var archivedOpen: Bool = false {
-        didSet { sidebarCacheRevision &+= 1 }
+        didSet { sidebarDataRevision &+= 1 }
     }
     @Published var selectedKey: String?
     @Published var externalSeedItem: UnifiedSessionSummaryItem?
     var skipSidebarListFetch: Bool = false
     var onExternalMutation: (() -> Void)?
     var onExternalSelectSession: ((String?) -> Void)?
+    var onExternalSummaryUpdated: ((UnifiedSessionSummaryItem, UInt64) -> Void)?
 
     @Published var rows: [ConversationRowItem] = []
     @Published var currentDetailHistory: HistoryMetadata?
@@ -162,13 +166,37 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     private func refreshedSidebarCache() -> SidebarDerivedCache {
-        if sidebarCache.revision == sidebarCacheRevision {
-            return sidebarCache
-        }
         let supportsGrp = supportsWorkspaceGrouping
+        let needsGroupingNow = supportsGrp && groupingMode == .byWorkspace
+        if sidebarCache.dataRevision == sidebarDataRevision {
+            if sidebarCache.collapseRevision == sidebarCollapseRevision {
+                return sidebarCache
+            }
+            var updated = sidebarCache
+            updated.collapseRevision = sidebarCollapseRevision
+            if let activeGrps = updated.activeWorkspaceGroups {
+                updated.visualOrderedActiveKeys = ProjectWorkspaceEngine.visualOrderedKeys(
+                    groups: activeGrps,
+                    collapsedKeys: collapsedWorkspaceKeys
+                )
+            }
+            if needsGroupingNow {
+                let archGrps = updated.archivedWorkspaceGroups ?? ProjectWorkspaceEngine.buildGroups(items: updated.filteredArchivedItems)
+                updated.archivedWorkspaceGroups = archGrps
+                updated.visualOrderedArchivedKeys = ProjectWorkspaceEngine.visualOrderedKeys(
+                    groups: archGrps,
+                    collapsedKeys: collapsedArchivedWorkspaceKeys
+                )
+            }
+            sidebarCache = updated
+            return updated
+        }
+        var lookup: [String: UnifiedSessionSummaryItem] = [:]
+        lookup.reserveCapacity(activeItems.count + archivedItems.count)
+        for item in archivedItems { lookup[item.sessionKey] = item }
+        for item in activeItems { lookup[item.sessionKey] = item }
         let filtActive = ProjectWorkspaceEngine.filterItems(activeItems, by: workspaceFilter, enabled: supportsGrp)
         let filtArch = ProjectWorkspaceEngine.filterItems(archivedItems, by: workspaceFilter, enabled: supportsGrp)
-        let needsGroupingNow = supportsGrp && groupingMode == .byWorkspace
         let activeGrps: [ProjectWorkspaceGroup<UnifiedSessionSummaryItem>]? = needsGroupingNow
             ? ProjectWorkspaceEngine.buildGroups(items: filtActive)
             : nil
@@ -189,7 +217,9 @@ final class ProviderWorkspaceStore: ObservableObject {
             filtArch.map(\.sessionKey)
         }
         let built = SidebarDerivedCache(
-            revision: sidebarCacheRevision,
+            dataRevision: sidebarDataRevision,
+            collapseRevision: sidebarCollapseRevision,
+            itemsBySessionKey: lookup,
             filteredActiveItems: filtActive,
             filteredArchivedItems: filtArch,
             activeWorkspaceGroups: activeGrps,
@@ -292,16 +322,15 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     var selectedItem: UnifiedSessionSummaryItem? {
+        let cached = refreshedSidebarCache()
         if let key = selectedKey {
-            if let match = activeItems.first(where: { $0.sessionKey == key })
-                ?? archivedItems.first(where: { $0.sessionKey == key })
-            {
+            if let match = cached.itemsBySessionKey[key] {
                 return match
             }
             if let searchSelection, searchSelection.sessionKey == key { return searchSelection }
             if let externalSeedItem, externalSeedItem.sessionKey == key { return externalSeedItem }
         }
-        let filtActive = filteredActiveItems
+        let filtActive = cached.filteredActiveItems
         if supportsWorkspaceGrouping && workspaceFilter != .all {
             return filtActive.first
         }
@@ -581,6 +610,9 @@ final class ProviderWorkspaceStore: ObservableObject {
             if externalSeedItem != merged {
                 externalSeedItem = merged
             }
+            onExternalSummaryUpdated?(merged, store.revision)
+        } else {
+            onExternalSummaryUpdated?(updated, store.revision)
         }
     }
 
@@ -1501,8 +1533,12 @@ final class ProviderWorkspaceStore: ObservableObject {
             ("运行中", .info)
         } else if item.status == "waiting" {
             (SessionStatusLabels.waiting, .warning)
-        } else if item.readError != nil {
+        } else if item.status == "reply_needed" {
+            (SessionStatusLabels.replyNeeded, .warning)
+        } else if item.status == "failed" || item.readError != nil {
             ("异常", .danger)
+        } else if item.status == "unknown" {
+            ("状态未知", .neutral)
         } else {
             (nil, .neutral)
         }
@@ -1531,7 +1567,20 @@ final class ProviderWorkspaceStore: ObservableObject {
     }
 
     static func mapGrokSummaryStatic(_ item: GrokSessionSummary) -> UnifiedSessionSummaryItem {
-        UnifiedSessionSummaryItem(
+        let chip: (String?, StatusChipTone) = if item.status == "running" {
+            ("运行中", .info)
+        } else if item.status == "waiting" {
+            (SessionStatusLabels.waiting, .warning)
+        } else if item.status == "reply_needed" {
+            (SessionStatusLabels.replyNeeded, .warning)
+        } else if item.status == "failed" {
+            ("异常", .danger)
+        } else if item.status == "unknown" {
+            ("状态未知", .neutral)
+        } else {
+            (nil, .neutral)
+        }
+        return UnifiedSessionSummaryItem(
             sessionKey: item.id,
             nativeId: item.id,
             title: item.title.isEmpty ? item.id : item.title,
@@ -1540,8 +1589,8 @@ final class ProviderWorkspaceStore: ObservableObject {
             path: HistoryAndResumeHelpers.grokHandoffPath(item),
             updatedAt: item.updatedAt,
             statusText: providerSessionStatusText(status: item.status, updatedAt: item.updatedAt, archived: false),
-            statusChipBadge: item.status == "running" ? "运行中" : nil,
-            statusChipTone: .info,
+            statusChipBadge: chip.0,
+            statusChipTone: chip.1,
             running: item.status == "running",
             archived: false,
             canRename: true,

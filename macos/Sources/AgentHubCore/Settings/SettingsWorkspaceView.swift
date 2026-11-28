@@ -98,32 +98,23 @@ struct MaintenanceOpsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Section Header ("设置与维护" + Refresh)
-            HStack(spacing: 10) {
-                HStack(spacing: 10) {
-                    LucideIcon(.slidersHorizontal, size: 18)
-                        .foregroundStyle(palette.accent.color)
-                    Text("设置与维护")
-                        .font(DesignFonts.body(22, weight: .bold))
-                        .foregroundStyle(palette.textPrimary.color)
-                }
-                Spacer()
-                Button {
-                    Task { await fetchUpdateStatus() }
-                } label: {
-                    LucideIcon(.refreshCw, size: 17)
-                }
-                .buttonStyle(IconButtonStyle(dimension: 32))
-                .disabled(updateLoading)
-                .help("刷新版本与状态")
-                .accessibilityLabel("刷新版本与状态")
-            }
-
             // 3-Column Appearance Segmented Radio Group
             VStack(alignment: .leading, spacing: 10) {
-                Text("外观")
-                    .font(DesignFonts.body(14, weight: .semibold))
-                    .foregroundStyle(palette.textPrimary.color)
+                HStack(spacing: 10) {
+                    Text("外观")
+                        .font(DesignFonts.body(14, weight: .semibold))
+                        .foregroundStyle(palette.textPrimary.color)
+                    Spacer()
+                    Button {
+                        Task { await fetchUpdateStatus() }
+                    } label: {
+                        LucideIcon(.refreshCw, size: 16)
+                    }
+                    .buttonStyle(IconButtonStyle(dimension: 28))
+                    .disabled(updateLoading)
+                    .help("刷新版本与状态")
+                    .accessibilityLabel("刷新版本与状态")
+                }
 
                 HStack(spacing: 4) {
                     ForEach(ThemeMode.allCases, id: \.self) { option in

@@ -187,12 +187,10 @@ struct FullWidthRowButtonStyle: ButtonStyle {
                 }
                 .overlay(alignment: .leading) {
                     if selected && !multiSelected {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(palette.accent.color)
-                            .frame(width: 2.5)
-                            .padding(.vertical, 4)
+                        UnevenLeadingAccentBar(color: palette.accent.color, width: 2.5, cornerRadius: cornerRadius)
                     }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
                 .contentShape(Rectangle())
                 .opacity(isEnabled ? 1.0 : 0.45)
         }

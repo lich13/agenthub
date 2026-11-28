@@ -135,6 +135,7 @@ struct RemoteConnectionSettingsView: View {
     @State private var noticeMessage: String?
     @State private var installing: Bool = false
     @State private var deletingAlias: String?
+    @FocusState private var nameFieldFocused: Bool
 
     init(store: RuntimeConnectionStore) {
         self.store = store
@@ -305,19 +306,26 @@ struct RemoteConnectionSettingsView: View {
                                     .font(DesignFonts.body(12))
                                     .foregroundStyle(palette.textMuted.color)
                                 TextField(sshHost.isEmpty ? "远程机器名称" : sshHost, text: $name)
+                                    .focused($nameFieldFocused)
                                     .textFieldStyle(.plain)
                                     .font(DesignFonts.body(13))
                                     .foregroundStyle(palette.textPrimary.color)
                                     .padding(.horizontal, 10)
-                                    .frame(height: LayoutMetrics.formControlHeight)
+                                    .frame(maxWidth: .infinity, minHeight: LayoutMetrics.formControlHeight, maxHeight: LayoutMetrics.formControlHeight)
                                     .background(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                                             .fill(palette.elevated.color)
                                     )
                                     .overlay(
                                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                            .strokeBorder(palette.borderStrong.color, lineWidth: 1)
+                                            .strokeBorder(nameFieldFocused ? palette.accent.color : palette.borderStrong.color, lineWidth: nameFieldFocused ? 1.5 : 1)
                                     )
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        if !busy {
+                                            nameFieldFocused = true
+                                        }
+                                    }
                                     .disabled(busy)
                             }
                             .frame(maxWidth: .infinity)

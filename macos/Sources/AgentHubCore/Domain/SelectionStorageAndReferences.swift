@@ -681,6 +681,18 @@ struct BoundedLRUCache<Key: Hashable, Value> {
         totalBytes = 0
     }
 
+    mutating func trim(maxEntries targetEntries: Int, maxBytes targetBytes: Int) {
+        let clampedEntries = max(0, targetEntries)
+        let clampedBytes = max(0, targetBytes)
+        if clampedEntries == 0 || clampedBytes == 0 {
+            removeAll()
+            return
+        }
+        while head != -1 && (indexByKey.count > clampedEntries || totalBytes > clampedBytes) {
+            evictHead()
+        }
+    }
+
     private mutating func evictHead() {
         guard head != -1, let key = nodes[head].key else { return }
         _ = removeValue(forKey: key)

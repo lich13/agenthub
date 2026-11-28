@@ -46,7 +46,7 @@ int32_t agenthub_ffi_init(
 void agenthub_ffi_shutdown(AgentHubRuntime *runtime);
 void agenthub_ffi_string_free(char *ptr);
 
-char *agenthub_ffi_parse_gfm_markdown(const char *utf8_ptr, size_t len);
+char *agenthub_ffi_parse_gfm_markdown(const char *utf8_ptr, size_t len, size_t *out_len);
 
 void agenthub_ffi_invoke(
     const AgentHubRuntime *runtime, const char *command_utf8, const char *args_json_utf8,

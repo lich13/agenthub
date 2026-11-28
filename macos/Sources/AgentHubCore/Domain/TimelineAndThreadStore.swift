@@ -15,9 +15,10 @@ enum HistoryAndResumeHelpers {
         blocks: [MessageBlock],
         beforeCursor: String?
     ) -> String? {
+        let _ = history
         guard let beforeCursor else { return nil }
         if beforeCursor.hasPrefix("p:") { return beforeCursor }
-        guard history != nil, let first = blocks.first else { return beforeCursor }
+        guard let first = blocks.first, !first.id.isEmpty else { return beforeCursor }
         let idx = historyCursorIndex(beforeCursor)
         guard idx.isFinite else { return beforeCursor }
         return "b:\(Int(idx)):\(first.id)"
@@ -337,7 +338,8 @@ final class ThreadMessageStore: ObservableObject {
             nextHasMore = false
         } else if let incomingBefore = detail.beforeCursor {
             if slot.beforeCursor == nil
-                || HistoryAndResumeHelpers.historyCursorIndex(incomingBefore) < HistoryAndResumeHelpers.historyCursorIndex(slot.beforeCursor)
+                || (slot.beforeCursor?.hasPrefix("p:") != true
+                    && HistoryAndResumeHelpers.historyCursorIndex(incomingBefore) < HistoryAndResumeHelpers.historyCursorIndex(slot.beforeCursor))
             {
                 nextBefore = HistoryAndResumeHelpers.stableHistoryCursor(
                     history: detail.history,
@@ -868,7 +870,11 @@ struct TimelineWindowPage<Item: Sendable>: Sendable {
 @MainActor
 final class TimelineWindowController<Item: Sendable>: ObservableObject {
     @Published private(set) var scope: String = ""
-    @Published private(set) var pages: [TimelineWindowPage<Item>] = []
+    @Published private(set) var pages: [TimelineWindowPage<Item>] = [] {
+        didSet {
+            pagesRevision &+= 1
+        }
+    }
     @Published private(set) var windowHistory: HistoryMetadata?
     @Published private(set) var busy: Bool = false
     @Published private(set) var error: String?
@@ -877,6 +883,9 @@ final class TimelineWindowController<Item: Sendable>: ObservableObject {
 
     private let idOf: (Item) -> String
     private var sequence: Int = 0
+    private var pagesRevision: UInt64 = 0
+    private var cachedItemsRevision: UInt64 = .max
+    private var cachedItemsValue: [Item]?
 
     init(idOf: @escaping (Item) -> String) {
         self.idOf = idOf
@@ -912,7 +921,14 @@ final class TimelineWindowController<Item: Sendable>: ObservableObject {
     }
 
     var items: [Item]? {
-        guard isActive else { return nil }
+        if cachedItemsRevision == pagesRevision {
+            return cachedItemsValue
+        }
+        guard isActive else {
+            cachedItemsRevision = pagesRevision
+            cachedItemsValue = nil
+            return nil
+        }
         var indexById: [String: Int] = [:]
         var deduped: [Item] = []
         for page in pages {
@@ -926,6 +942,8 @@ final class TimelineWindowController<Item: Sendable>: ObservableObject {
                 }
             }
         }
+        cachedItemsRevision = pagesRevision
+        cachedItemsValue = deduped
         return deduped
     }
 

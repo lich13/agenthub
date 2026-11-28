@@ -323,6 +323,7 @@ public final class RuntimeConnectionStore: ObservableObject {
             }
             res = try await invokeLocal(command, args: RPCRequestEnvelope(request: request))
             if updatesState, let view = res as? RemoteConnectionView {
+                GfmLayoutCache.shared.clear()
                 applyConnectionView(view)
                 connectionError = nil
                 capabilitiesError = nil

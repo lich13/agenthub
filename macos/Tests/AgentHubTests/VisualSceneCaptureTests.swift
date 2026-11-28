@@ -340,6 +340,340 @@ final class VisualSceneCaptureTests: XCTestCase {
     }
 
     @MainActor
+    func testSlice4StatusChipsWritebackCursorAndAppendContracts() async throws {
+        // 1. Claude & Grok status chips cover reply_needed, waiting, failed, unknown
+        let decoder = JSONDecoder()
+        let claudeReplyRaw = try decoder.decode(
+            ClaudeSessionSummary.self,
+            from: Data(#"{"id":"c1","sessionKey":"p/c1.jsonl","title":"T","cwd":"/tmp","path":"/tmp/c1.jsonl","status":"reply_needed"}"#.utf8)
+        )
+        let claudeReply = ProviderWorkspaceStore.mapClaudeSummaryStatic(claudeReplyRaw)
+        XCTAssertEqual(claudeReply.statusChipBadge, SessionStatusLabels.replyNeeded)
+        XCTAssertEqual(claudeReply.statusChipTone, StatusChipTone.warning)
+
+        let claudeFailedRaw = try decoder.decode(
+            ClaudeSessionSummary.self,
+            from: Data(#"{"id":"c2","sessionKey":"p/c2.jsonl","title":"T","cwd":"/tmp","path":"/tmp/c2.jsonl","status":"failed"}"#.utf8)
+        )
+        let claudeFailed = ProviderWorkspaceStore.mapClaudeSummaryStatic(claudeFailedRaw)
+        XCTAssertEqual(claudeFailed.statusChipBadge, "异常")
+        XCTAssertEqual(claudeFailed.statusChipTone, StatusChipTone.danger)
+
+        let grokWaitingRaw = try decoder.decode(
+            GrokSessionSummary.self,
+            from: Data(#"{"id":"g1","title":"G","cwd":"/tmp","path":"/tmp/g1","status":"waiting"}"#.utf8)
+        )
+        let grokWaiting = ProviderWorkspaceStore.mapGrokSummaryStatic(grokWaitingRaw)
+        XCTAssertEqual(grokWaiting.statusChipBadge, SessionStatusLabels.waiting)
+        XCTAssertEqual(grokWaiting.statusChipTone, StatusChipTone.warning)
+
+        let grokUnknownRaw = try decoder.decode(
+            GrokSessionSummary.self,
+            from: Data(#"{"id":"g2","title":"G","cwd":"/tmp","path":"/tmp/g2","status":"unknown"}"#.utf8)
+        )
+        let grokUnknown = ProviderWorkspaceStore.mapGrokSummaryStatic(grokUnknownRaw)
+        XCTAssertEqual(grokUnknown.statusChipBadge, "状态未知")
+        XCTAssertEqual(grokUnknown.statusChipTone, StatusChipTone.neutral)
+
+        // 2. stableHistoryCursor attaches :block_id when history == nil, and applyDetail preserves "p:" cursor
+        let nilHistCursor = HistoryAndResumeHelpers.stableHistoryCursor(
+            history: nil,
+            blocks: [MessageBlock(id: "msg-42", role: "user", kind: "message", text: "hello")],
+            beforeCursor: "b:42"
+        )
+        XCTAssertEqual(nilHistCursor, "b:42:msg-42")
+
+        let tStore = ThreadMessageStore()
+        _ = tStore.applyDetail(
+            ThreadDetail(
+                summary: ThreadSummary(id: "th-p", title: "T", status: "Recent"),
+                blocks: [MessageBlock(id: "m-10", role: "user", kind: "message", text: "10")],
+                totalBlocks: 20,
+                hasMoreBlocks: true,
+                beforeCursor: "p:m-10"
+            )
+        )
+        let afterHeadPoll = tStore.applyDetail(
+            ThreadDetail(
+                summary: ThreadSummary(id: "th-p", title: "T", status: "Recent"),
+                blocks: [MessageBlock(id: "m-11", role: "assistant", kind: "message", text: "11")],
+                totalBlocks: 20,
+                hasMoreBlocks: true,
+                beforeCursor: "b:19"
+            )
+        )
+        XCTAssertEqual(afterHeadPoll.beforeCursor, "p:m-10", "Head poll b: cursor must not clobber active p: seek cursor")
+
+        // 3. UnifiedWorkspaceHubStore immediate stage writeback guarded by machine revision & sequence
+        let suiteName = "com.lich13.agenthub.s4.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = RuntimeConnectionStore(transport: MockRuntimeTransport { cmd, args in Self.mockResponse(cmd: cmd, args: args) }, defaults: defaults)
+        await store.bootstrap()
+        let hub = UnifiedWorkspaceHubStore(store: store)
+        await hub.fetchAllSessions()
+        guard var claudeEntry = hub.activeItems.first(where: { $0.provider == .claudeCode })?.item else {
+            XCTFail("Expected Claude item in UnifiedWorkspaceHubStore")
+            return
+        }
+        claudeEntry.statusText = SessionStatusLabels.replyNeeded
+        claudeEntry.statusChipBadge = SessionStatusLabels.replyNeeded
+        claudeEntry.statusChipTone = .warning
+        // Wrong revision must be ignored
+        hub.applyStageSummaryWriteback(provider: .claudeCode, updated: claudeEntry, revision: store.revision &+ 99)
+        XCTAssertNotEqual(hub.activeItems.first(where: { $0.provider == .claudeCode })?.item.statusChipBadge, SessionStatusLabels.replyNeeded)
+        // Matching revision updates immediately
+        hub.applyStageSummaryWriteback(provider: .claudeCode, updated: claudeEntry, revision: store.revision)
+        XCTAssertEqual(hub.activeItems.first(where: { $0.provider == .claudeCode })?.item.statusChipBadge, SessionStatusLabels.replyNeeded)
+    }
+
+    @MainActor
+    func testRenderV2142NarrowProbeLongSidebarChineseCwdAndMultilineQuestions() async throws {
+        guard ProcessInfo.processInfo.environment["AGENTHUB_RENDER_TESTS"] == "1" else {
+            return
+        }
+        let outDir = ProcessInfo.processInfo.environment["AGENTHUB_VISUAL_CAPTURE_DIR"]
+        let suiteName = "com.lich13.agenthub.v2142.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let transport = MockRuntimeTransport { cmd, args in
+            if cmd == "dsh.list" {
+                return Data(#"""
+                [{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"DeepSeek Harness 中文路径与多行问答核验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false,"deleteBlockReason":"会话正在运行"}]
+                """#.utf8)
+            }
+            if cmd == "dsh.detail" {
+                return Data(#"""
+                {"summary":{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"DeepSeek Harness 中文路径与多行问答核验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false},"events":[{"id":"d-u1","kind":"user_message","text":"核对 /Users/example/Documents/程序开发/AgentHub 路径字距与 296pt 顶栏标题完整展示。"},{"id":"d-a1","kind":"assistant_message","text":"已完成核对，`DeepSeek Harness` 顶栏零截断，中文工作目录无中西文异常空隙。"}],"totalEvents":2,"hasMore":false}
+                """#.utf8)
+            }
+            if cmd == "claude.list" {
+                return Data(#"""
+                [{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"Claude Code 中文目录会话状态与禁改名提示","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"reply_needed","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true}]
+                """#.utf8)
+            }
+            if cmd == "claude.detail" {
+                return Data(#"""
+                {"summary":{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"Claude Code 中文目录会话状态与禁改名提示","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"reply_needed","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true},"events":[{"id":"c-u1","turnId":"t1","kind":"user_message","text":"请在中文目录 /Users/example/Documents/程序开发/AgentHub 下验证状态胶囊。"},{"id":"c-a1","turnId":"t1","kind":"assistant_message","assistantPhase":"final","text":"顶栏已同步显示需回复胶囊，禁改名提示收敛为紧凑单行条。"}],"totalEvents":2,"hasMore":false}
+                """#.utf8)
+            }
+            return Self.mockResponse(cmd: cmd, args: args)
+        }
+        let store = RuntimeConnectionStore(transport: transport, defaults: defaults)
+        await store.bootstrap()
+
+        // A. 1000pt Narrow AppShell Probe Window (contentWidth = 804pt < 880pt, Light & Dark)
+        let narrowSize = NSSize(width: 1000, height: 1320)
+        let narrowWin = NSWindow(contentRect: NSRect(origin: .zero, size: narrowSize), styleMask: [.borderless], backing: .buffered, defer: false)
+        for (scheme, appName, fileName) in [
+            (ColorSchemeKind.light, NSAppearance.Name.aqua, "swift-12a-probe-1000x680-light.png"),
+            (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "swift-12b-probe-1000x680-dark.png"),
+        ] {
+            store.setTheme(scheme == .light ? .light : .dark)
+            narrowWin.appearance = NSAppearance(named: appName)
+            let probePalette = DesignPalette.resolve(scheme: scheme, workspace: .probe)
+            let narrowHost = NSHostingView(
+                rootView: HStack(spacing: 0) {
+                    Color(nsColor: probePalette.railBg.nsColor).frame(width: LayoutMetrics.sideNavExpandedWidth)
+                    ProbeWorkspaceView(store: store, initialOpenSections: Set(ProbeDisclosureSection.allCases))
+                        .environment(\.agentHubPalette, probePalette)
+                }
+                .frame(width: narrowSize.width, height: narrowSize.height)
+            )
+            narrowHost.frame = NSRect(origin: .zero, size: narrowSize)
+            narrowWin.contentView = narrowHost
+            narrowWin.orderBack(nil)
+            try await pumpMainRunLoop(ms: 350)
+            let rendered = collectAllRenderedStrings(in: narrowHost)
+            XCTAssertTrue(rendered.contains(where: { $0.contains("owner/repo") || $0.contains("example") || $0.contains("Bark") || !$0.isEmpty }))
+            if let rep = try writeOrCacheDisplay(window: narrowWin, host: narrowHost, outDir: outDir, fileName: fileName) {
+                XCTAssertGreaterThan(
+                    countForegroundContrastPixels(in: rep, logicalSize: narrowSize, topLeftRect: NSRect(x: 210, y: 16, width: 760, height: 1240), bg: probePalette.background),
+                    800,
+                    "1000pt narrow Probe (\(scheme)) must render non-blank CI, Bark, and Hook rows"
+                )
+            }
+        }
+        narrowWin.orderOut(nil)
+
+        // B. 296pt DeepSeek Harness & Claude Code Sidebar Headers + Chinese cwd Path (Light & Dark)
+        let wsSize = NSSize(width: 1280, height: 820)
+        let wsWin = NSWindow(contentRect: NSRect(origin: .zero, size: wsSize), styleMask: [.borderless], backing: .buffered, defer: false)
+        let shellHost = NSHostingView(rootView: AppShellView(store: store).frame(width: wsSize.width, height: wsSize.height))
+        shellHost.frame = NSRect(origin: .zero, size: wsSize)
+        wsWin.contentView = shellHost
+        wsWin.orderBack(nil)
+
+        for (ws, expectedTitle, prefix) in [
+            (WorkspaceId.dsh, "DeepSeek Harness", "swift-13-dsh-296header-cjk"),
+            (WorkspaceId.claude, "Claude Code", "swift-13-claude-296header-cjk"),
+        ] {
+            store.activeWorkspace = ws
+            for (scheme, appName, suffix) in [
+                (ColorSchemeKind.light, NSAppearance.Name.aqua, "light"),
+                (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "dark"),
+            ] {
+                store.setTheme(scheme == .light ? .light : .dark)
+                wsWin.appearance = NSAppearance(named: appName)
+                try await pumpMainRunLoop(ms: 420)
+                let allTexts = collectAllRenderedStrings(in: shellHost)
+                XCTAssertTrue(allTexts.contains("搜索标题、ID 或工作目录"), "\(expectedTitle) sidebar search field must mount")
+                XCTAssertTrue(
+                    allTexts.contains(where: { $0.contains("程序开发/AgentHub") || $0.contains("顶栏") }),
+                    "\(expectedTitle) conversation stage must mount decoded Chinese cwd message rows"
+                )
+                let pal = DesignPalette.resolve(scheme: scheme, workspace: ws)
+                if let rep = try writeOrCacheDisplay(window: wsWin, host: shellHost, outDir: outDir, fileName: "\(prefix)-\(suffix).png") {
+                    XCTAssertGreaterThan(
+                        countForegroundContrastPixels(in: rep, logicalSize: wsSize, topLeftRect: NSRect(x: 206, y: 12, width: 190, height: 30), bg: pal.surface),
+                        60,
+                        "296pt sidebar header must render non-blank \(expectedTitle) glyphs (\(scheme))"
+                    )
+                    if ws == .dsh {
+                        XCTAssertGreaterThan(
+                            countForegroundContrastPixels(in: rep, logicalSize: wsSize, topLeftRect: NSRect(x: 325, y: 14, width: 32, height: 24), bg: pal.surface),
+                            18,
+                            "DeepSeek Harness trailing 'ness' glyphs must render without truncation in 296pt header (\(scheme))"
+                        )
+                    }
+                    XCTAssertGreaterThan(
+                        countForegroundContrastPixels(in: rep, logicalSize: wsSize, topLeftRect: NSRect(x: 510, y: 26, width: 320, height: 22), bg: pal.background),
+                        40,
+                        "Stage header must render Chinese cwd /Users/example/Documents/程序开发/AgentHub glyphs (\(scheme))"
+                    )
+                }
+            }
+        }
+        wsWin.orderOut(nil)
+
+        // C. Multi-Line Question Options & Multi-Line Answers Without Clipping (Light & Dark)
+        let multilineQuestions = [
+            UserInputQuestion(
+                id: "arch-choice",
+                header: "部署策略确认",
+                question: "当前远程机器同时挂载了多个工作区目录，请选择跨机器同步与离线索引校验策略（支持多行长问题折行测量）：",
+                options: [
+                    UserInputOption(
+                        label: "(Recommended) 启用单连接零双缓冲流式透传与增量缓存",
+                        description: "服务端通过 write_raw_response 三段写出帧头与 RawValue 字节，客户端直接透传 UTF-8 原文并保留断线单次读重试与机器修订号隔离保护。"
+                    ),
+                    UserInputOption(
+                        label: "保持完整离线快照回退兼容",
+                        description: "不对存量 SQLite 表执行破坏性变更，确保任意时刻回滚至旧版本二进制仍可无损读取全部配置、加密通知队列与原生会话索引。"
+                    ),
+                ]
+            ),
+        ]
+        let multilineAnswers = [
+            UserInputAnswer(
+                questionId: "arch-choice",
+                answers: [
+                    "(Recommended) 启用单连接零双缓冲流式透传与增量缓存",
+                    "附加说明：同时在 1000×680 窄窗与浅深双色下校验多行问答卡片底部绝不裁切文字，保留完整内边距与圆角边框。",
+                ]
+            ),
+        ]
+        let qRow = ConversationRowItem(
+            id: "q-multi-1",
+            timelineId: "q-multi-1",
+            kind: .questionResult(statusText: "已回复", questions: multilineQuestions, answers: multilineAnswers)
+        )
+        let cardWidth: CGFloat = 560
+        for (scheme, appName, fileName) in [
+            (ColorSchemeKind.light, NSAppearance.Name.aqua, "swift-14a-multiline-questions-light.png"),
+            (ColorSchemeKind.dark, NSAppearance.Name.darkAqua, "swift-14b-multiline-questions-dark.png"),
+        ] {
+            let coord = ConversationTableCoordinator(store: store)
+            coord.scheme = scheme
+            coord.workspace = .codex
+            coord.sessionScopeKey = "test:multiline:\(scheme)"
+            let measuredH = ceil(coord.measureRowHeight(qRow, width: cardWidth))
+            XCTAssertGreaterThan(measuredH, 250, "Multi-line question/answer card height must expand dynamically beyond old fixed 56pt/44pt constants")
+
+            let cellSize = NSSize(width: cardWidth + 48, height: measuredH + 12)
+            let qWin = NSWindow(contentRect: NSRect(origin: .zero, size: cellSize), styleMask: [.borderless], backing: .buffered, defer: false)
+            qWin.appearance = NSAppearance(named: appName)
+            let pal = DesignPalette.resolve(scheme: scheme, workspace: .codex)
+            let bgBox = NSView(frame: NSRect(origin: .zero, size: cellSize))
+            bgBox.wantsLayer = true
+            bgBox.layer?.backgroundColor = pal.background.nsColor.cgColor
+            let cell = ConversationRowCellView(identifier: NSUserInterfaceItemIdentifier("MultilineQCell"))
+            cell.frame = NSRect(x: 0, y: 6, width: cellSize.width, height: measuredH)
+            cell.configure(item: qRow, leadingInset: 24, trailingInset: 24, contentWidth: cardWidth, highlighted: false, coordinator: coord)
+            bgBox.addSubview(cell)
+            qWin.contentView = bgBox
+            qWin.orderBack(nil)
+            bgBox.layoutSubtreeIfNeeded()
+            let stackFittingH = cell.containerStack.fittingSize.height
+            XCTAssertLessThanOrEqual(stackFittingH, measuredH + 2.0, "Measured row height (\(measuredH)) must not clip containerStack fitting height (\(stackFittingH))")
+
+            if let rep = try writeOrCacheDisplay(window: qWin, host: bgBox, outDir: outDir, fileName: fileName) {
+                XCTAssertGreaterThan(
+                    countForegroundContrastPixels(in: rep, logicalSize: cellSize, topLeftRect: NSRect(x: 32, y: 18, width: cardWidth - 16, height: 64), bg: pal.surface),
+                    80,
+                    "Multi-line question top header must render non-blank glyphs (\(scheme))"
+                )
+                XCTAssertGreaterThan(
+                    countForegroundContrastPixels(in: rep, logicalSize: cellSize, topLeftRect: NSRect(x: 32, y: measuredH - 88, width: cardWidth - 16, height: 72), bg: pal.elevated),
+                    60,
+                    "Multi-line answer bottom box must render non-blank unclipped glyphs (\(scheme))"
+                )
+            }
+            qWin.orderOut(nil)
+        }
+    }
+
+    @MainActor
+    private func writeOrCacheDisplay(
+        window: NSWindow,
+        host: NSView,
+        outDir: String?,
+        fileName: String
+    ) throws -> NSBitmapImageRep? {
+        if let outDir, !outDir.isEmpty {
+            return try captureWindow(window, host: host, to: "\(outDir)/\(fileName)")
+        }
+        host.layoutSubtreeIfNeeded()
+        window.displayIfNeeded()
+        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else {
+            XCTFail("Failed to allocate bitmapImageRep for \(fileName)")
+            return nil
+        }
+        host.cacheDisplay(in: host.bounds, to: rep)
+        return rep
+    }
+
+    private func countForegroundContrastPixels(
+        in rep: NSBitmapImageRep,
+        logicalSize: NSSize,
+        topLeftRect: NSRect,
+        bg: RGBAColor
+    ) -> Int {
+        let scaleX = CGFloat(rep.pixelsWide) / max(1, logicalSize.width)
+        let scaleY = CGFloat(rep.pixelsHigh) / max(1, logicalSize.height)
+        let minX = max(0, Int(floor(topLeftRect.minX * scaleX)))
+        let maxX = min(rep.pixelsWide, Int(ceil(topLeftRect.maxX * scaleX)))
+        let minY = max(0, Int(floor(topLeftRect.minY * scaleY)))
+        let maxY = min(rep.pixelsHigh, Int(ceil(topLeftRect.maxY * scaleY)))
+        guard minX < maxX, minY < maxY else { return 0 }
+        let bgR = CGFloat(bg.r) / 255.0
+        let bgG = CGFloat(bg.g) / 255.0
+        let bgB = CGFloat(bg.b) / 255.0
+        var count = 0
+        for py in minY ..< maxY {
+            for px in minX ..< maxX {
+                guard let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB) else { continue }
+                let dist = abs(c.redComponent - bgR) + abs(c.greenComponent - bgG) + abs(c.blueComponent - bgB)
+                if dist > 0.18 {
+                    count += 1
+                }
+            }
+        }
+        return count
+    }
+
+    @MainActor
     private func pumpMainRunLoop(ms: UInt64) async throws {
         try await Task.sleep(nanoseconds: ms * 1_000_000)
         await Task.yield()

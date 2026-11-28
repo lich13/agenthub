@@ -279,8 +279,10 @@ struct SubagentPanelView: View {
                 let headerTitle: String = currentAgent?.name ?? listTitle
                 Text(headerTitle)
                     .font(DesignFonts.body(13, weight: .semibold))
+                    .kerning(-0.001)
                     .foregroundStyle(palette.textPrimary.color)
                     .lineLimit(1)
+                    .truncationMode(.middle)
 
                 if let current = currentAgent {
                     StatusChip(subagentStatusLabel(current.status), tone: subagentTone(current.status))

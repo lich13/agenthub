@@ -136,6 +136,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         thoughtLayoutCache.removeAll()
         codeLayoutCache.removeAll()
         tableLayoutCache.removeAll()
+        GfmLayoutCache.shared.trim()
     }
 
     struct LoadedAttachmentState: Equatable, Sendable {
@@ -264,7 +265,13 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         return dimensionsMatch && contextMatch
     }
 
-    private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) -> IndexSet {
+    private struct HeightCacheUpdatePlan {
+        let changedHeightIndexes: IndexSet
+        let isPureTailAppend: Bool
+        let modifiedPrefixIndexes: IndexSet
+    }
+
+    private func rebuildRowIndexesAndCarryHeightCache(nextRows: [ConversationRowItem], currentWidthKey: Int) -> HeightCacheUpdatePlan {
         let currentScrollerStyle = Self.effectiveScrollerStyle
         let canCarry = isHeightCacheValid(
             forWidthKey: currentWidthKey,
@@ -281,13 +288,25 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
             }
         }
 
+        let oldCount = rows.count
+        var prefixIdsMatch = canCarry && oldCount > 0 && nextRows.count >= oldCount
+        if prefixIdsMatch {
+            for idx in 0 ..< oldCount where nextRows[idx].id != rows[idx].id {
+                prefixIdsMatch = false
+                break
+            }
+        }
+
         var nextHeights = Array<CGFloat?>(repeating: nil, count: nextRows.count)
         var nextUserIndices: [Int] = []
         var anyImages = false
+        var modifiedPrefix = IndexSet()
 
         for (idx, r) in nextRows.enumerated() {
             if canCarry, let prev = previousById[r.id], prev.item == r {
                 nextHeights[idx] = prev.height
+            } else if prefixIdsMatch, idx < oldCount {
+                modifiedPrefix.insert(idx)
             }
             if case let .user(msg, _, namesOnly) = r.kind {
                 nextUserIndices.append(idx)
@@ -298,7 +317,13 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         }
 
         let changedHeightIndexes: IndexSet
-        if !canCarry || nextRows.count != rows.count {
+        if prefixIdsMatch {
+            var changed = modifiedPrefix
+            if nextRows.count > oldCount {
+                changed.insert(integersIn: oldCount ..< nextRows.count)
+            }
+            changedHeightIndexes = changed
+        } else if !canCarry || nextRows.count != oldCount {
             changedHeightIndexes = IndexSet(integersIn: 0 ..< nextRows.count)
         } else {
             var changed = IndexSet()
@@ -319,7 +344,11 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         heightCacheScrollerStyle = currentScrollerStyle
         userAnchorRowIndices = nextUserIndices
         hasAnyUserImageAttachments = anyImages
-        return changedHeightIndexes
+        return HeightCacheUpdatePlan(
+            changedHeightIndexes: changedHeightIndexes,
+            isPureTailAppend: prefixIdsMatch,
+            modifiedPrefixIndexes: modifiedPrefix
+        )
     }
 
     func isNearBottom(threshold: CGFloat = 96) -> Bool {
@@ -372,14 +401,17 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
     ) {
         let totalW = max(320, scrollView?.bounds.width ?? tableView?.bounds.width ?? 0)
         let widthKey = totalW > 0 ? Int((contentColumnWidth(for: totalW) * 2).rounded()) : 0
-        let changedHeightIndexes = rebuildRowIndexesAndCarryHeightCache(nextRows: nextRows, currentWidthKey: widthKey)
+        let oldCount = rows.count
+        let scopeReset = forceScrollToBottom || sessionScopeKey != cellCacheScopeKey
+        let updatePlan = rebuildRowIndexesAndCarryHeightCache(nextRows: nextRows, currentWidthKey: widthKey)
+        let changedHeightIndexes = updatePlan.changedHeightIndexes
 
         guard let tableView, let clipView = scrollView?.contentView else {
             rows = nextRows
             return
         }
         let wasEmpty = rows.isEmpty
-        if forceScrollToBottom || sessionScopeKey != cellCacheScopeKey {
+        if scopeReset {
             if sessionScopeKey != cellCacheScopeKey {
                 highlightClearTask?.cancel()
                 highlightClearTask = nil
@@ -394,15 +426,36 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         }
         let shouldFollow = forceScrollToBottom || (preferAutoFollowBottom && !upwardScrollIntent && (wasEmpty || isNearBottom()))
         let anchor = shouldFollow ? nil : captureScrollAnchor()
+        let canUseIncrementalAppend = !scopeReset
+            && updatePlan.isPureTailAppend
+            && tableView.numberOfRows == oldCount
 
         isRestoringScroll = true
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0
             context.allowsImplicitAnimation = false
             self.rows = nextRows
-            tableView.reloadData()
-            if !changedHeightIndexes.isEmpty {
-                tableView.noteHeightOfRows(withIndexesChanged: changedHeightIndexes)
+            if canUseIncrementalAppend {
+                if nextRows.count > oldCount {
+                    tableView.insertRows(
+                        at: IndexSet(integersIn: oldCount ..< nextRows.count),
+                        withAnimation: []
+                    )
+                }
+                if !updatePlan.modifiedPrefixIndexes.isEmpty {
+                    tableView.reloadData(
+                        forRowIndexes: updatePlan.modifiedPrefixIndexes,
+                        columnIndexes: IndexSet(integer: 0)
+                    )
+                }
+                if !changedHeightIndexes.isEmpty {
+                    tableView.noteHeightOfRows(withIndexesChanged: changedHeightIndexes)
+                }
+            } else {
+                tableView.reloadData()
+                if !changedHeightIndexes.isEmpty {
+                    tableView.noteHeightOfRows(withIndexesChanged: changedHeightIndexes)
+                }
             }
             tableView.tile()
             tableView.layoutSubtreeIfNeeded()
@@ -827,6 +880,25 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         let w = scrollView.bounds.width
         guard w > 1, abs(w - lastLaidOutWidth) > 0.5 else { return }
         let wasZero = (lastLaidOutWidth == 0)
+        let prevContentW = wasZero ? 0 : contentColumnWidth(for: max(320, lastLaidOutWidth))
+        let nextContentW = contentColumnWidth(for: max(320, w))
+        if !wasZero, abs(nextContentW - prevContentW) < 0.5 {
+            lastLaidOutWidth = w
+            column?.width = w
+            let insets = LayoutMetrics.readingHorizontalInsets(
+                availableWidth: max(320, w),
+                hasTimelineRail: hasTimelineRail,
+                isSubagent: isSubagent
+            )
+            tableView.enumerateAvailableRowViews { rowView, _ in
+                if let cell = rowView.view(atColumn: 0) as? ConversationRowCellView {
+                    cell.updateHorizontalInset(insets.leading)
+                }
+            }
+            tableView.layoutSubtreeIfNeeded()
+            refreshViewportAttachmentsAndTimeline()
+            return
+        }
         let anchor = wasZero ? nil : captureScrollAnchor()
         lastLaidOutWidth = w
         column?.width = w
@@ -1664,13 +1736,62 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         return ceil(CGFloat(lines) * 20.8) + 16
     }
 
+    private static let cachedMono13AsciiAdvance: CGFloat = {
+        let font = DesignFonts.nsMonoFont(size: 13)
+        let sample = NSAttributedString(
+            string: String(repeating: "M", count: 100),
+            attributes: [.font: font]
+        )
+        return max(6.0, sample.size().width / 100.0)
+    }()
+
     static func measureCodeDocumentWidth(code: String, minWidth: CGFloat) -> CGFloat {
         let normalized = normalizeCodeBlockText(code)
-        let attr = NSAttributedString(
-            string: normalized.isEmpty ? " " : normalized,
-            attributes: [.font: DesignFonts.nsMonoFont(size: 13)]
-        )
-        return max(minWidth, ceil(attr.size().width) + 24)
+        guard !normalized.isEmpty else {
+            return max(minWidth, ceil(cachedMono13AsciiAdvance) + 24)
+        }
+        let font = DesignFonts.nsMonoFont(size: 13)
+        var maxAsciiCols = 0
+        var nonAsciiCandidates: [Substring] = []
+
+        for line in normalized.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
+            if line.isEmpty { continue }
+            var asciiOnly = true
+            var cols = 0
+            for byte in line.utf8 {
+                if byte >= 0x20 && byte < 0x7F {
+                    cols += 1
+                } else if byte == 0x09 {
+                    cols += 4
+                } else {
+                    asciiOnly = false
+                    break
+                }
+            }
+            if asciiOnly {
+                if cols > maxAsciiCols {
+                    maxAsciiCols = cols
+                }
+            } else {
+                if nonAsciiCandidates.count < 4 {
+                    nonAsciiCandidates.append(line)
+                } else if let minIdx = nonAsciiCandidates.indices.min(by: {
+                    nonAsciiCandidates[$0].utf8.count < nonAsciiCandidates[$1].utf8.count
+                }), line.utf8.count > nonAsciiCandidates[minIdx].utf8.count {
+                    nonAsciiCandidates[minIdx] = line
+                }
+            }
+        }
+
+        var maxLineW = CGFloat(maxAsciiCols) * cachedMono13AsciiAdvance
+        for candidate in nonAsciiCandidates {
+            let attr = NSAttributedString(string: String(candidate), attributes: [.font: font])
+            let w = attr.size().width
+            if w > maxLineW {
+                maxLineW = w
+            }
+        }
+        return max(minWidth, ceil(maxLineW) + 24)
     }
 
     static func horizontalScrollerExtraHeight(needsHorizontalScroll: Bool) -> CGFloat {
@@ -1948,25 +2069,37 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         width: CGFloat
     ) -> CGFloat {
         let innerW = max(120, width - 32)
-        var total: CGFloat = 28 + 20 + 10 // padding 14*2 + meta + gap
+        let optColW = max(80, innerW - 32)
+        let rightColW = max(80, innerW - 150)
+        var total: CGFloat = 28 + 18 // padding 14*2 + metaRow
         let qFont = DesignFonts.nsBodyFont(size: 14, weight: .semibold)
+        let descFont = DesignFonts.nsBodyFont(size: 12)
+        let ansFont = DesignFonts.nsBodyFont(size: 13, weight: .semibold)
         for q in questions {
             let qAttr = NSAttributedString(string: q.question, attributes: [.font: qFont])
             let qH = max(20, ReaderSelectableTextView.measureHeight(attributed: qAttr, width: innerW))
-            total += qH + 10
+            total += 10 + qH + 10 // innerStack spacing before qLbl + qH + spacing before optsStack
             for opt in q.options {
-                let hasDesc = (opt.description?.isEmpty == false)
-                total += hasDesc ? 56 : 38
+                let optTitleAttr = NSAttributedString(string: opt.label, attributes: [.font: qFont])
+                var optH: CGFloat = 20 + max(18, ReaderSelectableTextView.measureHeight(attributed: optTitleAttr, width: optColW))
+                if let desc = opt.description, !desc.isEmpty {
+                    let descAttr = NSAttributedString(string: desc, attributes: [.font: descFont])
+                    optH += 4 + max(16, ReaderSelectableTextView.measureHeight(attributed: descAttr, width: optColW))
+                }
+                total += optH
             }
-            total += 6
         }
         if let answers {
+            total += 10 // innerStack spacing before answers block
             if !answers.isEmpty {
-                let rowsH: CGFloat = CGFloat(answers.count) * 44
-                let gapsH: CGFloat = CGFloat(max(0, answers.count - 1)) * 8
-                total += rowsH + gapsH + 6
+                for (idx, ans) in answers.enumerated() {
+                    let ansValText = ans.answers.isEmpty ? "未回答" : ans.answers.joined(separator: ", ")
+                    let ansAttr = NSAttributedString(string: ansValText, attributes: [.font: ansFont])
+                    let ansTextH = max(20, ReaderSelectableTextView.measureHeight(attributed: ansAttr, width: rightColW))
+                    total += 20 + ansTextH + (idx > 0 ? 8 : 0)
+                }
             } else {
-                total += 26
+                total += 20
             }
         }
         return max(84, total)

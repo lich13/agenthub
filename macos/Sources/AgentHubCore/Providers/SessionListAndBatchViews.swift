@@ -1136,23 +1136,25 @@ struct RenameableSessionRowView: View {
                             if isCodexCompactRow {
                                 if !subtitle.isEmpty {
                                     Text(subtitle)
-                                        .font(DesignFonts.body(11))
+                                        .font(DesignFonts.body(11.5))
+                                        .kerning(-0.001)
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
+                                        .truncationMode(.middle)
                                 }
                                 HStack(spacing: 6) {
                                     if running {
                                         RunningIndicator(size: 13)
                                     } else {
                                         Text(statusText)
-                                            .font(DesignFonts.body(11))
+                                            .font(DesignFonts.body(11.5))
                                             .foregroundStyle(palette.textMuted.color)
                                             .lineLimit(1)
                                             .fixedSize(horizontal: true, vertical: false)
                                     }
                                     if !inlinePreview.isEmpty {
                                         Text(inlinePreview)
-                                            .font(DesignFonts.body(12))
+                                            .font(DesignFonts.body(11.5))
                                             .foregroundStyle(palette.textMuted.color)
                                             .lineLimit(1)
                                     }
@@ -1168,18 +1170,21 @@ struct RenameableSessionRowView: View {
                                 }
                                 if !subtitle.isEmpty {
                                     Text(subtitle)
-                                        .font(DesignFonts.body(12))
+                                        .font(DesignFonts.body(11.5))
+                                        .kerning(-0.001)
                                         .foregroundStyle(palette.textMuted.color)
                                         .lineLimit(1)
+                                        .truncationMode(.middle)
                                 }
                                 HStack(spacing: 6) {
                                     if running {
                                         RunningIndicator(size: 13)
                                     } else {
                                         Text(statusText)
-                                            .font(DesignFonts.body(12))
+                                            .font(DesignFonts.body(11.5))
                                             .foregroundStyle(palette.textMuted.color)
                                             .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
                                     }
                                     Spacer(minLength: 4)
                                     SessionStorageBadgeView(size: storageSize)
@@ -1360,8 +1365,10 @@ struct ProjectWorkspaceGroupHeaderView: View {
 
                 Text(displayName)
                     .font(DesignFonts.body(12, weight: .semibold))
+                    .kerning(-0.001)
                     .foregroundStyle(palette.textSecondary.color)
                     .lineLimit(1)
+                    .truncationMode(.middle)
 
                 Spacer(minLength: 4)
 
@@ -1639,15 +1646,16 @@ struct WorkspaceSidebarFilterMenuButton: View {
             accessibilityLabel: "筛选工作区",
             makeActions: makeActions
         ) {
-            LucideIcon(.slidersHorizontal, size: 15)
+            LucideIcon(.slidersHorizontal, size: 14)
                 .foregroundStyle((isFiltered ? palette.accent : palette.textMuted).color)
-                .frame(width: 28, height: 28)
+                .frame(width: 25, height: 25)
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(isFiltered ? palette.accentSoft.color : Color.clear)
                 )
                 .contentShape(Rectangle())
         }
+        .frame(width: 25, height: 25)
         .help("按工作区筛选")
     }
 }

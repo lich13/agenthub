@@ -98,6 +98,11 @@ final class HoverSummaryRowView: NSView {
         tracking = area
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        layer?.backgroundColor = (open ? openFill : NSColor.clear).cgColor
+    }
+
     override func mouseEntered(with event: NSEvent) {
         guard isEnabled else { return }
         layer?.backgroundColor = hoverFill.cgColor
@@ -109,6 +114,7 @@ final class HoverSummaryRowView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        layer?.backgroundColor = (open ? openFill : NSColor.clear).cgColor
         onTap?()
     }
 
@@ -272,16 +278,24 @@ final class IconFeedbackActionButton: NSButton {
 @MainActor
 final class ActionRowContainerView: NSView {
     var isEnabled: Bool = true {
-        didSet { window?.invalidateCursorRects(for: self) }
+        didSet {
+            if !isEnabled {
+                layer?.backgroundColor = NSColor.clear.cgColor
+            }
+            window?.invalidateCursorRects(for: self)
+        }
     }
+    var hoverFill: NSColor?
     var focusRingColor: NSColor = .keyboardFocusIndicatorColor
     var accessibilityExpandedState: Bool?
     var onTap: (() -> Void)?
+    private var tracking: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerRadius = 6
+        layer?.backgroundColor = NSColor.clear.cgColor
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
     }
@@ -311,6 +325,33 @@ final class ActionRowContainerView: NSView {
         }
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        guard isEnabled, let hoverFill else { return }
+        layer?.backgroundColor = hoverFill.cgColor
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        layer?.backgroundColor = NSColor.clear.cgColor
+    }
+
     override func becomeFirstResponder() -> Bool {
         let ok = super.becomeFirstResponder()
         if ok {
@@ -331,6 +372,7 @@ final class ActionRowContainerView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         guard isEnabled else { return }
+        layer?.backgroundColor = NSColor.clear.cgColor
         onTap?()
     }
 
