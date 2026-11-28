@@ -545,6 +545,28 @@ pub(crate) fn parse_loopback_listener_port(line: &str) -> Option<u16> {
     is_v4_loopback.then(|| port.parse::<u16>().ok()).flatten()
 }
 
+#[cfg(test)]
+thread_local! {
+    static TEST_RPC_READ_TIMEOUT_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_rpc_read_timeout_ms<R>(timeout_ms: u64, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<u64>);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_RPC_READ_TIMEOUT_MS.with(|slot| slot.set(self.0));
+        }
+    }
+    let prev = TEST_RPC_READ_TIMEOUT_MS.with(|slot| {
+        let old = slot.get();
+        slot.set(Some(timeout_ms));
+        old
+    });
+    let _reset = Reset(prev);
+    f()
+}
+
 pub(crate) fn connect_rpc_post(
     port: u16,
     token: &str,
@@ -565,9 +587,15 @@ pub(crate) fn connect_rpc_post(
     );
     let payload = serde_json::to_vec(body)?;
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    #[cfg(test)]
+    let read_timeout = TEST_RPC_READ_TIMEOUT_MS
+        .with(|slot| slot.get())
+        .map_or(Duration::from_secs(5), Duration::from_millis);
+    #[cfg(not(test))]
+    let read_timeout = Duration::from_secs(5);
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(1500))
         .context("无法连接本机 Antigravity 服务")?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(read_timeout))?;
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
     let request = format!(
         "POST {SERVICE_PREFIX}{method} HTTP/1.1\r\n\
@@ -816,6 +844,16 @@ pub(crate) fn fetch_live_trajectory_steps(rpc: &LiveRpc, id: &str) -> Result<(Va
     Ok((resp, steps))
 }
 
+pub(crate) fn port_closed(error: &anyhow::Error) -> bool {
+    use std::io::ErrorKind;
+    error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+        matches!(
+            io.kind(),
+            ErrorKind::ConnectionRefused | ErrorKind::NotConnected
+        )
+    })
+}
+
 pub(crate) fn service_unreachable(error: &anyhow::Error) -> bool {
     use std::io::ErrorKind;
     error.downcast_ref::<std::io::Error>().is_some_and(|io| {
@@ -853,12 +891,25 @@ pub(crate) struct LiveEndpointSet {
     pub(crate) instances: Vec<(LiveRpc, Value)>,
     pub(crate) merged_payload: Option<Value>,
     owners: BTreeMap<String, Vec<usize>>,
+    pub(crate) probe_incomplete_reason: Option<String>,
 }
 
 impl LiveEndpointSet {
     pub(crate) fn from_instances(instances: Vec<(LiveRpc, Value)>) -> Self {
+        Self::from_probe(instances, None)
+    }
+
+    pub(crate) fn from_probe(
+        instances: Vec<(LiveRpc, Value)>,
+        probe_incomplete_reason: Option<String>,
+    ) -> Self {
         if instances.is_empty() {
-            return Self::default();
+            return Self {
+                instances,
+                merged_payload: None,
+                owners: BTreeMap::new(),
+                probe_incomplete_reason,
+            };
         }
         let mut owners: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         if instances.len() == 1 {
@@ -872,6 +923,7 @@ impl LiveEndpointSet {
                 instances,
                 merged_payload,
                 owners,
+                probe_incomplete_reason,
             };
         }
         let mut merged_map = serde_json::Map::new();
@@ -893,7 +945,12 @@ impl LiveEndpointSet {
             instances,
             merged_payload: Some(json!({ "trajectorySummaries": merged_map })),
             owners,
+            probe_incomplete_reason,
         }
+    }
+
+    pub(crate) fn is_complete(&self) -> bool {
+        self.probe_incomplete_reason.is_none()
     }
 
     pub(crate) fn owner_for_read(&self, id: &str) -> Option<&(LiveRpc, Value)> {
@@ -913,7 +970,7 @@ impl LiveEndpointSet {
             }
             return best;
         }
-        if self.instances.len() == 1 {
+        if self.instances.len() == 1 && self.is_complete() {
             self.instances.first()
         } else {
             None
@@ -942,6 +999,9 @@ impl LiveEndpointSet {
         &self,
         target_ids: impl IntoIterator<Item = &'a str>,
     ) -> Result<Option<(LiveRpc, Value)>> {
+        if let Some(reason) = &self.probe_incomplete_reason {
+            bail!("{reason}");
+        }
         let mut unique = BTreeSet::new();
         for id in target_ids {
             if let Some(indices) = self.owners.get(id) {
@@ -961,7 +1021,7 @@ impl LiveEndpointSet {
 }
 
 pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndpointSet> {
-    let try_endpoint = |port: u16, token: &str| match connect_rpc_post(
+    let probe_endpoint = |port: u16, token: &str| match connect_rpc_post(
         port,
         token,
         "GetAllCascadeTrajectories",
@@ -978,7 +1038,7 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
             }
         }
         Err(error) => {
-            if service_unreachable(&error) {
+            if port_closed(&error) {
                 Ok(None)
             } else {
                 Err(error)
@@ -988,33 +1048,64 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
     match &paths.rpc_mode {
         RpcMode::OfflineOnly => Ok(LiveEndpointSet::default()),
         #[cfg(test)]
-        RpcMode::Fixed { port, token } => {
-            if let Some(value) = try_endpoint(*port, token)? {
-                return Ok(LiveEndpointSet::from_instances(vec![(
-                    LiveRpc {
-                        port: *port,
-                        token: token.clone(),
-                    },
-                    value,
-                )]));
+        RpcMode::Fixed { port, token } => match probe_endpoint(*port, token) {
+            Ok(Some(value)) => Ok(LiveEndpointSet::from_instances(vec![(
+                LiveRpc {
+                    port: *port,
+                    token: token.clone(),
+                },
+                value,
+            )])),
+            Ok(None) => Ok(LiveEndpointSet::default()),
+            Err(error) => {
+                if service_unreachable(&error) {
+                    let is_timeout = error.downcast_ref::<std::io::Error>().is_some_and(|io| {
+                        matches!(
+                            io.kind(),
+                            std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                        )
+                    });
+                    if is_timeout {
+                        Ok(LiveEndpointSet::from_probe(
+                            Vec::new(),
+                            Some(format!(
+                                "Antigravity 实例响应超时（端口 {port}），无法确认会话归属，请稍后重试"
+                            )),
+                        ))
+                    } else {
+                        Ok(LiveEndpointSet::default())
+                    }
+                } else {
+                    Err(error)
+                }
             }
-            Ok(LiveEndpointSet::default())
-        }
+        },
         #[cfg(test)]
         RpcMode::FixedMany(list) => {
             let mut instances = Vec::new();
+            let mut incomplete_reason: Option<String> = None;
             for (port, token) in list {
-                if let Some(value) = try_endpoint(*port, token)? {
-                    instances.push((
-                        LiveRpc {
-                            port: *port,
-                            token: token.clone(),
-                        },
-                        value,
-                    ));
+                match probe_endpoint(*port, token) {
+                    Ok(Some(value)) => {
+                        instances.push((
+                            LiveRpc {
+                                port: *port,
+                                token: token.clone(),
+                            },
+                            value,
+                        ));
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        incomplete_reason.get_or_insert_with(|| {
+                            format!(
+                                "部分 Antigravity 实例未响应或返回异常（端口 {port}），无法确认会话归属：{err}"
+                            )
+                        });
+                    }
                 }
             }
-            Ok(LiveEndpointSet::from_instances(instances))
+            Ok(LiveEndpointSet::from_probe(instances, incomplete_reason))
         }
         RpcMode::AutoDiscover => {
             match get_cached_live_endpoints() {
@@ -1028,7 +1119,7 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
                         }
                         let mut connected = false;
                         for &port in &ep.ports {
-                            if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
+                            if let Ok(Some(value)) = probe_endpoint(port, &ep.token) {
                                 instances.push((
                                     LiveRpc {
                                         port,
@@ -1055,34 +1146,56 @@ pub(crate) fn connect_all_endpoints(paths: &AntigravityPaths) -> Result<LiveEndp
             let candidates = discover_host_endpoints();
             let mut instances = Vec::new();
             let mut verified = Vec::new();
+            let mut incomplete_reason: Option<String> = None;
             for ep in &candidates {
                 if ep.pid > 0 && !crate::platform::pid_is_alive(ep.pid) {
                     continue;
                 }
+                let mut ep_connected = false;
+                let mut last_err: Option<anyhow::Error> = None;
                 for &port in &ep.ports {
-                    if let Some(value) = try_endpoint(port, &ep.token).ok().flatten() {
-                        verified.push(DiscoveredAntigravityEndpoint {
-                            pid: ep.pid,
-                            ports: vec![port],
-                            token: ep.token.clone(),
-                        });
-                        instances.push((
-                            LiveRpc {
-                                port,
+                    match probe_endpoint(port, &ep.token) {
+                        Ok(Some(value)) => {
+                            verified.push(DiscoveredAntigravityEndpoint {
+                                pid: ep.pid,
+                                ports: vec![port],
                                 token: ep.token.clone(),
-                            },
-                            value,
-                        ));
-                        break;
+                            });
+                            instances.push((
+                                LiveRpc {
+                                    port,
+                                    token: ep.token.clone(),
+                                },
+                                value,
+                            ));
+                            ep_connected = true;
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            last_err = Some(err);
+                        }
                     }
                 }
+                if !ep_connected && (ep.pid == 0 || crate::platform::pid_is_alive(ep.pid)) {
+                    incomplete_reason.get_or_insert_with(|| match last_err {
+                        Some(err) => format!(
+                            "部分运行中的 Antigravity 实例未响应或返回异常（PID {}），无法确认会话归属：{err}",
+                            ep.pid
+                        ),
+                        None => format!(
+                            "部分运行中的 Antigravity 实例尚未就绪（PID {}），无法确认会话归属，请稍后重试",
+                            ep.pid
+                        ),
+                    });
+                }
             }
-            if !instances.is_empty() {
+            if !instances.is_empty() && incomplete_reason.is_none() {
                 record_verified_live_endpoints(verified);
-                return Ok(LiveEndpointSet::from_instances(instances));
+            } else {
+                record_endpoint_failure(!candidates.is_empty() || incomplete_reason.is_some());
             }
-            record_endpoint_failure(!candidates.is_empty());
-            Ok(LiveEndpointSet::default())
+            Ok(LiveEndpointSet::from_probe(instances, incomplete_reason))
         }
     }
 }

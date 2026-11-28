@@ -141,10 +141,11 @@ pub(crate) async fn run_with_threads_and_fresh_loader(
     db: &PanelDb,
     preloaded_sorted: Option<&[(codex::ThreadSummary, CodexTaskIdentity)]>,
 ) -> Result<()> {
-    let config = &db.sync_notification_channels_from_config(tick_config)?;
+    let synced_config = db.sync_notification_channels_from_config(fresh_config)?;
+    let config = &tick_config()?;
     let Some(since) = db
         .current_notification_baseline("probe_feedback_baseline")?
-        .filter(|_| enabled(config))
+        .filter(|_| enabled(config) && enabled(&synced_config))
     else {
         return Ok(());
     };

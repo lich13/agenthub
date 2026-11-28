@@ -168,22 +168,6 @@ pub fn plan_probe_action(action: ProbeAction) -> Result<ProbeActionPlan> {
     })
 }
 
-fn resolve_provider_sandbox_root(config: &Config) -> Option<std::path::PathBuf> {
-    let raw = config.codex.home.as_os_str().to_string_lossy();
-    if raw.trim().is_empty() || raw == "auto" {
-        return None;
-    }
-    let default_codex = dirs::home_dir().map(|home| home.join(".codex"));
-    if default_codex.as_deref() == Some(config.codex.home.as_path()) {
-        return None;
-    }
-    if config.codex.home.file_name().and_then(|s| s.to_str()) == Some(".codex") {
-        config.codex.home.parent().map(Path::to_path_buf)
-    } else {
-        Some(config.codex.home.clone())
-    }
-}
-
 fn native_stream_live_bucket(
     stream: &crate::native_probe::NativeStreamSnapshot,
     now_ms: i64,
@@ -220,7 +204,6 @@ const LIVE_PROVIDER_CACHE_TTL: std::time::Duration = std::time::Duration::from_s
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct LiveProviderSessionsCacheKey {
-    sandbox_root: Option<std::path::PathBuf>,
     codex_home: std::path::PathBuf,
     claude_projects: std::path::PathBuf,
     grok_home: std::path::PathBuf,
@@ -232,7 +215,6 @@ struct LiveProviderSessionsCacheKey {
 }
 
 struct ResolvedLiveProviderPaths {
-    sandbox_root: Option<std::path::PathBuf>,
     claude: crate::claude::ClaudePaths,
     grok: crate::grok::GrokPaths,
     ag: crate::antigravity::sessions::AntigravityPaths,
@@ -241,45 +223,18 @@ struct ResolvedLiveProviderPaths {
 }
 
 impl ResolvedLiveProviderPaths {
-    fn for_config(config: &Config) -> Result<Self> {
-        let sandbox_root = resolve_provider_sandbox_root(config);
-        let claude = match &sandbox_root {
-            Some(root) => crate::claude::ClaudePaths {
-                projects: root.join(".claude/projects"),
-                config: root.join(".claude"),
-            },
-            None => crate::claude::ClaudePaths::default_for_user()?,
-        };
-        let grok = match &sandbox_root {
-            Some(root) => crate::grok::GrokPaths {
-                home: root.join(".grok"),
-            },
-            None => crate::grok::GrokPaths::default_for_user()?,
-        };
-        let ag = match &sandbox_root {
-            Some(root) => crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
-            None => crate::antigravity::sessions::AntigravityPaths::default_for_user()?,
-        };
-        let dsh = match &sandbox_root {
-            Some(root) => crate::dsh::DshPaths {
-                home: root.join(".dsh"),
-            },
-            None => crate::dsh::DshPaths::default_for_user()?,
-        };
+    fn default_for_user() -> Result<Self> {
+        let claude = crate::claude::ClaudePaths::default_for_user()?;
+        let grok = crate::grok::GrokPaths::default_for_user()?;
+        let ag = crate::antigravity::sessions::AntigravityPaths::default_for_user()?;
+        let dsh = crate::dsh::DshPaths::default_for_user()?;
         let grokbot =
             if crate::platform::PlatformKind::current() == crate::platform::PlatformKind::Macos {
-                match &sandbox_root {
-                    Some(root) => Some(crate::grokbot::GrokBotPaths {
-                        persistence: root
-                            .join("Library/Application Support/Grok Bot/sand-client-persistence"),
-                    }),
-                    None => crate::grokbot::GrokBotPaths::default_for_user().ok(),
-                }
+                crate::grokbot::GrokBotPaths::default_for_user().ok()
             } else {
                 None
             };
         Ok(Self {
-            sandbox_root,
             claude,
             grok,
             ag,
@@ -288,13 +243,35 @@ impl ResolvedLiveProviderPaths {
         })
     }
 
+    #[cfg(test)]
+    fn from_sandbox_root(root: &Path) -> Self {
+        Self {
+            claude: crate::claude::ClaudePaths {
+                projects: root.join(".claude/projects"),
+                config: root.join(".claude"),
+            },
+            grok: crate::grok::GrokPaths {
+                home: root.join(".grok"),
+            },
+            ag: crate::antigravity::sessions::AntigravityPaths::offline_user_home(root),
+            dsh: crate::dsh::DshPaths {
+                home: root.join(".dsh"),
+            },
+            grokbot: (crate::platform::PlatformKind::current()
+                == crate::platform::PlatformKind::Macos)
+                .then(|| crate::grokbot::GrokBotPaths {
+                    persistence: root
+                        .join("Library/Application Support/Grok Bot/sand-client-persistence"),
+                }),
+        }
+    }
+
     fn cache_key(
         &self,
         codex_home: &Path,
         per_bucket_limit: usize,
     ) -> LiveProviderSessionsCacheKey {
         LiveProviderSessionsCacheKey {
-            sandbox_root: self.sandbox_root.clone(),
             codex_home: codex_home.to_path_buf(),
             claude_projects: self.claude.projects.clone(),
             grok_home: self.grok.home.clone(),
@@ -362,26 +339,6 @@ fn stream_live_buckets(
         .iter()
         .filter_map(|s| native_stream_live_bucket(s, now_ms).map(|b| (s.id.clone(), b)))
         .collect()
-}
-
-fn aggregate_active_sessions(
-    config: &Config,
-    limit: usize,
-    running_threads: &[ThreadSummary],
-    reply_needed_threads: &[ThreadSummary],
-    recoverable_threads: &[ThreadSummary],
-    force_refresh: bool,
-) -> Result<Vec<probe_core::ProbeLiveSession>> {
-    let resolved = ResolvedLiveProviderPaths::for_config(config)?;
-    aggregate_active_sessions_with_paths(
-        config,
-        &resolved,
-        limit,
-        running_threads,
-        reply_needed_threads,
-        recoverable_threads,
-        force_refresh,
-    )
 }
 
 fn aggregate_active_sessions_with_paths(
@@ -682,11 +639,22 @@ pub fn aggregate_probe_status_with_db(
     db: &crate::db::PanelDb,
     force_refresh: bool,
 ) -> Result<ProbeStatusAggregation> {
+    let resolved = ResolvedLiveProviderPaths::default_for_user()?;
+    aggregate_probe_status_with_db_and_paths(config, db, &resolved, force_refresh)
+}
+
+fn aggregate_probe_status_with_db_and_paths(
+    config: &Config,
+    db: &crate::db::PanelDb,
+    resolved: &ResolvedLiveProviderPaths,
+    force_refresh: bool,
+) -> Result<ProbeStatusAggregation> {
     let limit = config.probe.recent_limit.clamp(1, 200);
     let (running_threads, reply_needed_threads, recoverable_threads) =
         probe_codex_buckets(config, limit);
-    let active_sessions = aggregate_active_sessions(
+    let active_sessions = aggregate_active_sessions_with_paths(
         config,
+        resolved,
         limit,
         &running_threads,
         &reply_needed_threads,
@@ -1478,7 +1446,9 @@ mod tests {
             crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let agg = super::aggregate_probe_status_with_db(&config, &db, false).unwrap();
+        let resolved = super::ResolvedLiveProviderPaths::from_sandbox_root(&root);
+        let agg = super::aggregate_probe_status_with_db_and_paths(&config, &db, &resolved, false)
+            .unwrap();
         assert!(
             agg.active_sessions.iter().any(|s| s.provider == "grok"
                 && s.id == grok_session_id
@@ -1486,6 +1456,42 @@ mod tests {
             "expected grok reply_needed in active_sessions, got {:?}",
             agg.active_sessions
         );
+
+        // Production path resolution must reuse each Provider's own default_for_user()
+        // rather than deriving .claude / .grok / .dsh / Grok Bot from custom codex.home.
+        let mut custom_codex_cfg = Config::current_defaults().unwrap();
+        custom_codex_cfg.codex.home = root.join("isolated-custom-codex-storage");
+        let prod_resolved = super::ResolvedLiveProviderPaths::default_for_user().unwrap();
+        assert_eq!(
+            prod_resolved.dsh.home,
+            crate::dsh::DshPaths::default_for_user().unwrap().home
+        );
+        assert_eq!(
+            prod_resolved.grok.home,
+            crate::grok::GrokPaths::default_for_user().unwrap().home
+        );
+        assert_eq!(
+            prod_resolved.claude.projects,
+            crate::claude::ClaudePaths::default_for_user()
+                .unwrap()
+                .projects
+        );
+        assert!(
+            !prod_resolved
+                .dsh
+                .home
+                .starts_with(&custom_codex_cfg.codex.home),
+            "custom codex.home must never redirect DSH path resolution"
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                prod_resolved.grokbot.as_ref().map(|p| &p.persistence),
+                crate::grokbot::GrokBotPaths::default_for_user()
+                    .ok()
+                    .as_ref()
+                    .map(|p| &p.persistence)
+            );
+        }
 
         let remove_plan = plan_probe_action(ProbeAction::RemoveHooks).unwrap();
         assert_eq!(remove_plan.action, ProbeAction::RemoveHooks);
@@ -1498,7 +1504,7 @@ mod tests {
     }
 
     #[test]
-    fn live_provider_sessions_cache_is_keyed_by_sandbox_root_and_codex_home_and_evicts_on_idle() {
+    fn live_provider_sessions_cache_is_keyed_by_provider_roots_and_codex_home_and_evicts_on_idle() {
         let root_a = std::env::temp_dir().join(format!(
             "agenthub-probe-cache-a-{}-{}",
             std::process::id(),
@@ -1582,44 +1588,76 @@ mod tests {
         let mut cfg_a = Config::current_defaults().unwrap();
         cfg_a.codex.home = root_a.join(".codex");
         cfg_a.paths.db_path = root_a.join("panel.sqlite");
+        let resolved_a = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_a);
 
         let mut cfg_b = Config::current_defaults().unwrap();
         cfg_b.codex.home = root_b.join(".codex");
         cfg_b.paths.db_path = root_b.join("panel.sqlite");
+        let resolved_b = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_b);
 
-        let sessions_a =
-            super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
+        let sessions_a = super::aggregate_active_sessions_with_paths(
+            &cfg_a,
+            &resolved_a,
+            20,
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(sessions_a.iter().any(|s| s.id == grok_id_a));
 
         // Delete session on disk BEFORE querying cfg_b: querying cfg_b must NOT hit cfg_a's cached
         // sessions AND must NOT clobber cfg_a's cached entry in the multi-entry bounded cache.
         std::fs::remove_dir_all(&grok_dir_a).unwrap();
-        let sessions_b =
-            super::aggregate_active_sessions(&cfg_b, 20, &[], &[], &[], false).unwrap();
+        let sessions_b = super::aggregate_active_sessions_with_paths(
+            &cfg_b,
+            &resolved_b,
+            20,
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(!sessions_b.iter().any(|s| s.id == grok_id_a));
 
-        let cached_a = super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], false).unwrap();
+        let cached_a = super::aggregate_active_sessions_with_paths(
+            &cfg_a,
+            &resolved_a,
+            20,
+            &[],
+            &[],
+            &[],
+            false,
+        )
+        .unwrap();
         assert!(
             cached_a.iter().any(|s| s.id == grok_id_a),
             "querying distinct cfg_b must not clobber cfg_a's cached live sessions"
         );
-        let refreshed_a =
-            super::aggregate_active_sessions(&cfg_a, 20, &[], &[], &[], true).unwrap();
+        let refreshed_a = super::aggregate_active_sessions_with_paths(
+            &cfg_a,
+            &resolved_a,
+            20,
+            &[],
+            &[],
+            &[],
+            true,
+        )
+        .unwrap();
         assert!(!refreshed_a.iter().any(|s| s.id == grok_id_a));
 
-        // Even when sandbox_root == None (e.g., codex.home = "auto"), distinct resolved provider
-        // roots (CLAUDE_CONFIG_DIR / GROK_HOME / ANTIGRAVITY_HOME / DSH_HOME) produce distinct keys.
+        // Distinct resolved provider roots produce distinct cache keys even when codex.home = "auto".
         let mut auto_cfg = Config::current_defaults().unwrap();
         auto_cfg.codex.home = std::path::PathBuf::from("auto");
-        let mut resolved_one = super::ResolvedLiveProviderPaths::for_config(&auto_cfg).unwrap();
-        resolved_one.sandbox_root = None;
+        let mut resolved_one = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_a);
         resolved_one.grok.home = root_a.join("custom-grok-1");
         resolved_one.claude.projects = root_a.join("custom-claude/projects");
         resolved_one.ag =
             crate::antigravity::sessions::AntigravityPaths::offline(root_a.join("custom-ag"));
         resolved_one.dsh.home = root_a.join("custom-dsh");
-        let mut resolved_two = super::ResolvedLiveProviderPaths::for_config(&auto_cfg).unwrap();
-        resolved_two.sandbox_root = None;
+        let mut resolved_two = super::ResolvedLiveProviderPaths::from_sandbox_root(&root_b);
         resolved_two.grok.home = root_b.join("custom-grok-2");
         resolved_two.claude.projects = root_b.join("custom-claude/projects");
         resolved_two.ag =
@@ -1652,7 +1690,16 @@ mod tests {
 
         // Inserting more than MAX_LIVE_PROVIDER_CACHE_ENTRIES distinct limits stays bounded.
         for lim in 1..=(super::MAX_LIVE_PROVIDER_CACHE_ENTRIES + 4) {
-            let _ = super::aggregate_active_sessions(&cfg_b, lim, &[], &[], &[], true).unwrap();
+            let _ = super::aggregate_active_sessions_with_paths(
+                &cfg_b,
+                &resolved_b,
+                lim,
+                &[],
+                &[],
+                &[],
+                true,
+            )
+            .unwrap();
         }
         assert!(
             super::LIVE_PROVIDER_SESSIONS_CACHE.lock().unwrap().len()

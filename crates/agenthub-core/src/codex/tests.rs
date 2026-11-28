@@ -4050,3 +4050,107 @@ fn writer_lock_and_codex_worker_classification_handle_truncated_comm_and_managed
     drop(lock_file);
     let _ = fs::remove_dir_all(custom_home);
 }
+
+#[test]
+fn full_detail_legacy_messages_and_tail_forward_cursor_stay_snapshot_consistent_without_panic() {
+    let home = std::env::temp_dir().join(format!(
+        "agenthub-codex-snapshot-consistency-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let id = "44444444-4444-4444-8444-444444444444";
+    let sessions_dir = home.join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let rollout = sessions_dir.join(format!("rollout-2026-11-28T00-00-00-{id}.jsonl"));
+    let initial_lines = [
+        format!(
+            r#"{{"timestamp":"2026-11-28T00:00:00Z","type":"session_meta","payload":{{"id":"{id}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#
+        ),
+        r#"{"timestamp":"2026-11-28T00:00:01Z","type":"response_item","payload":{"type":"message","role":"user","id":"u-1","content":[{"type":"input_text","text":"First prompt"}]}}"#.to_owned(),
+        r#"{"timestamp":"2026-11-28T00:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","id":"a-1","content":[{"type":"output_text","text":"First answer"}]}}"#.to_owned(),
+    ];
+    fs::write(&rollout, initial_lines.join("\n") + "\n").unwrap();
+
+    let summary = super::ThreadSummary {
+        activity_updated_at: None,
+        storage_size: None,
+        id: id.to_owned(),
+        title: "Snapshot Consistency".to_owned(),
+        status: ThreadStatus::Recent,
+        updated_at: Some("2026-11-28T00:00:02Z".to_owned()),
+        archived_at: None,
+        message_count: 2,
+        latest_message: Some("First answer".to_owned()),
+        cwd: Some("/workspace/example.invalid".to_owned()),
+        workspace_root: None,
+        model: None,
+        rollout_path: Some(rollout.clone()),
+        active_turn_id: None,
+        active_job_id: None,
+        pending_elicitation: None,
+        last_event_kind: None,
+    };
+
+    // (a) Concurrent append right before `messages` is loaded on `limit: None` must obey snapshot end offset.
+    super::rollout_events::set_test_before_legacy_messages_hook(|path| {
+        use std::io::Write;
+        let mut f = fs::OpenOptions::new().append(true).open(path).unwrap();
+        writeln!(
+            f,
+            r#"{{"timestamp":"2026-11-28T00:00:03Z","type":"response_item","payload":{{"type":"message","role":"user","id":"u-2","content":[{{"type":"input_text","text":"Appended mid-read"}}]}}}}"#
+        )
+        .unwrap();
+    });
+    let detail_during_append =
+        super::thread_detail_page_from_summary(summary.clone(), false, None, None, None).unwrap();
+    assert_eq!(detail_during_append.blocks.len(), 2);
+    assert_eq!(
+        detail_during_append.messages.len(),
+        2,
+        "legacy messages must stop at DetailState snapshot offset without including concurrent append"
+    );
+
+    // Subsequent read sees all 3 messages and 3 blocks together.
+    let detail_after_append =
+        super::thread_detail_page_from_summary(summary.clone(), false, None, None, None).unwrap();
+    assert_eq!(detail_after_append.blocks.len(), 3);
+    assert_eq!(detail_after_append.messages.len(), 3);
+
+    // (b) Forward cursor `n:<last_block_id>` must return empty tail page without panicking.
+    let last_block_id = detail_after_append.blocks.last().unwrap().id.clone();
+    let tail_page = super::thread_detail_page_from_summary(
+        summary.clone(),
+        false,
+        Some(50),
+        Some(&format!("n:{last_block_id}")),
+        None,
+    )
+    .unwrap();
+    assert!(tail_page.blocks.is_empty());
+    assert!(!tail_page.has_more_blocks);
+    assert_eq!(tail_page.before_cursor, None);
+    assert_eq!(tail_page.after_cursor, None);
+
+    // (c) Concurrent atomic replacement right before `messages` load retries from the new inode cleanly.
+    let id_copy = id.to_owned();
+    super::rollout_events::set_test_before_legacy_messages_hook(move |path| {
+        let tmp = path.with_extension("replaced.tmp");
+        let replaced_lines = [
+            format!(
+                r#"{{"timestamp":"2026-11-28T00:01:00Z","type":"session_meta","payload":{{"id":"{id_copy}","cwd":"/workspace/example.invalid","source":"cli"}}}}"#
+            ),
+            r#"{"timestamp":"2026-11-28T00:01:01Z","type":"response_item","payload":{"type":"message","role":"user","id":"u-replaced","content":[{"type":"input_text","text":"Replaced file prompt"}]}}"#.to_owned(),
+        ];
+        fs::write(&tmp, replaced_lines.join("\n") + "\n").unwrap();
+        fs::rename(&tmp, path).unwrap();
+    });
+    let detail_after_replace =
+        super::thread_detail_page_from_summary(summary, false, None, None, None).unwrap();
+    assert_eq!(detail_after_replace.blocks.len(), 1);
+    assert_eq!(detail_after_replace.messages.len(), 1);
+    assert_eq!(
+        detail_after_replace.messages[0].text,
+        "Replaced file prompt"
+    );
+
+    let _ = fs::remove_dir_all(home);
+}

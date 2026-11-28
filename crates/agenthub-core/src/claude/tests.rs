@@ -3791,3 +3791,74 @@ fn verified_live_streaming_partial_tail_keeps_running_status_while_guarding_rena
 
     super::activity::test_owner(None, Path::new("/workspace/claude-fixture"));
 }
+
+#[test]
+fn non_retained_snapshots_stay_exempt_in_summary_but_enforce_200k_cap_in_detail_reader() {
+    use std::io::{BufWriter, Write};
+    let f = Fixture::new();
+    {
+        let mut w = BufWriter::with_capacity(256 * 1024, fs::File::create(&f.file).unwrap());
+        writeln!(
+            w,
+            "{}",
+            json!({
+                "type": "user",
+                "sessionId": "native-fixture",
+                "cwd": "/workspace/claude-fixture",
+                "version": "2.1.76",
+                "uuid": "u-cap-1",
+                "promptId": "p-cap-1",
+                "timestamp": "2026-11-28T01:00:00Z",
+                "message": { "role": "user", "content": "大量快照测试" }
+            })
+        )
+        .unwrap();
+        for _ in 0..200_000 {
+            w.write_all(b"{\"type\":\"queue-operation\",\"operation\":\"dequeue\"}\n")
+                .unwrap();
+        }
+        w.flush().unwrap();
+    }
+
+    // Summary cache (`list_claude_sessions`) and probe notification scan skip non-retained
+    // snapshot kinds that allocate zero summary events, so listing succeeds without read_error.
+    let listed = list_claude_sessions(&f.paths, 10, None).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "native-fixture");
+    assert_eq!(listed[0].read_error, None);
+    let probe = notification_snapshots(&f.paths).unwrap();
+    assert_eq!(probe.errors, 0);
+
+    // Detail reader (`reader::read` / `claude_session_detail`) pushes `queue-operation` into
+    // `parsed.events`, so exceeding 200,000 retained detail events fails `reader::read` and
+    // surfaces a bounded empty detail with `read_error` instead of holding >200k events.
+    let raw_detail_err = match super::reader::read(&f.file) {
+        Ok(parsed) => panic!(
+            "expected detail reader to enforce 200k cap, got {} events",
+            parsed.events.len()
+        ),
+        Err(err) => err,
+    };
+    assert!(
+        raw_detail_err
+            .to_string()
+            .contains("Claude 会话记录超出读取上限"),
+        "unexpected raw detail error: {raw_detail_err:#}"
+    );
+    let detail = claude_session_detail(
+        &f.paths,
+        &ClaudeDetailRequest {
+            agent_id: None,
+            session_key: listed[0].session_key.clone(),
+            limit: Some(50),
+            before: None,
+        },
+    )
+    .unwrap();
+    assert!(detail.events.is_empty());
+    assert_eq!(detail.total_events, 0);
+    assert_eq!(
+        detail.summary.read_error.as_deref(),
+        Some("会话无法读取或超出读取上限")
+    );
+}

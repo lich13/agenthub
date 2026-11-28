@@ -935,6 +935,13 @@ fn record(journal: &mut HistoryJournal, epoch: &str, offset: u64, ids: Vec<Strin
     let info = ReadInfo {
         epoch,
         offset,
+        stamp: crate::file_stamp::FileStamp {
+            len: offset,
+            modified: None,
+            #[cfg(unix)]
+            identity: (0, 0, 0, 0),
+        },
+        anchor: [0; 32],
         lines: offset as usize,
         partial: false,
         changed: true,

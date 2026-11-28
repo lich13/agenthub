@@ -61,6 +61,8 @@ fn anchor(file: &mut File, offset: u64) -> Result<[u8; 32]> {
 pub(crate) struct ReadInfo<'a> {
     pub epoch: &'a str,
     pub offset: u64,
+    pub stamp: FileStamp,
+    pub anchor: [u8; 32],
     #[cfg(test)]
     pub lines: usize,
     pub partial: bool,
@@ -517,6 +519,8 @@ impl<S: Default> JsonlCache<S> {
             let info = ReadInfo {
                 epoch: &snapshot.epoch,
                 offset: snapshot.offset,
+                stamp: snapshot.stamp,
+                anchor: snapshot.anchor,
                 #[cfg(test)]
                 lines: snapshot.lines,
                 partial: snapshot.partial,

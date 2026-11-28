@@ -3168,6 +3168,87 @@ async fn passive_scan_reloads_external_disable_and_reports_bad_config() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[tokio::test]
+async fn question_monitors_sync_channels_from_fresh_config_without_wiping_newly_enabled_bark_queue()
+{
+    let dir = temp_test_dir("agenthub-fresh-bark-sync");
+    fs::create_dir_all(&dir).unwrap();
+    let mut stale_tick_cfg = test_config(dir.join(".codex"));
+    stale_tick_cfg.probe.enabled = true;
+    stale_tick_cfg.probe.error_monitor.enabled = true;
+    stale_tick_cfg.probe.notifications.enabled = false;
+    stale_tick_cfg.probe.notifications.notify_codex = true;
+    stale_tick_cfg.probe.notifications.notify_reply_needed = true;
+
+    let mut fresh_enabled_cfg = stale_tick_cfg.clone();
+    fresh_enabled_cfg.probe.notifications.enabled = true;
+    fresh_enabled_cfg.probe.notifications.server_url = "https://example.invalid/push".into();
+
+    let db = PanelDb::open_with_secret_box(
+        dir.join("panel.sqlite"),
+        agenthub_core::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
+    )
+    .unwrap();
+    let fresh_loader = || Ok(fresh_enabled_cfg.clone());
+    let tick_loader = || Ok(stale_tick_cfg.clone());
+
+    // Simulate user enabling Bark mid-tick and staging an encrypted pending notification.
+    db.sync_notification_channels_from_config(&fresh_loader)
+        .unwrap();
+    let now_ms = jiff::Timestamp::now().as_millisecond();
+    assert!(db
+        .stage_notification_delivery(
+            agenthub_core::db::NotificationChannel::Bark,
+            "mid-tick:newly-queued",
+            now_ms,
+            &json!({"title": "New Alert", "body": "Must survive monitor sync"}),
+        )
+        .unwrap());
+
+    crate::async_question_monitor::run_with_threads_and_fresh_loader(
+        &tick_loader,
+        &fresh_loader,
+        &db,
+        Some(&[]),
+    )
+    .await
+    .unwrap();
+    crate::question_monitor::run_with_threads_and_fresh_loader(
+        &tick_loader,
+        &fresh_loader,
+        &db,
+        Some(&[]),
+    )
+    .await
+    .unwrap();
+
+    let conn = Connection::open(db.path()).unwrap();
+    let (status, has_cipher, has_nonce): (String, bool, bool) = conn
+        .query_row(
+            "SELECT status, ciphertext IS NOT NULL, nonce IS NOT NULL FROM probe_notification_deliveries WHERE event_key = 'mid-tick:newly-queued'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        status, "pending",
+        "stale tick_config must never mark newly queued Bark delivery skipped"
+    );
+    assert!(
+        has_cipher && has_nonce,
+        "newly queued Bark delivery ciphertext and nonce must remain intact"
+    );
+    let bark_enabled: bool = conn
+        .query_row(
+            "SELECT enabled FROM probe_notification_channels WHERE channel = 'bark'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(bark_enabled);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 fn test_config(codex_home: PathBuf) -> Config {
     let root = codex_home.parent().unwrap_or(&codex_home).to_path_buf();
     let mut config = Config::current_defaults().unwrap();

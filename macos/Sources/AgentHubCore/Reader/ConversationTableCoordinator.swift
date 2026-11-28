@@ -1756,9 +1756,9 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         guard !normalized.isEmpty else {
             return max(minWidth, ceil(cachedMono13AsciiAdvance) + 24)
         }
-        let font = DesignFonts.nsMonoFont(size: 13)
+        let attrs: [NSAttributedString.Key: Any] = [.font: DesignFonts.nsMonoFont(size: 13)]
         var maxAsciiCols = 0
-        var nonAsciiCandidates: [(estCols: Int, line: Substring)] = []
+        var maxLineW: CGFloat = 0
 
         for line in normalized.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             if line.isEmpty { continue }
@@ -1779,33 +1779,16 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                     maxAsciiCols = cols
                 }
             } else {
-                var estCols = 0
-                for scalar in line.unicodeScalars {
-                    if scalar.value == 0x09 {
-                        estCols += 4
-                    } else if scalar.value < 0x80 {
-                        estCols += 1
-                    } else {
-                        estCols += 2
-                    }
-                }
-                if nonAsciiCandidates.count < 4 {
-                    nonAsciiCandidates.append((estCols, line))
-                } else if let minIdx = nonAsciiCandidates.indices.min(by: {
-                    nonAsciiCandidates[$0].estCols < nonAsciiCandidates[$1].estCols
-                }), estCols > nonAsciiCandidates[minIdx].estCols {
-                    nonAsciiCandidates[minIdx] = (estCols, line)
+                let w = NSAttributedString(string: String(line), attributes: attrs).size().width
+                if w > maxLineW {
+                    maxLineW = w
                 }
             }
         }
 
-        var maxLineW = CGFloat(maxAsciiCols) * cachedMono13AsciiAdvance
-        for (_, candidate) in nonAsciiCandidates {
-            let attr = NSAttributedString(string: String(candidate), attributes: [.font: font])
-            let w = attr.size().width
-            if w > maxLineW {
-                maxLineW = w
-            }
+        let asciiW = CGFloat(maxAsciiCols) * cachedMono13AsciiAdvance
+        if asciiW > maxLineW {
+            maxLineW = asciiW
         }
         return max(minWidth, ceil(maxLineW) + 24)
     }

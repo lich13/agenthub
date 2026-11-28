@@ -209,13 +209,17 @@ pub(crate) fn paginate_window<T>(
             (start, end)
         }
     };
+    let has_older = start > 0 && start < end;
+    let after_anchor = (start < end)
+        .then(|| items.get(end.saturating_sub(1)).map(&id_of))
+        .flatten();
     Ok(PageWindow {
         start,
         end,
         total,
-        has_more: start > 0,
-        before_cursor: (start > 0).then(|| id_of(&items[start]).to_owned()),
-        after_cursor: after_cursor(end, total, items.get(end.saturating_sub(1)).map(&id_of)),
+        has_more: has_older,
+        before_cursor: has_older.then(|| id_of(&items[start]).to_owned()),
+        after_cursor: after_cursor(end, total, after_anchor),
     })
 }
 

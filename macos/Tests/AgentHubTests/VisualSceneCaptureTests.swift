@@ -485,13 +485,22 @@ final class VisualSceneCaptureTests: XCTestCase {
         XCTAssertEqual(table.numberOfRows, 6)
         XCTAssertEqual(coord.rows.map(\.id), ["u1", "a1", "u2", "exec-2", "a2-final", "u3"])
 
-        // 5. Mixed ASCII+CJK wide code line is never evicted by narrower 3-byte-per-char pure CJK lines
-        let pureCjkLine = String(repeating: "汉", count: 32) // 96 UTF-8 bytes, ~64 cols
-        let wideMixedLine = String(repeating: "x", count: 82) + " // 中文" // 91 UTF-8 bytes, ~89 cols
+        // 5. Non-ASCII wide CJK line is never evicted by narrower Latin-1 lines with more scalar columns
+        let pureCjkLine = String(repeating: "汉", count: 32)
+        let wideMixedLine = String(repeating: "x", count: 82) + " // 中文"
         let sampleCode = ([pureCjkLine, pureCjkLine, pureCjkLine, pureCjkLine, wideMixedLine]).joined(separator: "\n")
         let mixedDocW = ConversationTableCoordinator.measureCodeDocumentWidth(code: sampleCode, minWidth: 100)
         let soloWideW = ConversationTableCoordinator.measureCodeDocumentWidth(code: wideMixedLine, minWidth: 100)
-        XCTAssertEqual(mixedDocW, soloWideW, "Wide mixed ASCII+CJK line must be sampled even when shorter in UTF-8 bytes than pure-CJK lines")
+        XCTAssertEqual(mixedDocW, soloWideW, "Wide mixed ASCII+CJK line must be measured without eviction")
+
+        let latinAccented = String(repeating: "é", count: 100)
+        let widerCjk99 = String(repeating: "界", count: 99)
+        let accentedPlusCjk = ([latinAccented, latinAccented, latinAccented, latinAccented, widerCjk99]).joined(separator: "\n")
+        let accentedPlusCjkW = ConversationTableCoordinator.measureCodeDocumentWidth(code: accentedPlusCjk, minWidth: 100)
+        let soloCjk99W = ConversationTableCoordinator.measureCodeDocumentWidth(code: widerCjk99, minWidth: 100)
+        let soloAccentedW = ConversationTableCoordinator.measureCodeDocumentWidth(code: latinAccented, minWidth: 100)
+        XCTAssertGreaterThan(soloCjk99W, soloAccentedW, "99 fullwidth CJK glyphs must render wider than 100 single-width accented glyphs")
+        XCTAssertEqual(accentedPlusCjkW, soloCjk99W, "4 lines of 100 'é' must never evict 1 wider line of 99 '界'")
     }
 
     @MainActor
@@ -507,22 +516,22 @@ final class VisualSceneCaptureTests: XCTestCase {
         let transport = MockRuntimeTransport { cmd, args in
             if cmd == "dsh.list" {
                 return Data(#"""
-                [{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"DeepSeek Harness 中文路径与多行问答核验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false,"deleteBlockReason":"会话正在运行"}]
+                [{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"增量迁移 SQLite 归档索引与只读锁探测","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false,"deleteBlockReason":"会话正在运行"}]
                 """#.utf8)
             }
             if cmd == "dsh.detail" {
                 return Data(#"""
-                {"summary":{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"DeepSeek Harness 中文路径与多行问答核验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false},"events":[{"id":"d-u1","kind":"user_message","text":"核对 /Users/example/Documents/程序开发/AgentHub 路径字距与 296pt 顶栏标题完整展示。"},{"id":"d-a1","kind":"assistant_message","text":"已完成核对，`DeepSeek Harness` 顶栏零截断，中文工作目录无中西文异常空隙。"}],"totalEvents":2,"hasMore":false}
+                {"summary":{"id":"dsh-cjk-1","sessionKey":"dsh-cjk-1","title":"增量迁移 SQLite 归档索引与只读锁探测","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.dsh/sessions/dsh-cjk-1.jsonl","status":"running","updatedAt":"2026-11-28T06:00:00Z","canRename":true,"canArchive":true,"canDelete":false},"events":[{"id":"d-u1","kind":"user_message","text":"检查 crates/agenthub-core/src/dsh/sessions.rs 在归档会话重打开时的离线摘要缓存刷新逻辑，确认不会跳过未提交的 WAL 页。"},{"id":"d-a1","kind":"assistant_message","text":"已定位到 `read_workspace_v2` 的读取入口：主库与 `-wal` 配对指纹会在写入后随纳米级 `mtime` 与文件长度更新失效，无需在只读路径执行检查点。"}],"totalEvents":2,"hasMore":false}
                 """#.utf8)
             }
             if cmd == "claude.list" {
                 return Data(#"""
-                [{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"Claude Code 中文目录会话状态与禁改名提示","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"reply_needed","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true}]
+                [{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"梳理 SSH 远端通道断线重连与修订号校验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"waiting","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true}]
                 """#.utf8)
             }
             if cmd == "claude.detail" {
                 return Data(#"""
-                {"summary":{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"Claude Code 中文目录会话状态与禁改名提示","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"reply_needed","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true},"events":[{"id":"c-u1","turnId":"t1","kind":"user_message","text":"请在中文目录 /Users/example/Documents/程序开发/AgentHub 下验证状态胶囊。"},{"id":"c-a1","turnId":"t1","kind":"assistant_message","assistantPhase":"final","text":"顶栏已同步显示需回复胶囊，禁改名提示收敛为紧凑单行条。"}],"totalEvents":2,"hasMore":false}
+                {"summary":{"id":"cl-cjk-1","sessionKey":"claude:cl-cjk-1","title":"梳理 SSH 远端通道断线重连与修订号校验","cwd":"/Users/example/Documents/程序开发/AgentHub","workspaceRoot":"/Users/example/Documents/程序开发/AgentHub","path":"/Users/example/.claude/projects/cl-cjk-1.jsonl","status":"waiting","formatVersion":"2.1.284","updatedAt":"2026-11-28T06:05:00Z","messageCount":4,"canRename":false,"renameBlockReason":"会话存在未决交互，暂不可改名","canDelete":true},"events":[{"id":"c-u1","turnId":"t1","kind":"user_message","text":"切换远程目标机器时，若前一个只读分页请求尚未返回，客户端如何隔离旧响应？"},{"id":"c-a1","turnId":"t1","kind":"assistant_message","assistantPhase":"final","text":"切机操作会递增连接 `revision` 并立即关闭旧 SSH 子进程管道；晚到的响应因修订号失配在分发入口被直接丢弃，不会污染当前机器的列表或详情缓存。"}],"totalEvents":2,"hasMore":false}
                 """#.utf8)
             }
             return Self.mockResponse(cmd: cmd, args: args)
@@ -589,7 +598,7 @@ final class VisualSceneCaptureTests: XCTestCase {
                 let allTexts = collectAllRenderedStrings(in: shellHost)
                 XCTAssertTrue(allTexts.contains("搜索标题、ID 或工作目录"), "\(expectedTitle) sidebar search field must mount")
                 XCTAssertTrue(
-                    allTexts.contains(where: { $0.contains("程序开发/AgentHub") || $0.contains("顶栏") }),
+                    allTexts.contains(where: { $0.contains("程序开发/AgentHub") || $0.contains("read_workspace_v2") || $0.contains("revision") }),
                     "\(expectedTitle) conversation stage must mount decoded Chinese cwd message rows"
                 )
                 let pal = DesignPalette.resolve(scheme: scheme, workspace: ws)
@@ -620,16 +629,16 @@ final class VisualSceneCaptureTests: XCTestCase {
         let multilineQuestions = [
             UserInputQuestion(
                 id: "arch-choice",
-                header: "部署策略确认",
-                question: "当前远程机器同时挂载了多个工作区目录，请选择跨机器同步与离线索引校验策略（支持多行长问题折行测量）：",
+                header: "迁移方案确认",
+                question: "检测到目标服务存在历史通知投递记录与自定义工作区根目录，请选择本次升级的数据迁移与回滚兼容方式：",
                 options: [
                     UserInputOption(
-                        label: "(Recommended) 启用单连接零双缓冲流式透传与增量缓存",
-                        description: "服务端通过 write_raw_response 三段写出帧头与 RawValue 字节，客户端直接透传 UTF-8 原文并保留断线单次读重试与机器修订号隔离保护。"
+                        label: "(Recommended) 原地升级并保留旧版回退兼容表",
+                        description: "沿用当前 SQLite schema 3 与加密通知队列，不清理历史遗留表或钥匙串条目，确保回退至 v2.1.30 二进制时配置与未决投递记录完整可读。"
                     ),
                     UserInputOption(
-                        label: "保持完整离线快照回退兼容",
-                        description: "不对存量 SQLite 表执行破坏性变更，确保任意时刻回滚至旧版本二进制仍可无损读取全部配置、加密通知队列与原生会话索引。"
+                        label: "仅在只读模式下预检配置与索引一致性",
+                        description: "先校验服务配置、Provider 数据目录权限与数据库账本完整性，输出差异摘要而不修改任何线上状态文件。"
                     ),
                 ]
             ),
@@ -638,8 +647,8 @@ final class VisualSceneCaptureTests: XCTestCase {
             UserInputAnswer(
                 questionId: "arch-choice",
                 answers: [
-                    "(Recommended) 启用单连接零双缓冲流式透传与增量缓存",
-                    "附加说明：同时在 1000×680 窄窗与浅深双色下校验多行问答卡片底部绝不裁切文字，保留完整内边距与圆角边框。",
+                    "(Recommended) 原地升级并保留旧版回退兼容表",
+                    "补充要求：升级远端 systemd 服务前先核验离线归档包签名，确认健康检查返回正常后再更新本机桌面端应用。",
                 ]
             ),
         ]

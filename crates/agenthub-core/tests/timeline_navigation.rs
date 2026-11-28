@@ -636,6 +636,34 @@ fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_tail_window() {
 }
 
 #[test]
+fn forward_cursor_at_last_item_returns_empty_tail_page_without_panicking() {
+    let fixture = GrokFixture::new();
+    fixture.write(&[
+        GrokFixture::update("user_message_chunk", "user-1", "第一问"),
+        GrokFixture::update("agent_message_chunk", "asst-1", "第一答"),
+        GrokFixture::update("user_message_chunk", "user-2", "最后一问"),
+    ]);
+    let latest =
+        grok_session_page(&fixture.paths, &fixture.id, None, Some(10), None, None).unwrap();
+    let last_id = latest.events.last().unwrap().id.clone();
+
+    let tail_cursor = format!("n:{last_id}");
+    let after_last = grok_session_page(
+        &fixture.paths,
+        &fixture.id,
+        None,
+        Some(10),
+        Some(&tail_cursor),
+        None,
+    )
+    .unwrap();
+    assert!(after_last.events.is_empty());
+    assert!(!after_last.has_more);
+    assert_eq!(after_last.before_cursor, None);
+    assert_eq!(after_last.after_cursor, None);
+}
+
+#[test]
 #[ignore]
 fn grok_latest_page_indexes_and_jumps_to_user_prompt_before_64_mib_tail_window() {
     assert_grok_latest_page_indexes_and_jumps_over_bytes(64 * 1024 * 1024);

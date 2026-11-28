@@ -125,7 +125,36 @@ fn parse_pbtxt_annotations(content: &str) -> AnnotationOverlay {
     overlay
 }
 
-fn read_regular_text_nofollow(path: &Path) -> Result<Option<(String, fs::Metadata)>> {
+const MAX_ANNOTATION_BYTES: u64 = 4 * 1024 * 1024;
+static ANNOTATION_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+type BeforePersistHook = Box<dyn FnOnce(&Path) + Send>;
+
+#[cfg(test)]
+static TEST_ANNOTATION_BEFORE_PERSIST_HOOK: std::sync::Mutex<Option<BeforePersistHook>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_test_annotation_before_persist_hook(hook: impl FnOnce(&Path) + Send + 'static) {
+    *TEST_ANNOTATION_BEFORE_PERSIST_HOOK.lock().unwrap() = Some(Box::new(hook));
+}
+
+#[derive(Debug)]
+struct AnnotationWriteConflict;
+
+impl std::fmt::Display for AnnotationWriteConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("注解文件在写入前发生并发变更，请重试")
+    }
+}
+
+impl std::error::Error for AnnotationWriteConflict {}
+
+fn read_regular_text_nofollow(
+    path: &Path,
+    reject_oversize: bool,
+) -> Result<Option<(String, fs::Metadata, [u8; 32])>> {
     match fs::symlink_metadata(path) {
         Ok(meta) => {
             ensure!(
@@ -148,12 +177,36 @@ fn read_regular_text_nofollow(path: &Path) -> Result<Option<(String, fs::Metadat
             return Err(err);
         }
     };
-    let meta = file.metadata()?;
-    ensure!(meta.is_file(), "拒绝读取非普通文件注解");
-    let mut text = String::new();
+    let meta_before = file.metadata()?;
+    ensure!(meta_before.is_file(), "拒绝读取非普通文件注解");
+    if reject_oversize && meta_before.len() > MAX_ANNOTATION_BYTES {
+        bail!("注解文件超出 4 MiB 安全上限，已保留原文件");
+    }
+    let mut bytes = Vec::new();
     use std::io::Read;
-    file.take(4 * 1024 * 1024).read_to_string(&mut text)?;
-    Ok(Some((text, meta)))
+    (&file)
+        .take(MAX_ANNOTATION_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_ANNOTATION_BYTES {
+        if reject_oversize {
+            bail!("注解文件超出 4 MiB 安全上限，已保留原文件");
+        }
+        bytes.truncate(MAX_ANNOTATION_BYTES as usize);
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        return Ok(Some((text, meta_before, [0u8; 32])));
+    }
+    if reject_oversize {
+        let meta_after = file.metadata()?;
+        if !session_delete::same_source(&meta_before, &meta_after) {
+            return Err(AnnotationWriteConflict.into());
+        }
+        let text = String::from_utf8(bytes).context("注解文件包含无效 UTF-8 序列，已保留原文件")?;
+        use sha2::Digest;
+        let digest: [u8; 32] = sha2::Sha256::digest(text.as_bytes()).into();
+        return Ok(Some((text, meta_after, digest)));
+    }
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    Ok(Some((text, meta_before, [0u8; 32])))
 }
 
 pub(super) fn read_annotation_overlay(paths: &AntigravityPaths, id: &str) -> AnnotationOverlay {
@@ -162,10 +215,10 @@ pub(super) fn read_annotation_overlay(paths: &AntigravityPaths, id: &str) -> Ann
         return AnnotationOverlay::default();
     }
     let path = dir.join(format!("{id}.pbtxt"));
-    read_regular_text_nofollow(&path)
+    read_regular_text_nofollow(&path, false)
         .ok()
         .flatten()
-        .map(|(text, _)| parse_pbtxt_annotations(&text))
+        .map(|(text, _, _)| parse_pbtxt_annotations(&text))
         .unwrap_or_default()
 }
 
@@ -175,112 +228,163 @@ pub(super) fn write_annotation_overlay(
     new_title: Option<&str>,
     new_archived: Option<bool>,
 ) -> Result<()> {
+    let _write_guard = ANNOTATION_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let dir = paths.annotations_dir();
-    if let Ok(dir_meta) = fs::symlink_metadata(&dir) {
+    let path = dir.join(format!("{id}.pbtxt"));
+
+    for attempt in 0..3 {
+        if let Ok(dir_meta) = fs::symlink_metadata(&dir) {
+            ensure!(
+                dir_meta.is_dir() && !dir_meta.file_type().is_symlink(),
+                "拒绝写入符号链接注解目录"
+            );
+        }
+        fs::create_dir_all(&dir)?;
+        let dir_meta = fs::symlink_metadata(&dir)?;
         ensure!(
             dir_meta.is_dir() && !dir_meta.file_type().is_symlink(),
             "拒绝写入符号链接注解目录"
         );
-    }
-    fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{id}.pbtxt"));
-    let (existing, existing_meta) = match read_regular_text_nofollow(&path)? {
-        Some((text, meta)) => (text, Some(meta)),
-        None => (String::new(), None),
-    };
-    let current = parse_pbtxt_annotations(&existing);
-    let title = new_title.map(str::to_owned).or(current.title);
-    let archived = new_archived.or(current.archived);
 
-    let mut preserved = Vec::new();
-    let mut skip_block_depth = 0usize;
-    for line in existing.lines() {
-        let trimmed = line.trim();
-        if skip_block_depth > 0 {
-            for ch in trimmed.chars() {
-                if ch == '{' {
-                    skip_block_depth += 1;
-                } else if ch == '}' {
-                    skip_block_depth = skip_block_depth.saturating_sub(1);
-                }
-            }
-            continue;
-        }
-        if trimmed.starts_with("title:") || trimmed.starts_with("archived:") {
-            continue;
-        }
-        if trimmed.starts_with("archival_status_timestamp") && new_archived.is_some() {
-            let opens = trimmed.chars().filter(|&c| c == '{').count();
-            let closes = trimmed.chars().filter(|&c| c == '}').count();
-            skip_block_depth = opens.saturating_sub(closes);
-            continue;
-        }
-        if !trimmed.is_empty() {
-            preserved.push(line.to_owned());
-        }
-    }
+        let read_res = read_regular_text_nofollow(&path, true);
+        let (existing, existing_meta, existing_digest) = match read_res {
+            Ok(Some((text, meta, digest))) => (text, Some(meta), Some(digest)),
+            Ok(None) => (String::new(), None, None),
+            Err(err) if err.is::<AnnotationWriteConflict>() && attempt + 1 < 3 => continue,
+            Err(err) => return Err(err),
+        };
+        let current = parse_pbtxt_annotations(&existing);
+        let title = new_title.map(str::to_owned).or(current.title);
+        let archived = new_archived.or(current.archived);
 
-    let mut output = String::new();
-    if let Some(title) = title.filter(|t| !t.trim().is_empty()) {
-        output.push_str(&format!("title: \"{}\"\n", escape_prototext_string(&title)));
-    }
-    if let Some(flag) = archived {
-        output.push_str(&format!(
-            "archived: {}\n",
-            if flag { "true" } else { "false" }
-        ));
-        if new_archived.is_some() {
-            let secs = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            output.push_str(&format!(
-                "archival_status_timestamp {{\n  seconds: {secs}\n}}\n"
-            ));
-        }
-    }
-    for line in preserved {
-        output.push_str(&line);
-        output.push('\n');
-    }
-
-    let existing_perms = existing_meta.as_ref().map(fs::Metadata::permissions);
-    session_delete::atomic_replace_file(
-        &path,
-        "agenthub-ann",
-        None,
-        existing_perms,
-        |file| {
-            file.write_all(output.as_bytes())?;
-            Ok(())
-        },
-        || {
-            match fs::symlink_metadata(&path) {
-                Ok(after) => {
-                    ensure!(
-                        after.is_file() && !after.file_type().is_symlink(),
-                        "拒绝覆盖非普通文件注解"
-                    );
-                    if let Some(before) = &existing_meta {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::MetadataExt;
-                            ensure!(
-                                (before.dev(), before.ino()) == (after.dev(), after.ino()),
-                                "注解文件在写入前已被替换，请重试"
-                            );
-                        }
+        let mut preserved = Vec::new();
+        let mut skip_block_depth = 0usize;
+        for line in existing.lines() {
+            let trimmed = line.trim();
+            if skip_block_depth > 0 {
+                for ch in trimmed.chars() {
+                    if ch == '{' {
+                        skip_block_depth += 1;
+                    } else if ch == '}' {
+                        skip_block_depth = skip_block_depth.saturating_sub(1);
                     }
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    ensure!(existing_meta.is_none(), "注解文件在写入前已被移除，请重试");
-                }
-                Err(err) => return Err(err.into()),
+                continue;
             }
-            Ok(())
-        },
-    )?;
-    Ok(())
+            if trimmed.starts_with("title:") || trimmed.starts_with("archived:") {
+                continue;
+            }
+            if trimmed.starts_with("archival_status_timestamp") && new_archived.is_some() {
+                let opens = trimmed.chars().filter(|&c| c == '{').count();
+                let closes = trimmed.chars().filter(|&c| c == '}').count();
+                skip_block_depth = opens.saturating_sub(closes);
+                continue;
+            }
+            if !trimmed.is_empty() {
+                preserved.push(line.to_owned());
+            }
+        }
+
+        let mut output = String::new();
+        if let Some(title) = title.filter(|t| !t.trim().is_empty()) {
+            output.push_str(&format!("title: \"{}\"\n", escape_prototext_string(&title)));
+        }
+        if let Some(flag) = archived {
+            output.push_str(&format!(
+                "archived: {}\n",
+                if flag { "true" } else { "false" }
+            ));
+            if new_archived.is_some() {
+                let secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                output.push_str(&format!(
+                    "archival_status_timestamp {{\n  seconds: {secs}\n}}\n"
+                ));
+            }
+        }
+        for line in preserved {
+            output.push_str(&line);
+            output.push('\n');
+        }
+
+        let replace_res = session_delete::atomic_replace_file(
+            &path,
+            "agenthub-ann",
+            existing_meta.as_ref(),
+            None,
+            |file| {
+                file.write_all(output.as_bytes())?;
+                Ok(())
+            },
+            || {
+                #[cfg(test)]
+                if let Some(hook) = TEST_ANNOTATION_BEFORE_PERSIST_HOOK.lock().unwrap().take() {
+                    hook(&path);
+                }
+                let dir_after = fs::symlink_metadata(&dir)?;
+                ensure!(
+                    dir_after.is_dir() && !dir_after.file_type().is_symlink(),
+                    "拒绝写入符号链接注解目录"
+                );
+                match fs::symlink_metadata(&path) {
+                    Ok(after) => {
+                        ensure!(
+                            after.is_file() && !after.file_type().is_symlink(),
+                            "拒绝覆盖非普通文件注解"
+                        );
+                        let Some(before) = &existing_meta else {
+                            return Err(AnnotationWriteConflict.into());
+                        };
+                        if !session_delete::same_source(before, &after) {
+                            return Err(AnnotationWriteConflict.into());
+                        }
+                        let verify_file = match crate::file_stamp::open_regular_nofollow(&path) {
+                            Ok(file) => file,
+                            Err(err)
+                                if err.downcast_ref::<std::io::Error>().is_some_and(|io_err| {
+                                    io_err.kind() == std::io::ErrorKind::NotFound
+                                }) =>
+                            {
+                                return Err(AnnotationWriteConflict.into());
+                            }
+                            Err(err) => return Err(err),
+                        };
+                        let verify_meta = verify_file.metadata()?;
+                        if !session_delete::same_source(before, &verify_meta) {
+                            return Err(AnnotationWriteConflict.into());
+                        }
+                        let mut verify_bytes = Vec::with_capacity(before.len() as usize);
+                        use std::io::Read;
+                        (&verify_file)
+                            .take(MAX_ANNOTATION_BYTES + 1)
+                            .read_to_end(&mut verify_bytes)?;
+                        use sha2::Digest;
+                        let verify_digest: [u8; 32] = sha2::Sha256::digest(&verify_bytes).into();
+                        if Some(verify_digest) != existing_digest {
+                            return Err(AnnotationWriteConflict.into());
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                        if existing_meta.is_some() {
+                            return Err(AnnotationWriteConflict.into());
+                        }
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+                Ok(())
+            },
+        );
+        match replace_res {
+            Ok(()) => return Ok(()),
+            Err(err) if err.is::<AnnotationWriteConflict>() && attempt + 1 < 3 => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    bail!("注解文件在写入前发生并发变更，请重试")
 }
 
 pub(super) const PROTO_CACHE_FILES: [&str; 4] = [

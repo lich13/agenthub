@@ -6704,4 +6704,434 @@ mod tests {
 
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn review_regressions_annotations_bounds_concurrency_symlink_dbs_and_incomplete_multi_instance()
+    {
+        let root =
+            std::env::temp_dir().join(format!("ag-review-regressions-{}", uuid::Uuid::new_v4()));
+
+        // 1. Oversize >4MiB `.pbtxt` at clean UTF-8 boundary must reject write and preserve trailing fields.
+        let ov_root = root.join("oversize_ann");
+        let ov_id = "11111111-2222-4333-8444-aaaaaaaaaaa1";
+        fs::create_dir_all(ov_root.join("conversations")).unwrap();
+        fs::create_dir_all(ov_root.join("annotations")).unwrap();
+        fs::write(
+            ov_root.join("conversations").join(format!("{ov_id}.pb")),
+            b"pb-ov",
+        )
+        .unwrap();
+        {
+            let conn = Connection::open(ov_root.join("conversation_summaries.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'Oversize Title', '2026-11-28T01:00:00Z', 'idle', NULL)",
+                params![ov_id],
+            )
+            .unwrap();
+        }
+        let ann_path = ov_root.join("annotations").join(format!("{ov_id}.pbtxt"));
+        let mut big_pbtxt = String::from("title: \"Header Title\"\narchived: false\n");
+        let pad_line = "custom_note: \"0123456789abcdef0123456789abcdef0123456789abcdef\"\n";
+        while big_pbtxt.len() < 4 * 1024 * 1024 {
+            big_pbtxt.push_str(pad_line);
+        }
+        big_pbtxt.push_str("trailing_sentinel: \"must_not_be_truncated\"\n");
+        assert!(big_pbtxt.len() > 4 * 1024 * 1024);
+        fs::write(&ann_path, big_pbtxt.as_bytes()).unwrap();
+
+        let ov_paths = AntigravityPaths::offline(ov_root.clone());
+        let rename_err = rename_session(&ov_paths, ov_id, "Should Fail").unwrap_err();
+        assert!(
+            rename_err.to_string().contains("4 MiB"),
+            "unexpected oversize error: {rename_err:#}"
+        );
+        let archive_err = set_archived(&ov_paths, ov_id, true).unwrap_err();
+        assert!(
+            archive_err.to_string().contains("4 MiB"),
+            "unexpected oversize archive error: {archive_err:#}"
+        );
+        let after_bytes = fs::read(&ann_path).unwrap();
+        assert_eq!(
+            after_bytes,
+            big_pbtxt.as_bytes(),
+            "oversize annotation file must remain byte-for-byte untouched"
+        );
+
+        // 2. Annotation write conflict retry:
+        //    (a) file did not exist on read, created before persist -> merges both!
+        //    (b) file existed on read, modified in-place on same inode before persist -> merges both!
+        let race_root = root.join("race_ann");
+        let race_id = "11111111-2222-4333-8444-aaaaaaaaaaa2";
+        fs::create_dir_all(race_root.join("conversations")).unwrap();
+        fs::write(
+            race_root
+                .join("conversations")
+                .join(format!("{race_id}.pb")),
+            b"pb-race",
+        )
+        .unwrap();
+        {
+            let conn = Connection::open(race_root.join("conversation_summaries.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'Race Initial', '2026-11-28T01:00:00Z', 'idle', NULL)",
+                params![race_id],
+            )
+            .unwrap();
+        }
+        let race_paths = AntigravityPaths::offline(race_root.clone());
+        annotations::set_test_annotation_before_persist_hook(|path| {
+            fs::write(path, "archived: true\ncustom_ext: \"created_mid_write\"\n").unwrap();
+        });
+        let merged_a = rename_session(&race_paths, race_id, "Merged After Create").unwrap();
+        assert_eq!(merged_a.title, "Merged After Create");
+        assert!(
+            merged_a.archived,
+            "concurrently created archived: true must not be overwritten"
+        );
+        let raw_ann_a = fs::read_to_string(
+            race_root
+                .join("annotations")
+                .join(format!("{race_id}.pbtxt")),
+        )
+        .unwrap();
+        assert!(raw_ann_a.contains("custom_ext: \"created_mid_write\""));
+
+        annotations::set_test_annotation_before_persist_hook(|path| {
+            use std::io::{Seek, SeekFrom, Write};
+            // Modify in-place on the SAME (dev, ino)!
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(path)
+                .unwrap();
+            f.seek(SeekFrom::Start(0)).unwrap();
+            f.write_all(b"title: \"Concurrent InPlace Title\"\narchived: false\ncustom_ext: \"inplace_v2\"\n")
+                .unwrap();
+            f.sync_all().unwrap();
+        });
+        let merged_b = set_archived(&race_paths, race_id, true).unwrap();
+        assert!(merged_b.archived);
+        let overlay_b = annotations::read_annotation_overlay(&race_paths, race_id);
+        assert_eq!(overlay_b.title.as_deref(), Some("Concurrent InPlace Title"));
+        assert_eq!(overlay_b.archived, Some(true));
+        let raw_ann_b = fs::read_to_string(
+            race_root
+                .join("annotations")
+                .join(format!("{race_id}.pbtxt")),
+        )
+        .unwrap();
+        assert!(raw_ann_b.contains("custom_ext: \"inplace_v2\""));
+
+        // 3. Symlinked `conversation_summaries.db` is rejected across offline delete, online 404 cleanup, and mirror cleanup.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let victim_db = root.join("victim_external.db");
+            let sym_id_1 = "11111111-2222-4333-8444-bbbbbbbbbbb1";
+            let sym_id_2 = "11111111-2222-4333-8444-bbbbbbbbbbb2";
+            let sym_id_3 = "11111111-2222-4333-8444-bbbbbbbbbbb3";
+            {
+                let conn = Connection::open(&victim_db).unwrap();
+                conn.execute_batch(
+                    "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+                )
+                .unwrap();
+                for sid in [sym_id_1, sym_id_2, sym_id_3] {
+                    conn.execute(
+                        "INSERT INTO conversation_summaries VALUES (?1, 'Victim Row', '2026-11-28T01:00:00Z', 'idle', NULL)",
+                        params![sid],
+                    )
+                    .unwrap();
+                }
+            }
+
+            // (3a) Offline delete with symlinked summaries DB
+            let off_sym_root = root.join("offline_sym");
+            fs::create_dir_all(off_sym_root.join("conversations")).unwrap();
+            fs::write(
+                off_sym_root
+                    .join("conversations")
+                    .join(format!("{sym_id_1}.pb")),
+                b"pb-1",
+            )
+            .unwrap();
+            symlink(&victim_db, off_sym_root.join("conversation_summaries.db")).unwrap();
+            let off_sym_paths = AntigravityPaths::offline(off_sym_root.clone());
+            let off_del = execute_batch_item(
+                &off_sym_paths,
+                sym_id_1,
+                SessionOperation::Delete,
+                &[],
+                true,
+            )
+            .unwrap();
+            assert_eq!(off_del.status, "failed");
+            assert!(off_del.deleted_ids.is_empty());
+            assert!(off_del
+                .residuals
+                .iter()
+                .any(|r| r.contains("conversation_summaries.db")));
+
+            // (3b) Online 404 unhydrated DB cleanup with symlinked summaries DB
+            let on_sym_root = root.join("online_sym");
+            fs::create_dir_all(on_sym_root.join("conversations")).unwrap();
+            fs::write(
+                on_sym_root
+                    .join("conversations")
+                    .join(format!("{sym_id_2}.pb")),
+                b"pb-2",
+            )
+            .unwrap();
+            symlink(&victim_db, on_sym_root.join("conversation_summaries.db")).unwrap();
+            let listener_404 = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port_404 = listener_404.local_addr().unwrap().port();
+            let stop_404 = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let stop_404_bg = stop_404.clone();
+            let h_404 = std::thread::spawn(move || {
+                while let Ok((mut s, _)) = listener_404.accept() {
+                    if stop_404_bg.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
+                    let mut r = BufReader::new(s.try_clone().unwrap());
+                    let mut req = String::new();
+                    if r.read_line(&mut req).unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    let mut content_len = 0usize;
+                    loop {
+                        let mut hdr = String::new();
+                        if r.read_line(&mut hdr).unwrap_or(0) == 0 || hdr == "\r\n" {
+                            break;
+                        }
+                        if let Some((k, v)) = hdr.split_once(':') {
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                content_len = v.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    let mut req_body = vec![0u8; content_len];
+                    let _ = r.read_exact(&mut req_body);
+                    let (st, body) = if req.contains("GetAllCascadeTrajectories") {
+                        ("200 OK", json!({"trajectorySummaries": {}}))
+                    } else {
+                        (
+                            "404 Not Found",
+                            json!({"code": "not_found", "message": "not found"}),
+                        )
+                    };
+                    let bytes = serde_json::to_vec(&body).unwrap();
+                    let _ = write!(
+                        s,
+                        "HTTP/1.1 {st}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        bytes.len()
+                    );
+                    let _ = s.write_all(&bytes);
+                }
+            });
+            let on_sym_paths =
+                AntigravityPaths::with_fixed_rpc(on_sym_root.clone(), port_404, "tok");
+            let on_del =
+                execute_batch_item(&on_sym_paths, sym_id_2, SessionOperation::Delete, &[], true)
+                    .unwrap();
+            assert_eq!(on_del.status, "failed");
+            assert!(on_del.deleted_ids.is_empty());
+            assert!(on_del
+                .residuals
+                .iter()
+                .any(|r| r.contains("conversation_summaries.db")));
+            stop_404.store(true, std::sync::atomic::Ordering::Relaxed);
+            let _ = std::net::TcpStream::connect(("127.0.0.1", port_404));
+            let _ = h_404.join();
+
+            // (3c) Mirror cleanup with symlinked CLI summaries DB reports failure into item result
+            let mir_primary = root.join("mir_primary");
+            let mir_cli = root.join("mir_cli");
+            fs::create_dir_all(mir_primary.join("conversations")).unwrap();
+            fs::create_dir_all(&mir_cli).unwrap();
+            fs::write(
+                mir_primary
+                    .join("conversations")
+                    .join(format!("{sym_id_3}.pb")),
+                b"pb-3",
+            )
+            .unwrap();
+            {
+                let conn = Connection::open(mir_primary.join("conversation_summaries.db")).unwrap();
+                conn.execute_batch(
+                    "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO conversation_summaries VALUES (?1, 'Primary Row', '2026-11-28T01:00:00Z', 'idle', NULL)",
+                    params![sym_id_3],
+                )
+                .unwrap();
+            }
+            symlink(&victim_db, mir_cli.join("conversation_summaries.db")).unwrap();
+            let mir_paths = AntigravityPaths {
+                home: mir_primary.clone(),
+                cli_home: Some(mir_cli.clone()),
+                rpc_mode: RpcMode::OfflineOnly,
+            };
+            let mir_del =
+                execute_batch_item(&mir_paths, sym_id_3, SessionOperation::Delete, &[], true)
+                    .unwrap();
+            assert_eq!(mir_del.status, "failed");
+            assert!(mir_del.deleted_ids.is_empty());
+            assert!(mir_del
+                .residuals
+                .iter()
+                .any(|r| r.contains("conversation_summaries.db")));
+
+            // Verify ALL 3 rows in victim_external.db survived untouched!
+            let victim_conn = Connection::open(&victim_db).unwrap();
+            let remaining: i64 = victim_conn
+                .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(
+                remaining, 3,
+                "symlinked victim database rows must never be deleted"
+            );
+        }
+
+        // 4. Multi-instance probing with 1 healthy instance + 1 hanging/malformed instance:
+        //    list_sessions still displays readable results, while mutations block until ownership is complete!
+        let hang_root = root.join("hang_multi");
+        let shared_id = "11111111-2222-4333-8444-ccccccccccc1";
+        fs::create_dir_all(hang_root.join("conversations")).unwrap();
+        fs::write(
+            hang_root
+                .join("conversations")
+                .join(format!("{shared_id}.pb")),
+            b"pb-shared",
+        )
+        .unwrap();
+
+        let ok_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ok_port = ok_listener.local_addr().unwrap().port();
+        let delete_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let delete_calls_bg = delete_calls.clone();
+        let stop_servers = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_ok = stop_servers.clone();
+        let h_ok = std::thread::spawn(move || {
+            while let Ok((mut s, _)) = ok_listener.accept() {
+                if stop_ok.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                let mut r = BufReader::new(s.try_clone().unwrap());
+                let mut req = String::new();
+                if r.read_line(&mut req).unwrap_or(0) == 0 {
+                    continue;
+                }
+                let mut content_len = 0usize;
+                loop {
+                    let mut hdr = String::new();
+                    if r.read_line(&mut hdr).unwrap_or(0) == 0 || hdr == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = hdr.split_once(':') {
+                        if k.trim().eq_ignore_ascii_case("content-length") {
+                            content_len = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+                let mut req_body = vec![0u8; content_len];
+                let _ = r.read_exact(&mut req_body);
+                if req.contains("DeleteCascadeTrajectory") {
+                    delete_calls_bg.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                let payload = json!({
+                    "trajectorySummaries": {
+                        shared_id: {
+                            "summary": "Loaded In Both Windows",
+                            "status": "CASCADE_RUN_STATUS_IDLE",
+                            "lastModifiedTime": "2026-11-28T03:00:00Z"
+                        }
+                    }
+                });
+                let bytes = serde_json::to_vec(&payload).unwrap();
+                let _ = write!(
+                    s,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                );
+                let _ = s.write_all(&bytes);
+            }
+        });
+
+        let stall_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let stall_port = stall_listener.local_addr().unwrap().port();
+        let stop_stall = stop_servers.clone();
+        let h_stall = std::thread::spawn(move || {
+            let mut held = Vec::new();
+            while let Ok((s, _)) = stall_listener.accept() {
+                if stop_stall.load(std::sync::atomic::Ordering::Relaxed) {
+                    break;
+                }
+                held.push(s);
+            }
+        });
+
+        let incomplete_paths = AntigravityPaths::with_fixed_rpcs(
+            hang_root.clone(),
+            vec![(ok_port, "tok_ok".into()), (stall_port, "tok_stall".into())],
+        );
+        endpoint::with_test_rpc_read_timeout_ms(80, || {
+            let listed = list_sessions(&incomplete_paths, &ProviderListRequest::default()).unwrap();
+            assert_eq!(listed.len(), 1);
+            assert_eq!(listed[0].id, shared_id);
+
+            assert!(
+                rename_session(&incomplete_paths, shared_id, "Blocked Rename").is_err(),
+                "rename must wait for unresponsive live instance"
+            );
+            assert!(
+                set_archived(&incomplete_paths, shared_id, true).is_err(),
+                "archive must wait for unresponsive live instance"
+            );
+            assert!(
+                preview_batch_item(&incomplete_paths, shared_id, SessionOperation::Delete, true)
+                    .is_err(),
+                "delete preview must reject incomplete multi-instance ownership"
+            );
+            assert!(
+                execute_batch_item(
+                    &incomplete_paths,
+                    shared_id,
+                    SessionOperation::Delete,
+                    &[],
+                    true
+                )
+                .is_err(),
+                "delete execute must never bypass unresponsive live instance"
+            );
+        });
+        assert_eq!(
+            delete_calls.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "DeleteCascadeTrajectory must never be sent while another live instance is unresponsive"
+        );
+        assert!(hang_root
+            .join("conversations")
+            .join(format!("{shared_id}.pb"))
+            .exists());
+
+        stop_servers.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = std::net::TcpStream::connect(("127.0.0.1", ok_port));
+        let _ = std::net::TcpStream::connect(("127.0.0.1", stall_port));
+        let _ = h_ok.join();
+        let _ = h_stall.join();
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

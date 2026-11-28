@@ -7,7 +7,22 @@ fn now_unix_secs() -> u64 {
         .as_secs()
 }
 
+fn summaries_db_present_nofollow(db_path: &Path) -> bool {
+    !matches!(
+        fs::symlink_metadata(db_path),
+        Err(ref err) if err.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 fn open_summaries_rw(db_path: &Path) -> Result<Connection> {
+    if let Some(parent) = db_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let parent_meta =
+            fs::symlink_metadata(parent).context("无法校验 Antigravity 索引数据库父目录")?;
+        ensure!(
+            parent_meta.is_dir() && !parent_meta.file_type().is_symlink(),
+            "Antigravity 索引数据库父目录不能是符号链接"
+        );
+    }
     let before_file = crate::file_stamp::open_regular_nofollow(db_path)
         .context("Antigravity 索引数据库不是安全普通文件")?;
     let before_meta = before_file
@@ -197,7 +212,7 @@ fn resolve_mutation_store_and_endpoint(
     if store.home != primary.home {
         return Ok((store, None));
     }
-    if endpoints.instances.is_empty() {
+    if endpoints.instances.is_empty() && endpoints.is_complete() {
         return Ok((primary, None));
     }
     let descendants = if include_descendants {
@@ -281,7 +296,7 @@ pub fn rename_session(
         ensure_offline_unlocked(&store, key, "改名")?;
         write_annotation_overlay(&store, key, Some(&title), None)?;
         let db_path = store.summaries_db();
-        if db_path.is_file() {
+        if summaries_db_present_nofollow(&db_path) {
             let conn = open_summaries_rw(&db_path)?;
             conn.execute(
                 "UPDATE conversation_summaries SET title = ?1 WHERE conversation_id = ?2",
@@ -373,7 +388,7 @@ pub fn set_archived(
         ensure_offline_unlocked(&store, key, verb)?;
         write_annotation_overlay(&store, key, None, Some(archived))?;
         let db_path = store.summaries_db();
-        if db_path.is_file() {
+        if summaries_db_present_nofollow(&db_path) {
             let conn = open_summaries_rw(&db_path)?;
             patch_db_raw_summary(&conn, key, None, Some(archived))?;
             upsert_fts_summary_row(&conn, key, &existing, None, Some(archived))?;
@@ -734,29 +749,62 @@ fn clean_store_shared_files(
     }
 }
 
-fn clean_other_store_mirror_rows(other: &AntigravityPaths, deleted_ids: &[String]) {
-    let eligible: Vec<String> = deleted_ids
-        .iter()
-        .filter(|id| {
-            !has_primary_session_storage(other, id)
-                && !probe_presence_locked_shared(other, id).unwrap_or(true)
-        })
-        .cloned()
-        .collect();
+fn clean_other_store_mirror_rows(
+    other: &AntigravityPaths,
+    deleted_ids: &[String],
+    outcome: &mut Outcome,
+) {
+    match fs::symlink_metadata(&other.home) {
+        Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {}
+        Ok(_) => {
+            outcome.residuals.push(format!(
+                "{}: 镜像存储根目录不是安全普通目录",
+                other.home.display()
+            ));
+            return;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            outcome
+                .residuals
+                .push(format!("{}: {err}", other.home.display()));
+            return;
+        }
+    }
+    let mut eligible = Vec::new();
+    for id in deleted_ids {
+        if has_primary_session_storage(other, id) {
+            continue;
+        }
+        match probe_presence_locked_shared(other, id) {
+            Ok(false) => eligible.push(id.clone()),
+            Ok(true) => {}
+            Err(err) => {
+                outcome.residuals.push(format!(
+                    "{}: 无法探测镜像会话锁 ({id}): {err}",
+                    other.presence_dir().join(format!("{id}.lock")).display()
+                ));
+            }
+        }
+    }
     if eligible.is_empty() {
         return;
     }
-    let mut mirror_outcome = Outcome::default();
-    clean_store_shared_files(other, &eligible, &mut mirror_outcome);
+    clean_store_shared_files(other, &eligible, outcome);
 
     let db_path = other.summaries_db();
-    if !db_path.is_file() {
+    if !summaries_db_present_nofollow(&db_path) {
         return;
     }
-    let Ok(mut conn) = Connection::open(&db_path) else {
-        return;
+    let mut conn = match open_summaries_rw(&db_path) {
+        Ok(conn) => conn,
+        Err(err) => {
+            outcome
+                .residuals
+                .push(format!("{}: {err:#}", db_path.display()));
+            return;
+        }
     };
-    let _ = conn.busy_timeout(Duration::from_millis(1000));
     let has_summaries = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'conversation_summaries')",
@@ -771,8 +819,13 @@ fn clean_other_store_mirror_rows(other: &AntigravityPaths, deleted_ids: &[String
     let has_parents = super::has_conversation_parents_table(&conn);
     let mut touched = false;
     for id in &eligible {
-        if delete_session_rows_in_tx(&mut conn, id, has_fts, has_parents).is_ok() {
-            touched = true;
+        match delete_session_rows_in_tx(&mut conn, id, has_fts, has_parents) {
+            Ok(()) => touched = true,
+            Err(err) => {
+                outcome
+                    .residuals
+                    .push(format!("{}: {err:#}", db_path.display()));
+            }
         }
     }
     if touched {
@@ -1160,7 +1213,7 @@ fn resolve_delete_store_and_endpoints(
     {
         return Ok((
             primary,
-            (!endpoints.instances.is_empty()).then_some(endpoints),
+            (!endpoints.instances.is_empty() || !endpoints.is_complete()).then_some(endpoints),
         ));
     }
     if let Some(cli) = paths.cli_store() {
@@ -1175,7 +1228,7 @@ fn resolve_delete_store_and_endpoints(
     if store.home == primary.home {
         Ok((
             primary,
-            (!endpoints.instances.is_empty()).then_some(endpoints),
+            (!endpoints.instances.is_empty() || !endpoints.is_complete()).then_some(endpoints),
         ))
     } else {
         Ok((store, None))
@@ -1253,16 +1306,13 @@ fn delete_ordered_ids_in_store(
 ) -> Result<(Vec<String>, Vec<String>)> {
     let db_path = store.summaries_db();
     let mut outcome = Outcome::default();
-    let mut offline_conn = if live_rpc.is_none() && db_path.is_file() {
-        match Connection::open(&db_path) {
-            Ok(conn) => {
-                let _ = conn.busy_timeout(Duration::from_millis(1000));
-                Some(conn)
-            }
+    let mut offline_conn = if live_rpc.is_none() && summaries_db_present_nofollow(&db_path) {
+        match open_summaries_rw(&db_path) {
+            Ok(conn) => Some(conn),
             Err(err) => {
                 outcome
                     .residuals
-                    .push(format!("{}: {err}", db_path.display()));
+                    .push(format!("{}: {err:#}", db_path.display()));
                 record_remaining_antigravity_residuals(store, ordered_ids, &mut outcome);
                 outcome.finish();
                 return Ok((Vec::new(), outcome.residuals));
@@ -1329,7 +1379,7 @@ fn delete_ordered_ids_in_store(
                                 "DeleteCascadeTrajectory",
                                 &json!({ "cascadeId": id }),
                             ) {
-                                let benign = super::endpoint::service_unreachable(&err)
+                                let benign = super::endpoint::port_closed(&err)
                                     || err
                                         .downcast_ref::<ConnectRpcHttpError>()
                                         .is_some_and(ConnectRpcHttpError::is_not_found);
@@ -1388,7 +1438,7 @@ fn delete_ordered_ids_in_store(
                                 "DeleteCascadeTrajectory",
                                 &json!({ "cascadeId": id }),
                             ) {
-                                let benign = super::endpoint::service_unreachable(&extra_err)
+                                let benign = super::endpoint::port_closed(&extra_err)
                                     || extra_err
                                         .downcast_ref::<ConnectRpcHttpError>()
                                         .is_some_and(ConnectRpcHttpError::is_not_found);
@@ -1473,10 +1523,9 @@ fn delete_ordered_ids_in_store(
         deleted_ids.push(id.clone());
     }
 
-    if !unhydrated_db_cleanup_ids.is_empty() && db_path.is_file() {
-        match Connection::open(&db_path) {
+    if !unhydrated_db_cleanup_ids.is_empty() && summaries_db_present_nofollow(&db_path) {
+        match open_summaries_rw(&db_path) {
             Ok(mut conn) => {
-                let _ = conn.busy_timeout(Duration::from_millis(1000));
                 let has_parents = super::has_conversation_parents_table(&conn);
                 let has_fts = has_conversations_fts_table(&conn);
                 for cid in &unhydrated_db_cleanup_ids {
@@ -1487,7 +1536,7 @@ fn delete_ordered_ids_in_store(
                             deleted_ids.retain(|existing| existing != cid);
                             outcome
                                 .residuals
-                                .push(format!("{}: {err}", db_path.display()));
+                                .push(format!("{}: {err:#}", db_path.display()));
                             break;
                         }
                     }
@@ -1499,7 +1548,7 @@ fn delete_ordered_ids_in_store(
                 }
                 outcome
                     .residuals
-                    .push(format!("{}: {err}", db_path.display()));
+                    .push(format!("{}: {err:#}", db_path.display()));
             }
         }
     }
@@ -1507,12 +1556,12 @@ fn delete_ordered_ids_in_store(
     if !shared_cleanup_ids.is_empty() {
         let residuals_before = outcome.residuals.len();
         clean_store_shared_files(store, &shared_cleanup_ids, &mut outcome);
-        if outcome.residuals.len() > residuals_before {
-            deleted_ids.clear();
-        }
         invalidate_proto_cache(store);
         if let Some(other) = paths.other_store_for(&store.home) {
-            clean_other_store_mirror_rows(&other, &shared_cleanup_ids);
+            clean_other_store_mirror_rows(&other, &shared_cleanup_ids, &mut outcome);
+        }
+        if outcome.residuals.len() > residuals_before {
+            deleted_ids.clear();
         }
     }
     outcome.finish();

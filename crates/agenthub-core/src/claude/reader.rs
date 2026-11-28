@@ -93,10 +93,20 @@ impl ReaderState {
         };
         let kind = field(&value, "type");
         let discarded = is_discarded_telemetry_kind(kind);
-        let counts_retained = !discarded && !is_non_retained_snapshot_kind(kind);
+        let counts_retained = if self.parser.summary_only {
+            !discarded && !is_non_retained_snapshot_kind(kind)
+        } else {
+            !discarded
+        };
         if counts_retained {
             ensure!(
                 self.retained_records < 200_000,
+                "Claude 会话记录超出读取上限"
+            );
+        }
+        if !self.parser.summary_only {
+            ensure!(
+                self.parser.parsed.events.len() < 200_000 && !self.parser.detail_limit_exceeded,
                 "Claude 会话记录超出读取上限"
             );
         }
@@ -127,6 +137,10 @@ impl ReaderState {
                 self.records,
                 None,
                 Some((path, line_offset, line.len())),
+            );
+            ensure!(
+                !self.parser.detail_limit_exceeded,
+                "Claude 会话记录超出读取上限"
             );
         }
         self.records += 1;
@@ -169,6 +183,10 @@ impl ReaderState {
                         position,
                         Some(&allowed),
                         Some((path, line_offset, line.len())),
+                    );
+                    ensure!(
+                        !self.parser.detail_limit_exceeded,
+                        "Claude 会话记录超出读取上限"
                     );
                     position += 1;
                 }
@@ -967,6 +985,7 @@ struct Parser {
     context: ReadContext,
     summary_only: bool,
     retain_probe_events: bool,
+    detail_limit_exceeded: bool,
     saw_any_event: bool,
     summary_message_count: usize,
     summary_updated_at: Option<String>,
@@ -1032,6 +1051,10 @@ impl Parser {
             }
         }
         if !self.summary_only {
+            if self.parsed.events.len() >= 200_000 {
+                self.detail_limit_exceeded = true;
+                return;
+            }
             Arc::make_mut(&mut self.parsed.events).push(Arc::new(e));
         }
     }

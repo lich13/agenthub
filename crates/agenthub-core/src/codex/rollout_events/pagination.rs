@@ -95,9 +95,66 @@ fn detail_state_weight(state: &DetailState) -> u64 {
         + crate::history_navigation::weight(&state.timeline)
 }
 
-fn load_legacy_messages(path: &Path) -> Result<Vec<CodexMessage>> {
-    use std::io::BufRead;
-    let mut reader = std::io::BufReader::new(crate::codex::rollout_file::open_reader(path)?);
+#[derive(Debug)]
+struct LegacyMessagesSnapshotChanged;
+
+impl std::fmt::Display for LegacyMessagesSnapshotChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("会话文件已变化，请重试")
+    }
+}
+
+impl std::error::Error for LegacyMessagesSnapshotChanged {}
+
+#[cfg(test)]
+type BeforeLegacyMessagesHook = Box<dyn FnOnce(&Path) + Send>;
+
+#[cfg(test)]
+static TEST_BEFORE_LEGACY_MESSAGES_HOOK: std::sync::Mutex<Option<BeforeLegacyMessagesHook>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) fn set_test_before_legacy_messages_hook(hook: impl FnOnce(&Path) + Send + 'static) {
+    *TEST_BEFORE_LEGACY_MESSAGES_HOOK.lock().unwrap() = Some(Box::new(hook));
+}
+
+fn load_legacy_messages_for_snapshot(
+    path: &Path,
+    info: &crate::jsonl_cache::ReadInfo<'_>,
+) -> Result<Vec<CodexMessage>> {
+    use std::io::{BufRead, Read, Seek, SeekFrom};
+    #[cfg(test)]
+    if let Some(hook) = TEST_BEFORE_LEGACY_MESSAGES_HOOK.lock().unwrap().take() {
+        hook(path);
+    }
+    let compressed = crate::codex::rollout_file::is_compressed(path);
+    let mut file = crate::file_stamp::open_regular_nofollow(path)
+        .map_err(|_| anyhow::Error::new(LegacyMessagesSnapshotChanged))?;
+    let open_stamp = crate::file_stamp::FileStamp::from_open_file(&file)
+        .ok_or_else(|| anyhow::Error::new(LegacyMessagesSnapshotChanged))?;
+    let byte_limit = if compressed {
+        if open_stamp != info.stamp {
+            return Err(LegacyMessagesSnapshotChanged.into());
+        }
+        info.stamp.len
+    } else {
+        if !open_stamp.same_inode(&info.stamp) || open_stamp.len < info.offset {
+            return Err(LegacyMessagesSnapshotChanged.into());
+        }
+        info.offset
+    };
+    if crate::jsonl_cache::file_anchor(&mut file, byte_limit).ok() != Some(info.anchor) {
+        return Err(LegacyMessagesSnapshotChanged.into());
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let bounded_reader: Box<dyn Read + '_> = if compressed {
+        Box::new(zstd::stream::read::Decoder::new(
+            (&mut file).take(byte_limit),
+        )?)
+    } else {
+        Box::new((&mut file).take(byte_limit))
+    };
+    let mut reader = std::io::BufReader::new(bounded_reader);
     let mut line = Vec::new();
     let mut messages = Vec::new();
     let mut turn_context = None;
@@ -116,10 +173,32 @@ fn load_legacy_messages(path: &Path) -> Result<Vec<CodexMessage>> {
             }
         }
     }
+    drop(reader);
+    let after_open = crate::file_stamp::FileStamp::from_open_file(&file)
+        .ok_or_else(|| anyhow::Error::new(LegacyMessagesSnapshotChanged))?;
+    let after_path =
+        crate::file_stamp::FileStamp::read_regular_nofollow(path, "会话必须是普通文件")
+            .map_err(|_| anyhow::Error::new(LegacyMessagesSnapshotChanged))?;
+    let valid_after = if compressed {
+        after_open == info.stamp && after_path == info.stamp
+    } else {
+        after_open.same_inode(&info.stamp)
+            && after_path.same_inode(&info.stamp)
+            && after_open.len >= byte_limit
+            && after_path.len >= byte_limit
+    };
+    if !valid_after
+        || crate::jsonl_cache::file_anchor(&mut file, byte_limit).ok() != Some(info.anchor)
+    {
+        return Err(LegacyMessagesSnapshotChanged.into());
+    }
     Ok(messages)
 }
 
-fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Result<R>) -> Result<R> {
+fn with_detail_state<R>(
+    path: &Path,
+    project: impl FnOnce(&DetailState, &crate::jsonl_cache::ReadInfo<'_>) -> Result<R>,
+) -> Result<R> {
     crate::codex::rollout_file::read_cached(
         &DETAIL_CACHE,
         path,
@@ -194,7 +273,7 @@ fn with_detail_state<R>(path: &Path, project: impl FnOnce(&DetailState) -> Resul
                 state.compacted = compacted;
                 state.blocks = blocks;
             }
-            project(state)
+            project(state, &info)
         },
         detail_state_weight,
     )
@@ -207,7 +286,7 @@ pub(crate) fn visit_search_blocks(
     let Some(path) = summary.rollout_path.as_deref() else {
         return Ok(());
     };
-    with_detail_state(path, |state| {
+    with_detail_state(path, |state, _| {
         for block in &state.blocks {
             if !visit(block) {
                 break;
@@ -241,79 +320,92 @@ pub fn thread_detail_page_from_summary(
             history: None,
         });
     };
-    with_detail_state(&path, |state| {
-        let seeking = before.is_some_and(|cursor| {
-            cursor.starts_with("j:")
-                || cursor.starts_with("n:")
-                || cursor.starts_with("w:")
-                || cursor.starts_with("p:")
-        });
-        let source = if compact && !seeking {
-            &state.compacted
-        } else {
-            &state.blocks
-        };
-        let total_blocks = source.len();
-        let end = history_end(source, before);
-        let start = limit
-            .filter(|n| *n > 0)
-            .map_or(0, |n| end.saturating_sub(n));
-        let (start, end) = crate::history_navigation::seek_window(
-            source.iter().map(|block| block.id.as_str()),
-            before,
-            limit.unwrap_or(120).clamp(1, 500),
-        )?
-        .unwrap_or((start, end));
-        let mut blocks: Vec<_> = source[start..end]
-            .iter()
-            .map(|block| (**block).clone())
-            .collect();
-        for message in blocks
-            .iter_mut()
-            .filter_map(|block| block.user_message.as_mut())
-        {
-            message.refresh_files(summary.cwd.as_deref());
-        }
-        Ok(ThreadDetail {
-            timeline: before.is_none().then(|| state.timeline.clone()),
-            after_cursor: crate::history_navigation::after_cursor(
-                end,
-                total_blocks,
-                source
-                    .get(end.saturating_sub(1))
-                    .map(|block| block.id.as_str()),
-            ),
-            history_subagent_blocks: if limit.is_some() {
-                source
-                    .iter()
-                    .filter(|block| block.subagent.is_some())
-                    .map(|block| (**block).clone())
-                    .collect()
+    for attempt in 0..2 {
+        let res = with_detail_state(&path, |state, info| {
+            let seeking = before.is_some_and(|cursor| {
+                cursor.starts_with("j:")
+                    || cursor.starts_with("n:")
+                    || cursor.starts_with("w:")
+                    || cursor.starts_with("p:")
+            });
+            let source = if compact && !seeking {
+                &state.compacted
             } else {
-                Vec::new()
-            },
-            summary,
-            subagents: None,
-            subagent_updates: Default::default(),
-            messages: if limit.is_none() {
-                load_legacy_messages(&path)?
-            } else {
-                Vec::new()
-            },
-            blocks,
-            raw_event_count: state.raw_event_count,
-            total_blocks,
-            has_more_blocks: start > 0,
-            before_cursor: (start > 0).then(|| {
-                if seeking {
-                    format!("p:{}", source[start].id)
+                &state.blocks
+            };
+            let total_blocks = source.len();
+            let end = history_end(source, before);
+            let start = limit
+                .filter(|n| *n > 0)
+                .map_or(0, |n| end.saturating_sub(n));
+            let (start, end) = crate::history_navigation::seek_window(
+                source.iter().map(|block| block.id.as_str()),
+                before,
+                limit.unwrap_or(120).clamp(1, 500),
+            )?
+            .unwrap_or((start, end));
+            let mut blocks: Vec<_> = source[start..end]
+                .iter()
+                .map(|block| (**block).clone())
+                .collect();
+            for message in blocks
+                .iter_mut()
+                .filter_map(|block| block.user_message.as_mut())
+            {
+                message.refresh_files(summary.cwd.as_deref());
+            }
+            let has_older = start > 0 && start < end;
+            let after_anchor = (start < end)
+                .then(|| {
+                    source
+                        .get(end.saturating_sub(1))
+                        .map(|block| block.id.as_str())
+                })
+                .flatten();
+            Ok(ThreadDetail {
+                timeline: before.is_none().then(|| state.timeline.clone()),
+                after_cursor: crate::history_navigation::after_cursor(
+                    end,
+                    total_blocks,
+                    after_anchor,
+                ),
+                history_subagent_blocks: if limit.is_some() {
+                    source
+                        .iter()
+                        .filter(|block| block.subagent.is_some())
+                        .map(|block| (**block).clone())
+                        .collect()
                 } else {
-                    format!("b:{start}")
-                }
-            }),
-            history: Some(state.journal.metadata(since)),
-        })
-    })
+                    Vec::new()
+                },
+                summary: summary.clone(),
+                subagents: None,
+                subagent_updates: Default::default(),
+                messages: if limit.is_none() {
+                    load_legacy_messages_for_snapshot(&path, info)?
+                } else {
+                    Vec::new()
+                },
+                blocks,
+                raw_event_count: state.raw_event_count,
+                total_blocks,
+                has_more_blocks: has_older,
+                before_cursor: has_older.then(|| {
+                    if seeking {
+                        format!("p:{}", source[start].id)
+                    } else {
+                        format!("b:{start}")
+                    }
+                }),
+                history: Some(state.journal.metadata(since)),
+            })
+        });
+        match res {
+            Err(err) if err.is::<LegacyMessagesSnapshotChanged>() && attempt == 0 => continue,
+            other => return other,
+        }
+    }
+    unreachable!("detail snapshot loop bounded at 2 attempts")
 }
 
 pub(crate) fn valid_history_cursor(cursor: &str) -> bool {
