@@ -126,12 +126,22 @@ pub(crate) async fn run(config: &Config, db: &PanelDb) -> Result<()> {
     run_with_threads(&|| Ok(config.clone()), db, None).await
 }
 
+#[cfg(test)]
 pub(crate) async fn run_with_threads(
     load_config: &super::notification_delivery::ConfigLoader<'_>,
     db: &PanelDb,
     preloaded_sorted: Option<&[(codex::ThreadSummary, CodexTaskIdentity)]>,
 ) -> Result<()> {
-    let config = &db.sync_notification_channels_from_config(load_config)?;
+    run_with_threads_and_fresh_loader(load_config, load_config, db, preloaded_sorted).await
+}
+
+pub(crate) async fn run_with_threads_and_fresh_loader(
+    tick_config: &super::notification_delivery::ConfigLoader<'_>,
+    fresh_config: &super::notification_delivery::ConfigLoader<'_>,
+    db: &PanelDb,
+    preloaded_sorted: Option<&[(codex::ThreadSummary, CodexTaskIdentity)]>,
+) -> Result<()> {
+    let config = &db.sync_notification_channels_from_config(tick_config)?;
     let Some(since) = db
         .current_notification_baseline("probe_feedback_baseline")?
         .filter(|_| enabled(config))
@@ -268,7 +278,7 @@ pub(crate) async fn run_with_threads(
         if feedback.completed_at_ms <= since || !is_fresh(feedback.completed_at_ms) {
             continue;
         }
-        record_probe_event_with_bark(load_config, db, event).await?;
+        record_probe_event_with_bark(fresh_config, db, event).await?;
     }
     if next != previous {
         db.set_setting("probe_feedback_files", &serde_json::to_string(&next)?)?;

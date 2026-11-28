@@ -10,10 +10,14 @@ use agenthub_core::{
 use anyhow::Result;
 use std::time::Duration;
 
-pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<()> {
+pub(crate) async fn run_with_fresh_loader(
+    tick_config: &ConfigLoader<'_>,
+    fresh_config: &ConfigLoader<'_>,
+    db: &PanelDb,
+) -> Result<()> {
     static LAST_IDLE_EVICT: std::sync::Mutex<Option<std::time::Instant>> =
         std::sync::Mutex::new(None);
-    let config = &load_config()?;
+    let config = &tick_config()?;
     let should_evict = LAST_IDLE_EVICT
         .lock()
         .ok()
@@ -62,7 +66,7 @@ pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<
             provider,
             &scan,
             Some(config),
-            load_config,
+            fresh_config,
             provider == NativeProvider::Claude
                 && provider.enabled(config)
                 && super::claude_hook::installed(),
@@ -70,7 +74,7 @@ pub(crate) async fn run(load_config: &ConfigLoader<'_>, db: &PanelDb) -> Result<
         )?;
     }
     db.maintain_notification_history_if_due(config.probe.observability.event_retention_days)?;
-    deliver_pending(load_config, db, None).await
+    deliver_pending(fresh_config, db, None).await
 }
 
 pub(crate) async fn run_provider_hook(

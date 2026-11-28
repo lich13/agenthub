@@ -289,13 +289,16 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         }
 
         let oldCount = rows.count
-        var prefixIdsMatch = canCarry && oldCount > 0 && nextRows.count >= oldCount
-        if prefixIdsMatch {
-            for idx in 0 ..< oldCount where nextRows[idx].id != rows[idx].id {
-                prefixIdsMatch = false
-                break
+        var commonPrefix = 0
+        if canCarry && oldCount > 0 && nextRows.count >= oldCount {
+            while commonPrefix < oldCount && nextRows[commonPrefix].id == rows[commonPrefix].id {
+                commonPrefix += 1
             }
         }
+        let prefixIdsMatch = canCarry
+            && oldCount > 0
+            && nextRows.count >= oldCount
+            && (commonPrefix == oldCount || (oldCount >= 2 && commonPrefix == oldCount - 1))
 
         var nextHeights = Array<CGFloat?>(repeating: nil, count: nextRows.count)
         var nextUserIndices: [Int] = []
@@ -303,7 +306,9 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         var modifiedPrefix = IndexSet()
 
         for (idx, r) in nextRows.enumerated() {
-            if canCarry, let prev = previousById[r.id], prev.item == r {
+            if prefixIdsMatch, idx >= commonPrefix, idx < oldCount {
+                modifiedPrefix.insert(idx)
+            } else if canCarry, let prev = previousById[r.id], prev.item == r {
                 nextHeights[idx] = prev.height
             } else if prefixIdsMatch, idx < oldCount {
                 modifiedPrefix.insert(idx)
@@ -890,6 +895,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                 hasTimelineRail: hasTimelineRail,
                 isSubagent: isSubagent
             )
+            tableView.tile()
             tableView.enumerateAvailableRowViews { rowView, _ in
                 if let cell = rowView.view(atColumn: 0) as? ConversationRowCellView {
                     cell.updateHorizontalInset(insets.leading)
@@ -1752,7 +1758,7 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
         }
         let font = DesignFonts.nsMonoFont(size: 13)
         var maxAsciiCols = 0
-        var nonAsciiCandidates: [Substring] = []
+        var nonAsciiCandidates: [(estCols: Int, line: Substring)] = []
 
         for line in normalized.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) {
             if line.isEmpty { continue }
@@ -1773,18 +1779,28 @@ final class ConversationTableCoordinator: NSObject, NSTableViewDataSource, NSTab
                     maxAsciiCols = cols
                 }
             } else {
+                var estCols = 0
+                for scalar in line.unicodeScalars {
+                    if scalar.value == 0x09 {
+                        estCols += 4
+                    } else if scalar.value < 0x80 {
+                        estCols += 1
+                    } else {
+                        estCols += 2
+                    }
+                }
                 if nonAsciiCandidates.count < 4 {
-                    nonAsciiCandidates.append(line)
+                    nonAsciiCandidates.append((estCols, line))
                 } else if let minIdx = nonAsciiCandidates.indices.min(by: {
-                    nonAsciiCandidates[$0].utf8.count < nonAsciiCandidates[$1].utf8.count
-                }), line.utf8.count > nonAsciiCandidates[minIdx].utf8.count {
-                    nonAsciiCandidates[minIdx] = line
+                    nonAsciiCandidates[$0].estCols < nonAsciiCandidates[$1].estCols
+                }), estCols > nonAsciiCandidates[minIdx].estCols {
+                    nonAsciiCandidates[minIdx] = (estCols, line)
                 }
             }
         }
 
         var maxLineW = CGFloat(maxAsciiCols) * cachedMono13AsciiAdvance
-        for candidate in nonAsciiCandidates {
+        for (_, candidate) in nonAsciiCandidates {
             let attr = NSAttributedString(string: String(candidate), attributes: [.font: font])
             let w = attr.size().width
             if w > maxLineW {

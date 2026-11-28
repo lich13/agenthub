@@ -1315,15 +1315,21 @@ async fn run_probe_error_monitor_once(
             safe_probe_monitor_error(&error.to_string())
         );
     }
-    if let Err(error) =
-        question_monitor::run_with_threads(load_config, db, shared_codex_threads.as_deref()).await
+    if let Err(error) = question_monitor::run_with_threads_and_fresh_loader(
+        &tick_loader,
+        load_config,
+        db,
+        shared_codex_threads.as_deref(),
+    )
+    .await
     {
         tracing::warn!(
             "Codex feedback monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())
         );
     }
-    if let Err(error) = provider_monitor::run(load_config, db).await {
+    if let Err(error) = provider_monitor::run_with_fresh_loader(&tick_loader, load_config, db).await
+    {
         tracing::warn!(
             "native provider notification monitor failed: {}",
             safe_probe_monitor_error(&error.to_string())
@@ -1492,6 +1498,9 @@ async fn deliver_probe_error_incidents(
     db: &PanelDb,
     incidents: &[ProbeErrorIncident],
 ) -> Result<usize> {
+    if incidents.is_empty() {
+        return Ok(0);
+    }
     let config = &load_config()?;
     let mut delivered = 0usize;
     for incident in incidents {

@@ -242,8 +242,9 @@ pub fn rename_session(
     let existing = session_summary_without_storage(paths, key)?;
     let (store, endpoint) = resolve_mutation_store_and_endpoint(paths, key, false)?;
 
-    if let Some((rpc, _)) = endpoint {
-        connect_rpc_post(
+    let applied_via_live = if let Some((rpc, ref live_val)) = endpoint {
+        let in_live = live_val["trajectorySummaries"].get(key).is_some();
+        match connect_rpc_post(
             rpc.port,
             &rpc.token,
             "UpdateConversationAnnotations",
@@ -252,8 +253,23 @@ pub fn rename_session(
                 "annotations": { "title": title },
                 "mergeAnnotations": true
             }),
-        )?;
+        ) {
+            Ok(_) => true,
+            Err(err)
+                if !in_live
+                    && err
+                        .downcast_ref::<ConnectRpcHttpError>()
+                        .is_some_and(ConnectRpcHttpError::is_not_found) =>
+            {
+                false
+            }
+            Err(err) => return Err(err),
+        }
     } else {
+        false
+    };
+
+    if !applied_via_live {
         ensure!(
             !is_session_busy_status(&existing.status),
             "{}",
@@ -308,8 +324,9 @@ pub fn set_archived(
     let existing = session_summary_without_storage(paths, key)?;
     let (store, endpoint) = resolve_mutation_store_and_endpoint(paths, key, true)?;
 
-    if let Some((rpc, _)) = endpoint {
-        connect_rpc_post(
+    let applied_via_live = if let Some((rpc, ref live_val)) = endpoint {
+        let in_live = live_val["trajectorySummaries"].get(key).is_some();
+        match connect_rpc_post(
             rpc.port,
             &rpc.token,
             "UpdateConversationAnnotations",
@@ -318,16 +335,33 @@ pub fn set_archived(
                 "annotations": { "archived": archived },
                 "mergeAnnotations": true
             }),
-        )?;
-        if archived {
-            let _ = connect_rpc_post(
-                rpc.port,
-                &rpc.token,
-                "ForceStopCascadeTree",
-                &json!({ "conversationId": key }),
-            );
+        ) {
+            Ok(_) => {
+                if archived {
+                    let _ = connect_rpc_post(
+                        rpc.port,
+                        &rpc.token,
+                        "ForceStopCascadeTree",
+                        &json!({ "conversationId": key }),
+                    );
+                }
+                true
+            }
+            Err(err)
+                if !in_live
+                    && err
+                        .downcast_ref::<ConnectRpcHttpError>()
+                        .is_some_and(ConnectRpcHttpError::is_not_found) =>
+            {
+                false
+            }
+            Err(err) => return Err(err),
         }
     } else {
+        false
+    };
+
+    if !applied_via_live {
         let verb = if archived { "归档" } else { "恢复" };
         ensure!(
             !is_session_busy_status(&existing.status),
@@ -1213,6 +1247,7 @@ fn delete_ordered_ids_in_store(
     paths: &AntigravityPaths,
     store: &AntigravityPaths,
     live_rpc: Option<&LiveRpc>,
+    extra_live_rpcs: &[LiveRpc],
     all_live: Option<&Value>,
     ordered_ids: &[String],
 ) -> Result<(Vec<String>, Vec<String>)> {
@@ -1286,6 +1321,33 @@ fn delete_ordered_ids_in_store(
             ) {
                 Ok(_) => {
                     if !in_live {
+                        let mut secondary_err = None;
+                        for extra in extra_live_rpcs {
+                            if let Err(err) = connect_rpc_post(
+                                extra.port,
+                                &extra.token,
+                                "DeleteCascadeTrajectory",
+                                &json!({ "cascadeId": id }),
+                            ) {
+                                let benign = super::endpoint::service_unreachable(&err)
+                                    || err
+                                        .downcast_ref::<ConnectRpcHttpError>()
+                                        .is_some_and(ConnectRpcHttpError::is_not_found);
+                                if !benign {
+                                    secondary_err = Some(err);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(err) = secondary_err {
+                            outcome.residuals.push(format!("{id}: {err}"));
+                            record_remaining_antigravity_residuals(
+                                store,
+                                &ordered_ids[idx..],
+                                &mut outcome,
+                            );
+                            break;
+                        }
                         match probe_presence_locked_shared(store, id) {
                             Ok(false) => unhydrated_db_cleanup_ids.push(id.clone()),
                             Ok(true) => {
@@ -1318,6 +1380,33 @@ fn delete_ordered_ids_in_store(
                         .downcast_ref::<ConnectRpcHttpError>()
                         .is_some_and(ConnectRpcHttpError::is_not_found);
                     if !in_live && is_not_found {
+                        let mut secondary_err = None;
+                        for extra in extra_live_rpcs {
+                            if let Err(extra_err) = connect_rpc_post(
+                                extra.port,
+                                &extra.token,
+                                "DeleteCascadeTrajectory",
+                                &json!({ "cascadeId": id }),
+                            ) {
+                                let benign = super::endpoint::service_unreachable(&extra_err)
+                                    || extra_err
+                                        .downcast_ref::<ConnectRpcHttpError>()
+                                        .is_some_and(ConnectRpcHttpError::is_not_found);
+                                if !benign {
+                                    secondary_err = Some(extra_err);
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(extra_err) = secondary_err {
+                            outcome.residuals.push(format!("{id}: {extra_err}"));
+                            record_remaining_antigravity_residuals(
+                                store,
+                                &ordered_ids[idx..],
+                                &mut outcome,
+                            );
+                            break;
+                        }
                         match probe_presence_locked_shared(store, id) {
                             Ok(false) => unhydrated_db_cleanup_ids.push(id.clone()),
                             Ok(true) => {
@@ -1555,10 +1644,21 @@ pub fn execute_batch_item(
             }
             ordered_ids.push(key.to_owned());
 
+            let extra_live_rpcs: Vec<LiveRpc> = match (&live_set, &live_rpc) {
+                (Some(set), Some(primary_rpc)) => set
+                    .instances
+                    .iter()
+                    .map(|(r, _)| r)
+                    .filter(|r| r.port != primary_rpc.port)
+                    .cloned()
+                    .collect(),
+                _ => Vec::new(),
+            };
             let (deleted_ids, residuals) = delete_ordered_ids_in_store(
                 paths,
                 &store,
                 live_rpc.as_ref(),
+                &extra_live_rpcs,
                 owner_live.as_ref(),
                 &ordered_ids,
             )?;
@@ -2345,10 +2445,24 @@ pub fn execute_unified_cleanup_targets(
                 ));
                 continue;
             }
+            let orphan_extra_rpcs: Vec<LiveRpc> = if orphan.is_cli_store {
+                Vec::new()
+            } else if let Some((ref primary_rpc, _)) = orphan_owner {
+                live_set
+                    .instances
+                    .iter()
+                    .map(|(r, _)| r)
+                    .filter(|r| r.port != primary_rpc.port)
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
             let step = match delete_ordered_ids_in_store(
                 paths,
                 &store,
                 orphan_owner.as_ref().map(|(r, _)| r),
+                &orphan_extra_rpcs,
                 orphan_owner.as_ref().map(|(_, v)| v),
                 &ordered_ids,
             ) {

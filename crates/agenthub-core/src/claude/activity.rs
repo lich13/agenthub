@@ -603,6 +603,23 @@ impl Snapshot {
                 result.native_status_updated_at =
                     verified[0].1.status_updated_at.or(verified[0].1.updated_at);
             }
+            if explicit
+                && p.role == ProcessRole::Session
+                && registrations.is_empty()
+                && (cwd_matches || open_file)
+            {
+                if p.started_ms
+                    .zip(parsed.last_turn_at)
+                    .is_some_and(|(start, turn)| start <= turn)
+                {
+                    result.ownership = Ownership::Open;
+                }
+                if open_file {
+                    result.reason("open_file");
+                }
+                result.reason("resume_owner");
+                continue;
+            }
             if open_file || (owns && !conflicting_id) {
                 result.ownership = Ownership::Open;
                 result.reason(if open_file {
@@ -625,17 +642,6 @@ impl Snapshot {
             }
             if verified.len() > 1 {
                 result.reason("evidence_conflict");
-            }
-            if cwd_matches && explicit && p.role == ProcessRole::Session && registrations.is_empty()
-            {
-                if p.started_ms
-                    .zip(parsed.last_turn_at)
-                    .is_some_and(|(start, turn)| start <= turn)
-                {
-                    result.ownership = Ownership::Open;
-                }
-                result.reason("resume_owner");
-                continue;
             }
             if !registrations.is_empty() {
                 result.reason("registry_unverified");
@@ -864,6 +870,7 @@ fn collect() -> Option<Vec<Process>> {
     if processes.is_empty() {
         return Some(processes);
     }
+    #[cfg(not(target_os = "linux"))]
     let mut missing_cwd_pids = Vec::new();
     for p in &mut processes {
         p.cwd = crate::platform::resolve_kernel_cwd(p.pid);
@@ -871,6 +878,7 @@ fn collect() -> Option<Vec<Process>> {
             p.files = files;
             p.inodes = inodes;
         }
+        #[cfg(not(target_os = "linux"))]
         if p.cwd.is_none() {
             missing_cwd_pids.push(p.pid);
         }
@@ -1405,6 +1413,33 @@ mod tests {
         assert_eq!(idle_assessment.ownership, Ownership::Unknown);
         assert!(idle_assessment.reasons.contains("resume_owner"));
         assert!(!idle_assessment.reasons.contains("registry_unverified"));
+        // Even if `--resume` holds the main JSONL fd open while sitting idle at
+        // the prompt (`started_ms > last_turn_at`), it blocks rename without
+        // claiming active turn execution (`Ownership::Open`).
+        let idle_resume_open_fd = Snapshot::new(
+            Some(vec![Process {
+                started_ms: Some(3000),
+                files: HashSet::from([file.to_path_buf()]),
+                ..owner.clone()
+            }]),
+            vec![],
+        );
+        let idle_fd_assessment = idle_resume_open_fd.assess(&p, file);
+        assert_eq!(idle_fd_assessment.ownership, Ownership::Unknown);
+        assert!(idle_fd_assessment.reasons.contains("open_file"));
+        assert!(idle_fd_assessment.reasons.contains("resume_owner"));
+        // Once a turn executes after `--resume` (`started_ms <= last_turn_at`),
+        // open fd proves `Ownership::Open` even if `cwd` moved into a subdirectory.
+        let active_resume_open_fd = Snapshot::new(
+            Some(vec![Process {
+                started_ms: Some(1500),
+                cwd: Some(PathBuf::from("/tmp/example/subdir")),
+                files: HashSet::from([file.to_path_buf()]),
+                ..owner.clone()
+            }]),
+            vec![],
+        );
+        assert_eq!(active_resume_open_fd.ownership(&p, file), Ownership::Open);
         assert_eq!(
             Snapshot::new(
                 Some(vec![Process {

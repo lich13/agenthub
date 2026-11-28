@@ -6526,6 +6526,181 @@ mod tests {
             set.resolve_mutation_owner([id_a, id_b]).is_err(),
             "root + descendant spanning two live instances must reject mutation"
         );
+        assert_eq!(
+            set.resolve_mutation_owner(["44444444-4444-4444-8444-dddddddddddd"])
+                .unwrap()
+                .unwrap()
+                .0
+                .port,
+            51001,
+            "unhydrated session with >=2 live desktop instances must still route via live RPC first"
+        );
+
+        // 5. Real multi-server loopback HTTP test (`FixedMany`: 2 live servers + 1 dead port + 1 unhydrated cold session).
+        let multi_root = root.join("multi_instance");
+        fs::create_dir_all(multi_root.join("conversations")).unwrap();
+        let id_cold = "55555555-5555-4555-8555-eeeeeeeeeeee";
+        fs::write(
+            multi_root.join("conversations").join(format!("{id_a}.pb")),
+            b"pb-a",
+        )
+        .unwrap();
+        fs::write(
+            multi_root.join("conversations").join(format!("{id_b}.pb")),
+            b"pb-b",
+        )
+        .unwrap();
+        fs::write(
+            multi_root
+                .join("conversations")
+                .join(format!("{id_cold}.pb")),
+            b"pb-cold",
+        )
+        .unwrap();
+        {
+            let conn = Connection::open(multi_root.join("conversation_summaries.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, status TEXT, raw_summary BLOB);",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversation_summaries VALUES (?1, 'Cold Session', '2026-11-28T01:00:00Z', 'idle', NULL)",
+                params![id_cold],
+            )
+            .unwrap();
+        }
+        let spawn_mock_ls = |owned_id: String, initial_title: String| {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let state = Arc::new(std::sync::Mutex::new((
+                initial_title,
+                Vec::<String>::new(),
+                false,
+            )));
+            let state_bg = state.clone();
+            let handle = std::thread::spawn(move || {
+                while let Ok((mut stream, _)) = listener.accept() {
+                    if state_bg.lock().unwrap().2 {
+                        break;
+                    }
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut req_line = String::new();
+                    if reader.read_line(&mut req_line).unwrap_or(0) == 0 {
+                        continue;
+                    }
+                    let mut content_len = 0usize;
+                    loop {
+                        let mut hdr = String::new();
+                        if reader.read_line(&mut hdr).unwrap_or(0) == 0 || hdr == "\r\n" {
+                            break;
+                        }
+                        if let Some((k, v)) = hdr.split_once(':') {
+                            if k.trim().eq_ignore_ascii_case("content-length") {
+                                content_len = v.trim().parse().unwrap_or(0);
+                            }
+                        }
+                    }
+                    let mut body = vec![0u8; content_len];
+                    let _ = reader.read_exact(&mut body);
+                    let json_body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    let mut g = state_bg.lock().unwrap();
+                    if g.2 {
+                        break;
+                    }
+                    let (status_hdr, payload) = if req_line.contains("GetAllCascadeTrajectories") {
+                        (
+                            "200 OK",
+                            json!({
+                                "trajectorySummaries": {
+                                    owned_id.clone(): {
+                                        "summary": g.0.clone(),
+                                        "status": "CASCADE_RUN_STATUS_IDLE",
+                                        "lastModifiedTime": "2026-11-28T02:00:00Z"
+                                    }
+                                }
+                            }),
+                        )
+                    } else if req_line.contains("UpdateConversationAnnotations") {
+                        let target = json_body["cascadeIds"][0].as_str().unwrap_or("");
+                        if target == owned_id {
+                            if let Some(t) = json_body["annotations"]["title"].as_str() {
+                                g.0 = t.to_owned();
+                            }
+                            ("200 OK", json!({}))
+                        } else {
+                            (
+                                "404 Not Found",
+                                json!({"code": "not_found", "message": "cascade not found"}),
+                            )
+                        }
+                    } else if req_line.contains("DeleteCascadeTrajectory") {
+                        let target = json_body["cascadeId"].as_str().unwrap_or("").to_owned();
+                        g.1.push(target.clone());
+                        if target == owned_id {
+                            ("200 OK", json!({}))
+                        } else {
+                            (
+                                "404 Not Found",
+                                json!({"code": "not_found", "message": "cascade not found"}),
+                            )
+                        }
+                    } else {
+                        ("200 OK", json!({}))
+                    };
+                    drop(g);
+                    let out = serde_json::to_vec(&payload).unwrap();
+                    let resp = format!(
+                        "HTTP/1.1 {status_hdr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        out.len()
+                    );
+                    let _ = stream.write_all(resp.as_bytes());
+                    let _ = stream.write_all(&out);
+                }
+            });
+            (port, state, handle)
+        };
+        let (port_a, state_a, handle_a) = spawn_mock_ls(id_a.into(), "Live A".into());
+        let (port_b, state_b, handle_b) = spawn_mock_ls(id_b.into(), "Live B".into());
+        let dead_port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let multi_paths = AntigravityPaths::with_fixed_rpcs(
+            multi_root.clone(),
+            vec![
+                (port_a, "tok_a".into()),
+                (port_b, "tok_b".into()),
+                (dead_port, "tok_dead".into()),
+            ],
+        );
+        let merged_list = list_sessions(&multi_paths, &ProviderListRequest::default()).unwrap();
+        assert_eq!(merged_list.len(), 3);
+        let renamed_b = rename_session(&multi_paths, id_b, "Renamed B").unwrap();
+        assert_eq!(renamed_b.title, "Renamed B");
+        assert_eq!(state_a.lock().unwrap().0, "Live A");
+        assert_eq!(state_b.lock().unwrap().0, "Renamed B");
+
+        let renamed_cold = rename_session(&multi_paths, id_cold, "Renamed Cold").unwrap();
+        assert_eq!(renamed_cold.title, "Renamed Cold");
+
+        let del_cold =
+            execute_batch_item(&multi_paths, id_cold, SessionOperation::Delete, &[], true).unwrap();
+        assert_eq!(del_cold.status, "succeeded");
+        assert!(del_cold.residuals.is_empty());
+        assert_eq!(del_cold.deleted_ids, vec![id_cold.to_string()]);
+        assert!(!multi_root
+            .join("conversations")
+            .join(format!("{id_cold}.pb"))
+            .exists());
+        assert!(state_a.lock().unwrap().1.iter().any(|id| id == id_cold));
+        assert!(state_b.lock().unwrap().1.iter().any(|id| id == id_cold));
+
+        state_a.lock().unwrap().2 = true;
+        state_b.lock().unwrap().2 = true;
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port_a));
+        let _ = std::net::TcpStream::connect(("127.0.0.1", port_b));
+        let _ = handle_a.join();
+        let _ = handle_b.join();
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -1617,20 +1617,14 @@ mod tests {
         resolved_one.claude.projects = root_a.join("custom-claude/projects");
         resolved_one.ag =
             crate::antigravity::sessions::AntigravityPaths::offline(root_a.join("custom-ag"));
-        #[cfg(target_os = "macos")]
-        {
-            resolved_one.dsh.home = root_a.join("custom-dsh");
-        }
+        resolved_one.dsh.home = root_a.join("custom-dsh");
         let mut resolved_two = super::ResolvedLiveProviderPaths::for_config(&auto_cfg).unwrap();
         resolved_two.sandbox_root = None;
         resolved_two.grok.home = root_b.join("custom-grok-2");
         resolved_two.claude.projects = root_b.join("custom-claude/projects");
         resolved_two.ag =
             crate::antigravity::sessions::AntigravityPaths::offline(root_b.join("custom-ag"));
-        #[cfg(target_os = "macos")]
-        {
-            resolved_two.dsh.home = root_b.join("custom-dsh");
-        }
+        resolved_two.dsh.home = root_b.join("custom-dsh");
         assert_ne!(
             resolved_one.cache_key(&auto_cfg.codex.home, 20),
             resolved_two.cache_key(&auto_cfg.codex.home, 20)

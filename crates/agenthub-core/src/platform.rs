@@ -297,9 +297,13 @@ pub(crate) fn collect_kernel_open_vnodes(pid: u32) -> Option<KernelOpenVnodes> {
         let mut inodes = std::collections::HashSet::new();
         for entry in entries.flatten().take(4096) {
             let fd_path = entry.path();
-            if let Ok(meta) = std::fs::metadata(&fd_path) {
-                inodes.insert((meta.dev(), meta.ino()));
+            let Ok(meta) = std::fs::metadata(&fd_path) else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
             }
+            inodes.insert((meta.dev(), meta.ino()));
             if let Ok(target) = std::fs::read_link(&fd_path) {
                 if target.is_absolute() {
                     paths.insert(target);
@@ -372,6 +376,13 @@ pub(crate) fn collect_kernel_open_vnodes(pid: u32) -> Option<KernelOpenVnodes> {
     }
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn linux_proc_stat_is_dead_or_zombie(stat: &str) -> bool {
+    stat.rsplit_once(')')
+        .map(|(_, rest)| rest.trim_start())
+        .is_some_and(|after_comm| after_comm.starts_with(['Z', 'X', 'x']))
+}
+
 pub fn pid_is_alive(pid: u32) -> bool {
     if pid <= 1 || pid > i32::MAX as u32 {
         return false;
@@ -384,10 +395,8 @@ pub fn pid_is_alive(pid: u32) -> bool {
         #[cfg(target_os = "linux")]
         if ok {
             if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-                if let Some(after_comm) = stat.rsplit_once(')').map(|(_, rest)| rest.trim_start()) {
-                    if after_comm.starts_with('Z') {
-                        return false;
-                    }
+                if linux_proc_stat_is_dead_or_zombie(&stat) {
+                    return false;
                 }
             }
         }
@@ -472,6 +481,22 @@ mod tests {
             decode_lsof_path(escaped),
             PathBuf::from("/Users/example/Documents/程序开发/AgentHub")
         );
+    }
+
+    #[test]
+    fn linux_proc_stat_parser_handles_parentheses_and_spaces_in_comm() {
+        assert!(linux_proc_stat_is_dead_or_zombie(
+            "4242 (claude (worker)) Z 1 4242 4242 0 -1 4194560 0 0 0 0"
+        ));
+        assert!(linux_proc_stat_is_dead_or_zombie(
+            "4242 (codex helper) X 1 4242 4242 0 -1"
+        ));
+        assert!(!linux_proc_stat_is_dead_or_zombie(
+            "4242 (claude (worker)) S 1 4242 4242 0 -1 4194560 0 0 0 0"
+        ));
+        assert!(!linux_proc_stat_is_dead_or_zombie(
+            "4242 (Z-worker) R 1 4242 4242 0 -1"
+        ));
     }
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]

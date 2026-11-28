@@ -422,7 +422,16 @@ fn collect_live_daemon_hub_candidates(
 pub fn discover_host_endpoints() -> Vec<DiscoveredAntigravityEndpoint> {
     use std::os::unix::fs::MetadataExt;
     // SAFETY: Reading the process UID takes no pointers or arguments.
-    let uid = unsafe { libc::getuid() };
+    let process_uid = unsafe { libc::getuid() };
+    let uid = if process_uid == 0 {
+        std::env::var_os("ANTIGRAVITY_HOME")
+            .filter(|v| !v.is_empty())
+            .and_then(|p| fs::symlink_metadata(p).ok())
+            .map(|m| m.uid())
+            .unwrap_or(process_uid)
+    } else {
+        process_uid
+    };
     let daemon_dirs = candidate_daemon_dirs();
     let mut seen_pids = BTreeSet::new();
     let mut candidates = Vec::new();
@@ -947,11 +956,7 @@ impl LiveEndpointSet {
         if let Some(&idx) = unique.iter().next() {
             return Ok(self.instances.get(idx).cloned());
         }
-        if self.instances.len() == 1 {
-            Ok(self.instances.first().cloned())
-        } else {
-            Ok(None)
-        }
+        Ok(self.instances.first().cloned())
     }
 }
 

@@ -425,6 +425,73 @@ final class VisualSceneCaptureTests: XCTestCase {
         // Matching revision updates immediately
         hub.applyStageSummaryWriteback(provider: .claudeCode, updated: claudeEntry, revision: store.revision)
         XCTAssertEqual(hub.activeItems.first(where: { $0.provider == .claudeCode })?.item.statusChipBadge, SessionStatusLabels.replyNeeded)
+
+        // 4. Streaming tail split (.assistant -> .executionGroup + .assistant + .user) keeps row heights & anchors synced
+        let coord = ConversationTableCoordinator(store: store)
+        coord.sessionScopeKey = "test:tail-split"
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 1160, height: 720))
+        let table = NSTableView(frame: scroll.bounds)
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("ConversationRowCell"))
+        col.width = 1160
+        table.addTableColumn(col)
+        table.headerView = nil
+        table.delegate = coord
+        table.dataSource = coord
+        scroll.documentView = table
+        coord.scrollView = scroll
+        coord.tableView = table
+        coord.column = col
+
+        let initialRows: [ConversationRowItem] = [
+            ConversationRowItem(id: "u1", timelineId: "u1", kind: .user(message: nil, rawText: "First prompt", attachmentsAsNamesOnly: false)),
+            ConversationRowItem(id: "a1", timelineId: "a1", kind: .assistant(markdown: "First reply", foldInstructions: false)),
+            ConversationRowItem(id: "u2", timelineId: "u2", kind: .user(message: nil, rawText: "Second prompt", attachmentsAsNamesOnly: false)),
+            ConversationRowItem(id: "a2-stream", timelineId: "a2-stream", kind: .assistant(markdown: "Streaming commentary...", foldInstructions: false)),
+        ]
+        coord.updateRowsPreservingAnchor(initialRows, forceScrollToBottom: true)
+        XCTAssertEqual(table.numberOfRows, 4)
+
+        let splitCmd = ExecutionCommand(
+            id: "cmd-1",
+            sourceIds: ["cmd-1"],
+            title: "bash",
+            preview: "cargo test",
+            status: .completed,
+            sections: [.init(label: "结果", text: "ok")]
+        )
+        let splitGrp = ExecutionGroup(
+            id: "exec-2",
+            mergedIds: [],
+            commands: [splitCmd],
+            kind: "command",
+            provider: "Codex",
+            running: false,
+            recordedOnly: false,
+            failedCount: 0
+        )
+        let splitRows: [ConversationRowItem] = [
+            initialRows[0],
+            initialRows[1],
+            initialRows[2],
+            ConversationRowItem(
+                id: "exec-2",
+                timelineId: "exec-2",
+                kind: .executionGroup(splitGrp)
+            ),
+            ConversationRowItem(id: "a2-final", timelineId: "a2-final", kind: .assistant(markdown: "Final answer.", foldInstructions: false)),
+            ConversationRowItem(id: "u3", timelineId: "u3", kind: .user(message: nil, rawText: "Follow-up prompt", attachmentsAsNamesOnly: false)),
+        ]
+        coord.updateRowsPreservingAnchor(splitRows, preferAutoFollowBottom: true)
+        XCTAssertEqual(table.numberOfRows, 6)
+        XCTAssertEqual(coord.rows.map(\.id), ["u1", "a1", "u2", "exec-2", "a2-final", "u3"])
+
+        // 5. Mixed ASCII+CJK wide code line is never evicted by narrower 3-byte-per-char pure CJK lines
+        let pureCjkLine = String(repeating: "汉", count: 32) // 96 UTF-8 bytes, ~64 cols
+        let wideMixedLine = String(repeating: "x", count: 82) + " // 中文" // 91 UTF-8 bytes, ~89 cols
+        let sampleCode = ([pureCjkLine, pureCjkLine, pureCjkLine, pureCjkLine, wideMixedLine]).joined(separator: "\n")
+        let mixedDocW = ConversationTableCoordinator.measureCodeDocumentWidth(code: sampleCode, minWidth: 100)
+        let soloWideW = ConversationTableCoordinator.measureCodeDocumentWidth(code: wideMixedLine, minWidth: 100)
+        XCTAssertEqual(mixedDocW, soloWideW, "Wide mixed ASCII+CJK line must be sampled even when shorter in UTF-8 bytes than pure-CJK lines")
     }
 
     @MainActor
@@ -486,7 +553,9 @@ final class VisualSceneCaptureTests: XCTestCase {
             narrowWin.orderBack(nil)
             try await pumpMainRunLoop(ms: 350)
             let rendered = collectAllRenderedStrings(in: narrowHost)
-            XCTAssertTrue(rendered.contains(where: { $0.contains("owner/repo") || $0.contains("example") || $0.contains("Bark") || !$0.isEmpty }))
+            XCTAssertTrue(rendered.contains(where: { $0.contains("owner/repo") }), "1000pt narrow Probe must mount CI repository filter field")
+            XCTAssertTrue(rendered.contains(where: { $0.contains("example.invalid") }), "1000pt narrow Probe must mount Bark URL field")
+            XCTAssertTrue(rendered.contains(where: { $0.contains("Bark") }), "1000pt narrow Probe must mount Bark Device Key placeholder")
             if let rep = try writeOrCacheDisplay(window: narrowWin, host: narrowHost, outDir: outDir, fileName: fileName) {
                 XCTAssertGreaterThan(
                     countForegroundContrastPixels(in: rep, logicalSize: narrowSize, topLeftRect: NSRect(x: 210, y: 16, width: 760, height: 1240), bg: probePalette.background),

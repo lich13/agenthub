@@ -1199,3 +1199,72 @@ fn compressed_source_replacement_during_read_is_rejected() {
         vec![1]
     );
 }
+
+#[test]
+fn concurrent_tail_append_during_read_succeeds_while_inplace_prefix_rewrite_plus_growth_is_rejected(
+) {
+    use std::io::Seek;
+    let fixture = Fixture::new();
+    let mut initial_bytes = Vec::new();
+    initial_bytes.extend_from_slice(b"{\"id\":1}\n");
+    for i in 2..=2000u64 {
+        initial_bytes.extend_from_slice(
+            format!("{{\"id\":{i},\"pad\":\"0123456789abcdef0123456789abcdef\"}}\n").as_bytes(),
+        );
+    }
+    let path = fixture.file("streaming.jsonl", &initial_bytes);
+    let cache = JsonlCache::<Vec<u64>>::new(CACHE_BYTES);
+    let count = AtomicUsize::new(0);
+
+    // 1. Pure tail append while BufReader is mid-stream succeeds without discarding snapshot.
+    let mut appended_once = false;
+    let first = cache
+        .read(
+            &path,
+            |_| Ok(0),
+            false,
+            |state, line, _, _| {
+                if !appended_once {
+                    appended_once = true;
+                    append(&path, b"{\"id\":2001}\n");
+                }
+                consume(state, line, &count)
+            },
+            |state, info| view(state, info),
+            |_| 0,
+        )
+        .unwrap();
+    assert_eq!(first.lines, 2000);
+    let caught_up = read(&cache, &path, &count).unwrap();
+    assert_eq!(caught_up.lines, 2001);
+    assert_eq!(caught_up.ids.last().copied(), Some(2001));
+
+    // 2. Cold read where writer overwrites prefix in-place AND appends tail bytes must fail.
+    let cold_cache = JsonlCache::<Vec<u64>>::new(CACHE_BYTES);
+    let mut mutated_once = false;
+    let poisoned = cold_cache.read(
+        &path,
+        |_| Ok(0),
+        false,
+        |state, line, _, _| {
+            if !mutated_once {
+                mutated_once = true;
+                let mut f = OpenOptions::new().write(true).open(&path).unwrap();
+                f.seek(std::io::SeekFrom::Start(0)).unwrap();
+                f.write_all(b"{\"id\":9}\n").unwrap();
+                f.seek(std::io::SeekFrom::End(0)).unwrap();
+                f.write_all(b"{\"id\":2002}\n").unwrap();
+            }
+            consume(state, line, &count)
+        },
+        |state, info| view(state, info),
+        |_| 0,
+    );
+    assert!(
+        poisoned.is_err(),
+        "in-place prefix rewrite masked by tail growth must be rejected"
+    );
+    let clean = read(&cold_cache, &path, &count).unwrap();
+    assert_eq!(clean.ids.first().copied(), Some(9));
+    assert_eq!(clean.ids.last().copied(), Some(2002));
+}

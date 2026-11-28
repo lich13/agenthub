@@ -289,12 +289,18 @@ impl<S: Default> JsonlCache<S> {
                 .context("无法读取会话文件")?;
             let changed = cached.as_ref().is_none_or(|value| value.stamp != before);
             if changed {
-                let initial_offset = start(before.len)?.min(before.len);
                 let mut file = open_regular_nofollow(path)?;
+                let open_stamp =
+                    FileStamp::from_open_file(&file).context("会话文件身份已变化，请重试")?;
                 ensure!(
-                    FileStamp::from_open_file(&file) == Some(before),
+                    open_stamp == before || (!compressed && before.grew_into(&open_stamp)),
                     "会话文件身份已变化，请重试"
                 );
+                let before = open_stamp;
+                let initial_offset = start(before.len)?.min(before.len);
+                let pre_read_anchor = (!compressed)
+                    .then(|| anchor(&mut file, before.len))
+                    .transpose()?;
                 let mut separator = 0;
                 let append = cached.as_ref().is_some_and(|value| {
                     !compressed
@@ -476,6 +482,7 @@ impl<S: Default> JsonlCache<S> {
                         || (!compressed
                             && after.same_inode(&before)
                             && after.len > before.len
+                            && anchor(&mut file, before.len).ok() == pre_read_anchor
                             && anchor(&mut file, snapshot.offset).ok() == Some(snapshot.anchor)),
                     "会话文件已变化，请重试"
                 );

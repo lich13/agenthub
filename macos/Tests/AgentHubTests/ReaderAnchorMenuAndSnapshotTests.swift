@@ -96,11 +96,6 @@ final class ReaderAnchorMenuAndSnapshotTests: XCTestCase {
 
     @MainActor
     func testProviderSummaryMapsArchiveDeleteBlockReasonsAndReadDiagnostics() {
-        let transport = MockRuntimeTransport { _, _ in Data("{}".utf8) }
-        let defaults = UserDefaults(suiteName: "com.lich13.agenthub.tests.provider-map.\(UUID().uuidString)")!
-        let runtime = RuntimeConnectionStore(transport: transport, defaults: defaults)
-        let wsStore = ProviderWorkspaceStore(store: runtime, workspace: .antigravity)
-
         let summary = ProviderSessionSummary(
             id: "11111111-1111-4111-8111-111111111111",
             sessionKey: "11111111-1111-4111-8111-111111111111",
