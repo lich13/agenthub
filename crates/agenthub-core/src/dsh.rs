@@ -485,7 +485,8 @@ pub(super) fn ensure_no_running_dsh_process(
     running_err: &'static str,
 ) -> Result<()> {
     let output = Command::new("/bin/ps")
-        .args(["-axo", "command="])
+        .env("LC_ALL", "C")
+        .args(["-ww", "-axo", "command="])
         .output()
         .context(check_err)?;
     ensure!(output.status.success(), "{check_err}");

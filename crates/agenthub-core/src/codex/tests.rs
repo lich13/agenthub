@@ -3986,6 +3986,39 @@ fn writer_lock_and_codex_worker_classification_handle_truncated_comm_and_managed
     );
     assert_eq!(
         super::classify_codex_process(
+            Some(Path::new("/usr/bin/node")),
+            "node",
+            &["node".into(), "/usr/local/bin/codex".into()],
+        ),
+        (true, true)
+    );
+    assert_eq!(
+        super::classify_codex_process(
+            Some(Path::new("/usr/bin/node")),
+            "node",
+            &[
+                "node".into(),
+                "/usr/local/bin/codex".into(),
+                "app-server".into(),
+                "--managed-daemon".into(),
+            ],
+        ),
+        (true, false)
+    );
+    assert_eq!(
+        super::classify_codex_process(
+            Some(Path::new("/usr/bin/node")),
+            "node",
+            &[
+                "node".into(),
+                "server.js".into(),
+                "--watch=/tmp/@openai/codex".into(),
+            ],
+        ),
+        (false, false)
+    );
+    assert_eq!(
+        super::classify_codex_process(
             Some(Path::new("/opt/homebrew/bin/codex")),
             "codex",
             &[
@@ -4216,19 +4249,16 @@ fn full_detail_legacy_messages_and_tail_forward_cursor_stay_snapshot_consistent_
 fn managed_codex_home_distinguishes_system_homes_from_temp_dot_codex_under_zero_host_workers() {
     use std::os::unix::io::AsRawFd;
 
-    struct ZeroWorkersGuard;
-    impl Drop for ZeroWorkersGuard {
-        fn drop(&mut self) {
-            super::TEST_CODEX_ZERO_HOST_WORKERS.with(|slot| slot.set(false));
-        }
-    }
-
     assert!(super::is_managed_codex_home(Path::new("/root/.codex")));
     assert!(super::is_managed_codex_home(Path::new(
         "/home/ubuntu/.codex"
     )));
     assert!(super::is_managed_codex_home(Path::new(
         "/Users/example/.codex"
+    )));
+    #[cfg(target_os = "macos")]
+    assert!(!super::is_managed_codex_home(Path::new(
+        "/Volumes/share/.codex"
     )));
     assert!(!super::is_managed_codex_home(Path::new(
         "/tmp/fixture-sandbox/.codex"
@@ -4272,8 +4302,7 @@ fn managed_codex_home_distinguishes_system_homes_from_temp_dot_codex_under_zero_
     .unwrap();
     drop(conn);
 
-    super::TEST_CODEX_ZERO_HOST_WORKERS.with(|slot| slot.set(true));
-    let _guard = ZeroWorkersGuard;
+    let _guard = super::test_zero_host_workers_for_home(&dot_codex);
 
     // 1. Unmanaged temp `.codex` fixture stays `Running` even with zero host Codex workers.
     assert!(!super::is_managed_codex_home(&dot_codex));

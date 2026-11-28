@@ -204,10 +204,8 @@ pub(crate) fn parse_proc_net_tcp_loopback_ports(
         if inode == 0 || !socket_inodes.contains(&inode) {
             continue;
         }
-        if let Ok(port) = u16::from_str_radix(port_hex, 16) {
-            if port > 0 {
-                ports.push(port);
-            }
+        if let Some(port) = u16::from_str_radix(port_hex, 16).ok().filter(|&p| p > 0) {
+            ports.push(port);
         }
     }
     ports.sort_unstable();
@@ -217,19 +215,17 @@ pub(crate) fn parse_proc_net_tcp_loopback_ports(
 
 #[cfg(target_os = "linux")]
 fn linux_pid_loopback_ports(pid: u32) -> Vec<u16> {
-    let fd_dir = PathBuf::from(format!("/proc/{pid}/fd"));
     let mut socket_inodes = BTreeSet::new();
-    if let Ok(entries) = fs::read_dir(&fd_dir) {
+    if let Ok(entries) = fs::read_dir(format!("/proc/{pid}/fd")) {
         for entry in entries.flatten() {
-            if let Ok(target) = fs::read_link(entry.path()) {
-                if let Some(inode) = target
+            if let Some(inode) = fs::read_link(entry.path()).ok().and_then(|target| {
+                target
                     .to_str()
                     .and_then(|s| s.strip_prefix("socket:["))
                     .and_then(|s| s.strip_suffix(']'))
                     .and_then(|s| s.parse::<u64>().ok())
-                {
-                    socket_inodes.insert(inode);
-                }
+            }) {
+                socket_inodes.insert(inode);
             }
         }
     }

@@ -461,7 +461,52 @@ fn enrich_thread_from_rollout_inner(
 #[cfg(test)]
 thread_local! {
     static TEST_CODEX_HOST_ALIVE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    static TEST_CODEX_ZERO_HOST_WORKERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+static TEST_ZERO_HOST_WORKER_HOMES: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) struct TestZeroHostWorkersGuard(PathBuf);
+
+#[cfg(test)]
+impl Drop for TestZeroHostWorkersGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = TEST_ZERO_HOST_WORKER_HOMES.lock() {
+            if let Some(set) = guard.as_mut() {
+                set.remove(&self.0);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_zero_host_workers_for_home(home: &Path) -> TestZeroHostWorkersGuard {
+    let key = fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    if let Ok(mut guard) = TEST_ZERO_HOST_WORKER_HOMES.lock() {
+        guard
+            .get_or_insert_with(std::collections::HashSet::new)
+            .insert(key.clone());
+    }
+    TestZeroHostWorkersGuard(key)
+}
+
+#[cfg(test)]
+fn is_test_zero_host_workers_home(home: &Path) -> bool {
+    let Ok(guard) = TEST_ZERO_HOST_WORKER_HOMES.lock() else {
+        return false;
+    };
+    let Some(set) = guard.as_ref() else {
+        return false;
+    };
+    if set.is_empty() {
+        return false;
+    }
+    set.contains(home)
+        || fs::canonicalize(home)
+            .ok()
+            .is_some_and(|canon| set.contains(&canon))
 }
 
 type CodexHostSnapshot = (
@@ -473,40 +518,53 @@ type CodexHostSnapshot = (
 static CODEX_HOST_PROCESS_CACHE: std::sync::Mutex<Option<(u32, CodexHostSnapshot)>> =
     std::sync::Mutex::new(None);
 
-fn is_system_user_codex_home(root: &Path) -> bool {
-    let matches_system_layout = |path: &Path| {
-        if path == Path::new("/root/.codex") {
-            return true;
-        }
-        path.file_name().and_then(|s| s.to_str()) == Some(".codex")
-            && path
-                .parent()
-                .and_then(|user_dir| {
-                    user_dir
-                        .file_name()
-                        .filter(|name| !name.is_empty())
-                        .zip(user_dir.parent())
-                })
-                .is_some_and(|(_, home_base)| {
-                    home_base == Path::new("/home") || home_base == Path::new("/Users")
-                })
-    };
-    matches_system_layout(root)
-        || (!is_macos_network_volume_path(root)
-            && fs::canonicalize(root)
-                .ok()
-                .is_some_and(|canon| matches_system_layout(&canon)))
+fn matches_system_codex_home_layout(path: &Path) -> bool {
+    if path == Path::new("/root/.codex") {
+        return true;
+    }
+    path.file_name().and_then(|s| s.to_str()) == Some(".codex")
+        && path
+            .parent()
+            .and_then(|user_dir| {
+                user_dir
+                    .file_name()
+                    .filter(|name| !name.is_empty())
+                    .zip(user_dir.parent())
+            })
+            .is_some_and(|(_, home_base)| {
+                home_base == Path::new("/home")
+                    || home_base == Path::new("/Users")
+                    || home_base == Path::new("/System/Volumes/Data/Users")
+            })
 }
 
 fn is_managed_codex_home(root: &Path) -> bool {
-    root.join("thread-writer-locks").is_dir()
+    if cfg!(target_os = "macos") && root.starts_with("/Volumes") {
+        return false;
+    }
+    if matches_system_codex_home_layout(root) {
+        return true;
+    }
+    let user_default_codex = dirs::home_dir().map(|home| home.join(".codex"));
+    if user_default_codex.as_deref() == Some(root) {
+        return true;
+    }
+    if is_macos_network_volume_path(root) {
+        return false;
+    }
+    if root.join("thread-writer-locks").is_dir()
         || root.join("auth.json").is_file()
         || root.join("version.json").is_file()
-        || is_system_user_codex_home(root)
-        || (!is_macos_network_volume_path(root)
-            && dirs::home_dir().is_some_and(|home| {
-                crate::platform::same_canonical_dir(root, &home.join(".codex"))
-            }))
+    {
+        return true;
+    }
+    let Ok(canon_root) = fs::canonicalize(root) else {
+        return false;
+    };
+    matches_system_codex_home_layout(&canon_root)
+        || user_default_codex
+            .and_then(|default| fs::canonicalize(default).ok())
+            .is_some_and(|canon_default| canon_root == canon_default)
 }
 
 fn codex_rollout_turn_can_be_live(
@@ -526,6 +584,10 @@ fn codex_rollout_turn_can_be_live(
     }
     if !is_managed_codex_home(&paths.home) {
         return true;
+    }
+    #[cfg(test)]
+    if is_test_zero_host_workers_home(&paths.home) {
+        return false;
     }
     #[cfg(unix)]
     let (has_worker, open_inodes) = {
@@ -561,10 +623,6 @@ fn codex_rollout_turn_can_be_live(
 
 #[cfg(unix)]
 fn codex_host_snapshot_for_uid(target_uid: u32) -> (bool, std::collections::HashSet<(u64, u64)>) {
-    #[cfg(test)]
-    if TEST_CODEX_ZERO_HOST_WORKERS.with(std::cell::Cell::get) {
-        return (false, std::collections::HashSet::new());
-    }
     if let Ok(guard) = CODEX_HOST_PROCESS_CACHE.lock() {
         if let Some((cached_uid, (alive, ref inodes, ts))) = *guard {
             if cached_uid == target_uid && ts.elapsed() < std::time::Duration::from_secs(2) {
@@ -610,10 +668,12 @@ pub(crate) fn classify_codex_process(
         .unwrap_or(fallback_comm.trim());
 
     let is_node_wrapper = matches!(exe_base.or(arg0_base).unwrap_or(comm_base), "node" | "bun")
-        && args
-            .iter()
-            .skip(1)
-            .any(|a| a.contains("/@openai/codex") || a.ends_with("/bin/codex.js"));
+        && args.iter().skip(1).any(|a| {
+            !a.starts_with('-')
+                && (a.contains("/@openai/codex")
+                    || a.ends_with("/bin/codex.js")
+                    || a.ends_with("/bin/codex"))
+        });
 
     let is_codex = is_node_wrapper
         || exe_base.is_some_and(is_codex_binary_name)

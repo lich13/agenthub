@@ -890,9 +890,10 @@ fn collect() -> Option<Vec<Process>> {
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(",");
-        if let Ok(output) = crate::platform::sanitized_lsof_command("/usr/sbin/lsof")
-            .args(["-nP", "-p", &pids, "-Fpnf"])
-            .output()
+        if let Ok(output) =
+            crate::platform::sanitized_lsof_command(crate::platform::default_lsof_bin())
+                .args(["-nP", "-p", &pids, "-Fpnf"])
+                .output()
         {
             let mut current = None;
             let mut descriptor = "";

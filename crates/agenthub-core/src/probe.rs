@@ -1705,25 +1705,53 @@ mod tests {
         .unwrap();
         drop(conn);
         let mut config = Config::current_defaults().unwrap();
-        config.codex.home = codex_home;
+        config.codex.home = codex_home.clone();
         config.probe.recent_limit = 20;
+        let _zero_workers = crate::codex::test_zero_host_workers_for_home(&codex_home);
         let db = crate::db::PanelDb::open_with_secret_box(
             ":memory:",
             crate::crypto::SecretBox::from_key_material(&"11".repeat(32)).unwrap(),
         )
         .unwrap();
-        let status = ProbeRuntime::new(config, PlatformPaths::linux_server())
-            .status_with_db(&db, false)
-            .await
-            .unwrap();
+        let runtime = ProbeRuntime::new(config, PlatformPaths::linux_server());
+        let status = runtime.status_with_db(&db, false).await.unwrap();
 
         assert_eq!(status.running_count, 1);
+        assert_eq!(status.recoverable_count, 0);
         assert_eq!(status.running_threads.len(), 1);
         assert_eq!(status.running_threads[0].id, "running-thread");
         assert_eq!(
             status.running_threads[0].active_turn_id.as_deref(),
             Some("turn-live")
         );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let locks_dir = codex_home.join("thread-writer-locks");
+            fs::create_dir_all(&locks_dir).unwrap();
+            let orphaned = runtime.status_with_db(&db, true).await.unwrap();
+            assert_eq!(orphaned.running_count, 0);
+            assert_eq!(orphaned.recoverable_count, 1);
+            assert_eq!(orphaned.recoverable_threads[0].id, "running-thread");
+
+            let lock_file = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(locks_dir.join("running-thread.lock"))
+                .unwrap();
+            assert_eq!(
+                unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                0
+            );
+            let locked = runtime.status_with_db(&db, true).await.unwrap();
+            assert_eq!(locked.running_count, 1);
+            assert_eq!(locked.recoverable_count, 0);
+            assert_eq!(locked.running_threads[0].id, "running-thread");
+            drop(lock_file);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
